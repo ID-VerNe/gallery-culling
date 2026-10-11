@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { TopBar } from './components/TopBar';
@@ -11,7 +11,12 @@ import { BottomBar } from './components/BottomBar';
 import { BatchExportModal } from './components/BatchExportModal';
 import { SettingsModal } from './components/SettingsModal';
 import { MetadataEditorModal } from './components/MetadataEditorModal';
+import { ShortcutHelpModal } from './components/ShortcutHelpModal';
+import { ConfirmDialog } from './components/ConfirmDialog';
+import { ToastProvider, useToast } from './components/Toast';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { useLumenStatus } from './hooks/useLumenStatus';
+import type { ViewportEmptyState } from './components/PreviewViewport';
 import {
   AppSettings,
   FilterMode,
@@ -24,7 +29,9 @@ import {
 import { api } from './services/api';
 import { computeAutoTone, DEFAULT_TONE } from './utils/autoTone';
 
-export default function App() {
+function AppShell() {
+  const toast = useToast();
+
   const [jpgFolder, setJpgFolder] = useState('');
   const [rawFolder, setRawFolder] = useState('');
   const [groups, setGroups] = useState<PhotoGroupInfo[]>([]);
@@ -39,7 +46,14 @@ export default function App() {
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMetadataOpen, setIsMetadataOpen] = useState(false);
+  const [isShortcutHelpOpen, setIsShortcutHelpOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
+
+  // Grid search (progressive disclosure; owned here so the TopBar toggle and
+  // the grid can share it across the tonal-panel swap).
+  const [gridSearchOpen, setGridSearchOpen] = useState(false);
+  const [gridSearch, setGridSearch] = useState('');
+  const [gridSearchFocusToken, setGridSearchFocusToken] = useState(0);
 
   // Tonal & Luminar state
   const [toneMap, setToneMap] = useState<Record<string, ToneAdjustments>>({});
@@ -47,35 +61,67 @@ export default function App() {
   const [isLuminarRunning, setIsLuminarRunning] = useState(false);
   const [isHoldOriginal, setIsHoldOriginal] = useState(false);
 
+  // Updater prompt
+  const [pendingUpdate, setPendingUpdate] = useState<{
+    version: string;
+    body: string;
+    install: () => Promise<void>;
+  } | null>(null);
+
+  // The <img> currently rendered in the single-view viewport, so auto-tone can
+  // sample the histogram without a fragile DOM query (F-15).
+  const previewImageRef = useRef<HTMLImageElement | null>(null);
+  const setPreviewImage = useCallback((el: HTMLImageElement | null) => {
+    previewImageRef.current = el;
+  }, []);
+
+  // LUMEN RAW engine handshake (P0). Zero requests while disabled — the hook
+  // itself owns the 1.5s delay and the silent degradation.
+  const lumenStatus = useLumenStatus(settings?.lumenEnabled ?? false);
+
   // Load initial settings and default paths on startup
   useEffect(() => {
-    api.getSettings().then((s) => {
-      setSettings(s);
-      if (s.defaultJpgFolder) setJpgFolder(s.defaultJpgFolder);
-      if (s.defaultRawFolder) setRawFolder(s.defaultRawFolder);
-      if (s.sortOrder) setSortOrder(s.sortOrder as SortOrder);
-    });
+    api
+      .getSettings()
+      .then((s) => {
+        setSettings(s);
+        if (s.defaultJpgFolder) setJpgFolder(s.defaultJpgFolder);
+        if (s.defaultRawFolder) setRawFolder(s.defaultRawFolder);
+        if (s.sortOrder) setSortOrder(s.sortOrder as SortOrder);
+      })
+      .catch((err) => {
+        // Without this the app looks healthy with settings === null, and the
+        // "save folder as default" branch never runs (F-04).
+        console.error('Failed to load settings:', err);
+        toast.error(
+          '无法读取本地设置，将使用默认值。\n如果你的默认文件夹没有自动填充，请到「设置」中重新指定。',
+        );
+      });
 
     // Check for updates
     const checkForUpdates = async () => {
       try {
         const update = await check();
-        if (update) {
-          const yes = window.confirm(`🎉 发现新版本 ${update.version}！\n\n更新日志：\n${update.body || '修复已知问题，优化体验。'}\n\n是否立即下载并升级？`);
-          if (yes) {
+        if (!update) return;
+        setPendingUpdate({
+          version: update.version,
+          body: update.body || '修复已知问题，优化体验。',
+          install: async () => {
             await update.downloadAndInstall();
             await relaunch();
-          }
-        }
+          },
+        });
       } catch (err) {
+        // Silent by design: a failed update check is not actionable for the user.
         console.error('Failed to check for updates:', err);
       }
     };
     // small delay to not block initial render
-    setTimeout(checkForUpdates, 1000);
-  }, []);
+    const timer = window.setTimeout(checkForUpdates, 1500);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
-  // Filtered list of groups
+  // Filtered list of groups — the app's current working set.
   const filteredGroups = useMemo(() => {
     return groups.filter((g) => {
       switch (filterMode) {
@@ -96,43 +142,94 @@ export default function App() {
     });
   }, [groups, filterMode]);
 
+  // Search narrowing applied inside the filtered set. `filteredIndices` maps a
+  // position in the visible list back to its index in `filteredGroups`, so
+  // selection, the counter and navigation all keep referring to the stable
+  // working set rather than to whatever the search currently matches.
+  const filteredIndices = useMemo(() => {
+    const q = gridSearch.trim().toLowerCase();
+    if (!q) return filteredGroups.map((_, i) => i);
+    return filteredGroups
+      .map((g, i) => (g.baseName.toLowerCase().includes(q) ? i : -1))
+      .filter((i) => i >= 0);
+  }, [filteredGroups, gridSearch]);
+
+  const visibleGroups = useMemo(
+    () => filteredIndices.map((i) => filteredGroups[i]),
+    [filteredIndices, filteredGroups],
+  );
+
+  const selectedVisibleIndex = useMemo(
+    () => filteredIndices.indexOf(selectedIndex),
+    [filteredIndices, selectedIndex],
+  );
+
+  // Keep the selection inside the working set. Switching from "全部照片" at
+  // photo 500 to "仅已保留" with 3 matches used to leave selectedIndex at 500
+  // and render a misleading "未加载照片" empty state.
+  useEffect(() => {
+    const max = filteredGroups.length;
+    setSelectedIndex((prev) => (max === 0 ? 0 : Math.min(prev, max - 1)));
+    setCompareIndex((prev) => (max === 0 ? 0 : Math.min(prev, max - 1)));
+  }, [filteredGroups.length]);
+
+  // Drop a selection that a new search no longer contains onto the first
+  // visible item, so the counter and the highlight never disagree.
+  useEffect(() => {
+    if (gridSearch.trim() && filteredIndices.length > 0) {
+      setSelectedIndex((prev) =>
+        filteredIndices.includes(prev) ? prev : filteredIndices[0],
+      );
+    }
+  }, [filteredIndices, gridSearch]);
+
   const currentGroup = filteredGroups[selectedIndex] || undefined;
 
   // Compute compare groups based on pinned reference
-  const { leftCompareGroup, rightCompareGroup, isLeftPinned, isRightPinned } = useMemo(() => {
-    const leftBase = filteredGroups[selectedIndex];
-    const rightDefault =
-      filteredGroups[compareIndex] ||
-      filteredGroups[selectedIndex + 1] ||
-      filteredGroups[0];
+  const { leftCompareGroup, rightCompareGroup, isLeftPinned, isRightPinned } =
+    useMemo(() => {
+      const leftBase = filteredGroups[selectedIndex];
 
-    if (!pinnedId) {
-      return {
-        leftCompareGroup: leftBase,
-        rightCompareGroup: rightDefault,
-        isLeftPinned: false,
-        isRightPinned: false,
-      };
-    }
+      // When the working set shrinks (filter change, scan), the clamped indices
+      // can collide. Showing the same photo on both sides of a comparison is
+      // never useful, so fall through to a neighbour.
+      let rightDefault = filteredGroups[compareIndex];
+      if (
+        !rightDefault ||
+        (rightDefault.id === leftBase?.id && filteredGroups.length > 1)
+      ) {
+        rightDefault =
+          filteredGroups[selectedIndex + 1] ?? filteredGroups[0];
+      }
 
-    const pinnedGroup = filteredGroups.find((g) => g.id === pinnedId) || leftBase;
+      if (!pinnedId) {
+        return {
+          leftCompareGroup: leftBase,
+          rightCompareGroup: rightDefault,
+          isLeftPinned: false,
+          isRightPinned: false,
+        };
+      }
 
-    if (isPinnedOnLeft) {
-      return {
-        leftCompareGroup: pinnedGroup,
-        rightCompareGroup: filteredGroups[compareIndex] || rightDefault,
-        isLeftPinned: true,
-        isRightPinned: false,
-      };
-    } else {
-      return {
-        leftCompareGroup: filteredGroups[selectedIndex] || leftBase,
-        rightCompareGroup: pinnedGroup,
-        isLeftPinned: false,
-        isRightPinned: true,
-      };
-    }
-  }, [filteredGroups, selectedIndex, compareIndex, pinnedId, isPinnedOnLeft]);
+      const pinnedGroup =
+        filteredGroups.find((g) => g.id === pinnedId) || leftBase;
+
+      if (isPinnedOnLeft) {
+        return {
+          leftCompareGroup: pinnedGroup,
+          rightCompareGroup: filteredGroups[compareIndex] || rightDefault,
+          isLeftPinned: true,
+          isRightPinned: false,
+        };
+      } else {
+        return {
+          leftCompareGroup: filteredGroups[selectedIndex] || leftBase,
+          rightCompareGroup: pinnedGroup,
+          isLeftPinned: false,
+          isRightPinned: true,
+        };
+      }
+    }, [filteredGroups, selectedIndex, compareIndex, pinnedId, isPinnedOnLeft]);
 
   // Pin / Unpin Left as Reference
   const handleTogglePinLeft = useCallback(() => {
@@ -167,7 +264,14 @@ export default function App() {
       setSelectedIndex(compareIndex);
       setCompareIndex(temp);
     }
-  }, [pinnedId, isPinnedOnLeft, leftCompareGroup, rightCompareGroup, selectedIndex, compareIndex]);
+  }, [
+    pinnedId,
+    isPinnedOnLeft,
+    leftCompareGroup,
+    rightCompareGroup,
+    selectedIndex,
+    compareIndex,
+  ]);
 
   // Benchmark toggle shortcut (B)
   const handleTogglePinBenchmark = useCallback(() => {
@@ -205,36 +309,78 @@ export default function App() {
         setCompareIndex(res.groups.length > 1 ? 1 : 0);
       }
 
+      // Drop anything pinned to a photo that no longer exists.
+      setPinnedId(null);
+
       // Save as default in settings
       if (settings) {
-        api.saveSettings({
-          ...settings,
-          defaultJpgFolder: jpgFolder,
-          defaultRawFolder: rawFolder,
-          sortOrder,
-        });
+        api
+          .saveSettings({
+            ...settings,
+            defaultJpgFolder: jpgFolder,
+            defaultRawFolder: rawFolder,
+            sortOrder,
+          })
+          .catch((err) => console.error('Failed to persist settings:', err));
       }
+
+      toast.success(
+        `扫描完成，共 ${res.groups.length} 组照片。已按${
+          sortOrder === 'time_filename'
+            ? '拍摄时间'
+            : sortOrder === 'filename'
+            ? '文件名'
+            : '星级'
+        }排序。`,
+      );
     } catch (err) {
-      alert(`扫描失败: ${err}`);
+      console.error('Scan failed:', err);
+      toast.error(
+        `扫描失败：${String(err)}\n请确认文件夹路径存在且有读取权限，然后重试。`,
+      );
     } finally {
       setIsLoading(false);
     }
-  }, [jpgFolder, rawFolder, sortOrder, settings]);
+  }, [jpgFolder, rawFolder, sortOrder, settings, toast]);
+
+  // Re-scan when the sort order changes.
+  //
+  // The previous version called `handleScan()` from the onChange handler,
+  // which captured the *previous* `sortOrder` — every sort change re-scanned
+  // with the stale order (F-12).
+  //
+  // The guard skips the value that arrived with the saved settings, so
+  // restoring a session does not silently launch a scan.
+  const sortOrderInitialised = useRef(false);
+  useEffect(() => {
+    if (!sortOrderInitialised.current) {
+      sortOrderInitialised.current = true;
+      return;
+    }
+    if (!jpgFolder.trim()) return;
+    void handleScan();
+    // `handleScan` identity covers jpgFolder / rawFolder / sortOrder.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortOrder]);
 
   // Folder picker handlers
-  const handleBrowseJpg = async () => {
-    const selected = await api.selectFolderDialog(jpgFolder);
-    if (selected) {
-      setJpgFolder(selected);
+  const handleBrowseJpg = useCallback(async () => {
+    try {
+      const selected = await api.selectFolderDialog(jpgFolder);
+      if (selected) setJpgFolder(selected);
+    } catch (err) {
+      toast.error(`无法打开文件夹选择器：${String(err)}`);
     }
-  };
+  }, [jpgFolder, toast]);
 
-  const handleBrowseRaw = async () => {
-    const selected = await api.selectFolderDialog(rawFolder);
-    if (selected) {
-      setRawFolder(selected);
+  const handleBrowseRaw = useCallback(async () => {
+    try {
+      const selected = await api.selectFolderDialog(rawFolder);
+      if (selected) setRawFolder(selected);
+    } catch (err) {
+      toast.error(`无法打开文件夹选择器：${String(err)}`);
     }
-  };
+  }, [rawFolder, toast]);
 
   // Selection navigation (aware of pinned compare mode)
   const handlePrev = useCallback(() => {
@@ -257,9 +403,12 @@ export default function App() {
     }
   }, [viewMode, pinnedId, isPinnedOnLeft, filteredGroups.length]);
 
-  // Select photo from thumbnail list
+  // Select photo from thumbnail list. `visibleIndex` is a position in the
+  // currently rendered (searched) list; translate it back to the working set.
   const handleSelectPhoto = useCallback(
-    (idx: number) => {
+    (visibleIndex: number) => {
+      const idx = filteredIndices[visibleIndex] ?? visibleIndex;
+
       if (viewMode === 'split' && pinnedId && isPinnedOnLeft) {
         setCompareIndex(idx);
       } else {
@@ -269,7 +418,17 @@ export default function App() {
         }
       }
     },
-    [viewMode, pinnedId, isPinnedOnLeft, filteredGroups.length],
+    [viewMode, pinnedId, isPinnedOnLeft, filteredGroups.length, filteredIndices],
+  );
+
+  const reportRatingFlagError = useCallback(
+    (err: unknown) => {
+      console.error('XMP update error:', err);
+      toast.error(
+        `照片标记未写入 XMP 侧边栏：${String(err)}\n界面上的星级和保留/淘汰仍然有效，但不会同步到 Lightroom。`,
+      );
+    },
+    [toast],
   );
 
   // Update Rating & Flag (syncs to XMP)
@@ -288,10 +447,10 @@ export default function App() {
       try {
         await api.updateRatingFlag(targetPath, rating, targetGroup.flag, true);
       } catch (err) {
-        console.error('XMP update error:', err);
+        reportRatingFlagError(err);
       }
     },
-    [currentGroup],
+    [currentGroup, reportRatingFlagError],
   );
 
   const handleFlag = useCallback(
@@ -310,10 +469,10 @@ export default function App() {
       try {
         await api.updateRatingFlag(targetPath, targetGroup.rating, flag, true);
       } catch (err) {
-        console.error('XMP update error:', err);
+        reportRatingFlagError(err);
       }
     },
-    [currentGroup],
+    [currentGroup, reportRatingFlagError],
   );
 
   // Open in Photoshop / External app
@@ -326,9 +485,15 @@ export default function App() {
       await api.openInPhotoshop(targetPath, settings?.photoshopPath);
     } catch (e) {
       console.warn('Photoshop failed, falling back to default:', e);
-      await api.openInDefaultApp(targetPath);
+      try {
+        await api.openInDefaultApp(targetPath);
+      } catch (fallbackErr) {
+        toast.error(
+          `无法打开该照片：${String(fallbackErr)}\n请在「设置」中确认 Photoshop 路径，或安装一个能打开此格式的程序。`,
+        );
+      }
     }
-  }, [currentGroup, settings?.photoshopPath]);
+  }, [currentGroup, settings?.photoshopPath, toast]);
 
   // View mode toggles
   const handleToggleCompare = useCallback(() => {
@@ -361,7 +526,9 @@ export default function App() {
       if (!currentGroup) return;
       setToneMap((prev) => ({ ...prev, [currentGroup.id]: newTone }));
       setGroups((prev) =>
-        prev.map((g) => (g.id === currentGroup.id ? { ...g, tone: newTone } : g))
+        prev.map((g) =>
+          g.id === currentGroup.id ? { ...g, tone: newTone } : g,
+        ),
       );
     },
     [currentGroup],
@@ -372,8 +539,8 @@ export default function App() {
     setToneMap((prev) => ({ ...prev, [currentGroup.id]: { ...DEFAULT_TONE } }));
     setGroups((prev) =>
       prev.map((g) =>
-        g.id === currentGroup.id ? { ...g, tone: { ...DEFAULT_TONE } } : g
-      )
+        g.id === currentGroup.id ? { ...g, tone: { ...DEFAULT_TONE } } : g,
+      ),
     );
   }, [currentGroup]);
 
@@ -386,26 +553,29 @@ export default function App() {
       : null;
     if (!src) return;
 
-    const img = document.querySelector(
-      `img[alt="${currentGroup.baseName}"]`
-    ) as HTMLImageElement | null;
-    if (img && img.complete && img.naturalWidth > 0) {
-      const autoTone = computeAutoTone(img);
-      handleToneChange(autoTone);
-    } else {
-      const tempImg = new Image();
-      tempImg.crossOrigin = 'anonymous';
-      tempImg.onload = () => {
-        const autoTone = computeAutoTone(tempImg);
-        handleToneChange(autoTone);
-      };
-      tempImg.src = src;
+    const finish = (img: HTMLImageElement) =>
+      handleToneChange(computeAutoTone(img));
+
+    // The viewport hands us the element it actually rendered, so this works
+    // even when two photos share a basename (F-15).
+    const rendered = previewImageRef.current;
+    if (rendered && rendered.complete && rendered.naturalWidth > 0) {
+      finish(rendered);
+      return;
     }
-  }, [currentGroup, handleToneChange]);
+
+    const tempImg = new Image();
+    tempImg.crossOrigin = 'anonymous';
+    tempImg.onload = () => finish(tempImg);
+    tempImg.onerror = () =>
+      toast.error('无法读取该照片的像素数据，自动调色已取消。');
+    tempImg.src = src;
+  }, [currentGroup, handleToneChange, toast]);
 
   const handleSaveToneToXmp = useCallback(async () => {
     if (!currentGroup) return;
-    const toneToSave = toneMap[currentGroup.id] || currentGroup.tone || DEFAULT_TONE;
+    const toneToSave =
+      toneMap[currentGroup.id] || currentGroup.tone || DEFAULT_TONE;
     const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
     if (!targetPath) return;
 
@@ -413,14 +583,19 @@ export default function App() {
       await api.updateToneAdjustments(targetPath, toneToSave);
       setGroups((prev) =>
         prev.map((g) =>
-          g.id === currentGroup.id ? { ...g, hasXmp: true, tone: toneToSave } : g
-        )
+          g.id === currentGroup.id
+            ? { ...g, hasXmp: true, tone: toneToSave }
+            : g,
+        ),
       );
-      alert('调色参数已成功写入同名 .xmp 文件！\nPhotoshop / ACR 打开时将自动载入该调色效果。');
+      toast.success(
+        '调色参数已写入同名 .xmp 文件。\nPhotoshop / ACR 打开时将自动载入该效果。',
+      );
     } catch (err) {
-      alert(`写入 XMP 失败: ${err}`);
+      console.error('Failed to write tone to XMP:', err);
+      toast.error(`写入 XMP 失败：${String(err)}`);
     }
-  }, [currentGroup, toneMap]);
+  }, [currentGroup, toneMap, toast]);
 
   // Luminar AI Roundtrip Handler
   const handleOpenLuminar = useCallback(async () => {
@@ -441,28 +616,43 @@ export default function App() {
       };
 
       setGroups((prev) =>
-        prev.map((g) => (g.id === currentGroup.id ? { ...g, edited: editedInfo } : g))
+        prev.map((g) =>
+          g.id === currentGroup.id ? { ...g, edited: editedInfo } : g,
+        ),
       );
 
       // Automatically switch to Before/After comparison view to review result!
       setViewMode('before_after');
+      toast.success(
+        'Luminar AI 精修完成，已切换到前后对照视图查看效果。',
+      );
     } catch (err) {
-      alert(`调用 Luminar AI 失败或未完成: ${err}`);
+      console.error('Luminar roundtrip failed:', err);
+      toast.error(
+        `调用 Luminar AI 失败或未完成：${String(err)}\n请确认 Luminar AI 已安装，并已在「设置」中允许作为 Photoshop 插件运行。`,
+      );
     } finally {
       setIsLuminarRunning(false);
     }
-  }, [currentGroup]);
+  }, [currentGroup, toast]);
 
   // Save session when index changes
   useEffect(() => {
     if (jpgFolder && selectedIndex >= 0) {
-      api.saveSession(jpgFolder, rawFolder, selectedIndex, sortOrder);
+      api
+        .saveSession(jpgFolder, rawFolder, selectedIndex, sortOrder)
+        .catch((err) => console.error('Failed to save session:', err));
     }
   }, [selectedIndex, jpgFolder, rawFolder, sortOrder]);
 
   // Metadata batch updated handler
   const handleMetadataUpdated = useCallback(
-    (targetIds: string[], lensModel: string, focalLength: string, aperture: string) => {
+    (
+      targetIds: string[],
+      lensModel: string,
+      focalLength: string,
+      aperture: string,
+    ) => {
       setGroups((prev) =>
         prev.map((g) => {
           if (targetIds.includes(g.id)) {
@@ -484,6 +674,13 @@ export default function App() {
     [],
   );
 
+  const handleFocusSearch = useCallback(() => {
+    // The grid has to be mounted for the field to exist.
+    setShowTonalPanel(false);
+    setGridSearchOpen(true);
+    setGridSearchFocusToken((t) => t + 1);
+  }, []);
+
   // Register single-handed keyboard shortcuts
   useKeyboardShortcuts({
     onPrev: handlePrev,
@@ -501,7 +698,35 @@ export default function App() {
     onToggleTonalPanel: handleToggleTonalPanel,
     onHoldOriginalStart: handleHoldOriginalStart,
     onHoldOriginalEnd: handleHoldOriginalEnd,
+    onFocusSearch: handleFocusSearch,
+    onOpenShortcutHelp: () => setIsShortcutHelpOpen(true),
   });
+
+  // Empty-state copy. "No folder loaded" and "filter matched nothing" are
+  // different problems and must not share a message.
+  const viewportEmptyState = useMemo<ViewportEmptyState>(() => {
+    if (groups.length === 0) {
+      return {
+        title: '未加载照片',
+        description: '选择 JPG 或 RAW 文件夹，即可开始极速选片。',
+        actionLabel: '选择文件夹',
+        onAction: handleBrowseJpg,
+      };
+    }
+    if (filteredGroups.length === 0) {
+      return {
+        title: '当前筛选下没有照片',
+        description:
+          '还没有照片匹配这个筛选条件。先给照片打星或标记保留，或者切换到「全部照片」。',
+        actionLabel: '显示全部照片',
+        onAction: () => setFilterMode('all'),
+      };
+    }
+    return {
+      title: '未选择照片',
+      description: '从右侧宫格列表中选择一张照片。',
+    };
+  }, [groups.length, filteredGroups.length, handleBrowseJpg]);
 
   return (
     <div className="flex flex-col h-screen w-screen bg-background-base text-white overflow-hidden antialiased">
@@ -518,11 +743,7 @@ export default function App() {
         filterMode={filterMode}
         onFilterChange={setFilterMode}
         sortOrder={sortOrder}
-        onSortChange={(order) => {
-          setSortOrder(order);
-          // Auto re-scan or sort
-          handleScan();
-        }}
+        onSortChange={setSortOrder}
         viewMode={viewMode}
         onViewModeChange={setViewMode}
         onOpenExportModal={() => setIsExportOpen(true)}
@@ -532,6 +753,15 @@ export default function App() {
         showTonalPanel={showTonalPanel}
         onOpenLuminar={handleOpenLuminar}
         isLuminarRunning={isLuminarRunning}
+        isGridSearchOpen={gridSearchOpen}
+        onToggleGridSearch={() => {
+          setGridSearchOpen((prev) => {
+            const next = !prev;
+            if (next) setGridSearchFocusToken((t) => t + 1);
+            else setGridSearch('');
+            return next;
+          });
+        }}
       />
 
       {/* Main Content Area */}
@@ -542,6 +772,7 @@ export default function App() {
             group={currentGroup}
             tone={currentTone}
             isHoldOriginal={isHoldOriginal}
+            lumenStatus={lumenStatus}
             onPrev={handlePrev}
             onNext={handleNext}
             onRate={(r) => handleRate(r)}
@@ -549,8 +780,10 @@ export default function App() {
             onOpenExternal={handleOpenExternal}
             onOpenLuminar={handleOpenLuminar}
             onToggleTonalAdjuster={handleToggleTonalPanel}
+            isTonalPanelOpen={showTonalPanel}
             isLuminarRunning={isLuminarRunning}
-            onBrowseJpg={handleBrowseJpg}
+            emptyState={viewportEmptyState}
+            onImageElement={setPreviewImage}
           />
         )}
 
@@ -565,7 +798,9 @@ export default function App() {
             onFlag={(f) => handleFlag(f)}
             onOpenLuminar={handleOpenLuminar}
             onToggleTonalAdjuster={handleToggleTonalPanel}
+            isTonalPanelOpen={showTonalPanel}
             isLuminarRunning={isLuminarRunning}
+            emptyState={viewportEmptyState}
           />
         )}
 
@@ -587,8 +822,7 @@ export default function App() {
               }
             }}
           />
-        )}
-        {/* Right Sidebar (Thumbnail Grid OR Tonal Adjuster) */}
+        )}        {/* Right Sidebar (Thumbnail Grid OR Tonal Adjuster) */}
         <div className="w-[390px] h-full shrink-0 bg-background-base">
           {showTonalPanel && currentGroup ? (
             <TonalAdjuster
@@ -601,10 +835,20 @@ export default function App() {
             />
           ) : (
             <ThumbnailGrid
-              groups={filteredGroups}
-              selectedIndex={selectedIndex}
+              groups={visibleGroups}
+              selectedIndex={selectedVisibleIndex}
               pinnedId={pinnedId}
               onSelect={handleSelectPhoto}
+              searchQuery={gridSearch}
+              searchOpen={gridSearchOpen}
+              searchFocusToken={gridSearchFocusToken}
+              onSearchQueryChange={setGridSearch}
+              onSearchOpenChange={(open) => {
+                setGridSearchOpen(open);
+                if (!open) setGridSearch('');
+                else setGridSearchFocusToken((t) => t + 1);
+              }}
+              totalLoaded={filteredGroups.length}
             />
           )}
         </div>
@@ -617,6 +861,7 @@ export default function App() {
         totalCount={filteredGroups.length}
         onOpenExternal={handleOpenExternal}
         onOpenMetadataModal={() => setIsMetadataOpen(true)}
+        onOpenShortcutHelp={() => setIsShortcutHelpOpen(true)}
       />
 
       {/* Batch Export Modal */}
@@ -624,6 +869,8 @@ export default function App() {
         isOpen={isExportOpen}
         onClose={() => setIsExportOpen(false)}
         groups={groups}
+        onError={(m) => toast.error(m)}
+        onSuccess={(m) => toast.success(m)}
       />
 
       {/* Settings Modal */}
@@ -631,6 +878,7 @@ export default function App() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         onSettingsSaved={(s) => setSettings(s)}
+        onError={(m) => toast.error(m)}
       />
 
       {/* Manual Lens Metadata Editor Modal */}
@@ -641,7 +889,38 @@ export default function App() {
         filteredGroups={filteredGroups}
         allGroups={groups}
         onMetadataUpdated={handleMetadataUpdated}
+        onError={(m) => toast.error(m)}
+      />
+
+      {/* Keyboard & mouse reference */}
+      <ShortcutHelpModal
+        isOpen={isShortcutHelpOpen}
+        onClose={() => setIsShortcutHelpOpen(false)}
+      />
+
+      {/* Update prompt — a real decision with release notes, not a toast */}
+      <ConfirmDialog
+        isOpen={pendingUpdate !== null}
+        onClose={() => setPendingUpdate(null)}
+        onConfirm={() => void pendingUpdate?.install()}
+        title={`发现新版本 ${pendingUpdate?.version ?? ''}`}
+        message={
+          <>
+            {`更新内容：\n${pendingUpdate?.body ?? ''}`}
+            {'\n\n是否立即下载并升级？升级完成后应用会自动重启。'}
+          </>
+        }
+        confirmLabel="下载并升级"
+        cancelLabel="稍后再说"
       />
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <ToastProvider>
+      <AppShell />
+    </ToastProvider>
   );
 }
