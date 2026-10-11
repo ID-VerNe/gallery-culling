@@ -87,8 +87,8 @@ def patch_session(root: Path) -> str:
 def patch_batch_export(root: Path) -> str:
     be = root / "lumen" / "batch_export.py"
     src = be.read_text(encoding="utf-8")
-    if "lumen-slim: dialog 已拆出" in src:
-        return "batch_export.py: 已拆出对话框，跳过"
+    if "class BatchExportDialog" not in src:
+        return "batch_export.py: 对话框已拆出，跳过"
 
     start = src.index("class BatchExportDialog(QDialog):")
     end = src.index("def target_path(")
@@ -136,6 +136,32 @@ def patch_library(root: Path) -> str:
     return "library.py: 对话框改从 batch_export_dialog 导入"
 
 
+def patch_control(root: Path) -> str:
+    """control.py 模块级 `QObject, Qt, Signal = _qt()` 让无 Qt 构建 import 失败，
+    而 cli._context() 无条件 import control → 整条 B 通道（run/mcp）被阻断。
+    客户端（前 120 行）本就 Qt-free；GUI 类降级为惰性桩即可。"""
+    p = root / "lumen" / "control.py"
+    src = p.read_text(encoding="utf-8")
+    if "_QtMissing" in src:
+        return "control.py: 已打桩，跳过"
+    old = "QObject, Qt, Signal = _qt()\n"
+    new = (
+        "try:\n"
+        "    QObject, Qt, Signal = _qt()\n"
+        f"except ImportError:  {MARK}sidecar 无 PySide6：GUI 类永不实例化\n"
+        "    class _QtMissing:\n"
+        "        def __getattr__(self, name):\n"
+        "            raise RuntimeError('PySide6 is not available in this build')\n\n"
+        "    QObject = object\n"
+        "    Qt = _QtMissing()\n"
+        "    Signal = lambda *_a, **_k: None\n"
+    )
+    if old not in src:
+        return "control.py: 未找到预期模式（请人工检查）"
+    p.write_text(src.replace(old, new, 1), encoding="utf-8")
+    return "control.py: GUI 类降级为惰性桩"
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print(__doc__)
@@ -150,6 +176,7 @@ def main() -> int:
         patch_session,
         patch_batch_export,
         patch_library,
+        patch_control,
     ):
         print(f"  {fn(root)}")
     print("✓ lumen-slim 补丁应用完成")
