@@ -8,7 +8,8 @@ use crate::lumen::{self, LumenStatus, PreviewVariant, PINNED_LUMEN_VERSION};
 use crate::models::{AppSettings, ExportItem, FolderScanResult, LumenPreviewResult};
 use crate::scanner::scan_folders;
 use crate::thumbnail::{get_cache_dir, get_or_create_thumbnail};
-use crate::xmp::{update_xmp_metadata, write_xmp};
+use crate::xmp;
+use crate::xmp::{flag_from_xmp, read_xmp_full, update_xmp_metadata, write_xmp};
 
 pub struct AppState {
     pub db: Database,
@@ -41,15 +42,42 @@ pub async fn get_thumbnail_cmd(file_path: String, width: Option<u32>) -> Result<
 
 #[tauri::command]
 pub async fn update_rating_flag_cmd(
+    state: State<'_, AppState>,
     file_path: String,
     rating: u8,
     flag: String,
     sync_xmp: bool,
 ) -> Result<bool, String> {
+    let runtime = state.lumen.clone();
+    let settings = state.db.load_settings()?;
+    let db = state.db.clone();
+
     tokio::task::spawn_blocking(move || {
         let path = Path::new(&file_path);
         if sync_xmp {
             write_xmp(path, rating, &flag)?;
+        }
+
+        // 评级同步（P1）：引擎启用时推给 LUMEN RAW。
+        // 失败只记账不回滚 —— 宿主 XMP 已写成功，UI 不该因 sidecar 抖动而回退。
+        if settings.lumen_enabled && lumen::should_push_rating(rating, &flag) {
+            if let Some(exe) = lumen::find_lumen_cli(&settings.lumen_cli_path) {
+                match runtime.push_rating(&exe, path, rating, &flag) {
+                    Ok(()) => {
+                        let xmp = xmp::get_xmp_path(path);
+                        let _ = db.upsert_rating_sync(
+                            &file_path,
+                            rating,
+                            &flag,
+                            "host",
+                            crate::db::file_mtime_secs(&xmp),
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("LUMEN RAW 评级推送失败（已忽略）: {}", e);
+                    }
+                }
+            }
         }
         Ok(true)
     })
@@ -399,4 +427,59 @@ pub async fn lumen_preview_cmd(
         original,
         cached: was_cached,
     })
+}
+
+/// 从 LUMEN RAW 拉取评级（catalog 真值）并写回宿主侧边栏。
+#[tauri::command]
+pub async fn lumen_sync_ratings_cmd(
+    state: State<'_, AppState>,
+    folder: String,
+) -> Result<Vec<String>, String> {
+    let settings = state.db.load_settings()?;
+    if !settings.lumen_enabled {
+        return Ok(Vec::new()); // 引擎关闭 → 零请求
+    }
+    let exe = match lumen::find_lumen_cli(&settings.lumen_cli_path) {
+        Some(e) => e,
+        None => return Ok(Vec::new()), // 未安装 → 静默降级
+    };
+    let runtime = state.lumen.clone();
+    let db = state.db.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let folder_path = PathBuf::from(&folder);
+        let entries = match runtime.pull_ratings(&exe, &folder_path) {
+            Ok(v) => v,
+            Err(e) => return Err(format!("拉取 LUMEN RAW 评级失败: {}", e)),
+        };
+
+        let mut updated = Vec::new();
+        for (path, rating, flag) in entries {
+            let p = PathBuf::from(&path);
+            if !p.exists() {
+                continue;
+            }
+            let host_flag =
+                flag_from_xmp(&read_xmp_full(&xmp::get_xmp_path(&p)).unwrap_or_default());
+            let host_rating = read_xmp_full(&xmp::get_xmp_path(&p))
+                .map(|m| m.rating)
+                .unwrap_or(0);
+            if host_rating == rating && host_flag == flag {
+                continue; // 已一致
+            }
+            // lumen 的 reject → 宿主的 reject（flag_from_xmp 已统一 -1 语义）
+            write_xmp(&p, rating, &flag)?;
+            let _ = db.upsert_rating_sync(
+                &path,
+                rating,
+                &flag,
+                "lumen",
+                crate::db::file_mtime_secs(&xmp::get_xmp_path(&p)),
+            );
+            updated.push(path);
+        }
+        Ok(updated)
+    })
+    .await
+    .map_err(|e| format!("评级同步任务异常: {}", e))?
 }

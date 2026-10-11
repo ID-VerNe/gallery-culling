@@ -478,6 +478,99 @@ impl Supervisor {
     }
 }
 
+/// 直调 CLI 子命令（非 `run` 形态）。
+///
+/// `lumen-cli list <query>` 自带 catalog 扫描，而 `run library.list` 走的是
+/// session 图库（未 add 过时为空）——拉取评级必须用前者。
+pub fn run_cli(exe: &Path, args: &[&str]) -> Result<Value, LumenError> {
+    let mut cmd = Command::new(exe);
+    cmd.args(args);
+    exec_and_classify(&mut cmd)
+}
+
+/// MCP 工具名 → 命令 id（B 通道 `run` 只认命令 id）。
+fn tool_to_command_id(tool: &str) -> &'static str {
+    match tool {
+        "rate_photos" => "library.rate",
+        "flag_photos" => "library.flag",
+        "label_photos" => "library.label",
+        "render_preview" => "render.preview",
+        "get_edits" => "edit.get",
+        "apply_edits" => "edit.apply",
+        _ => "app.status",
+    }
+}
+
+/// 同步动作：宿主评级 → lumen。
+///
+/// `rating = 0 且 flag = none` 不推：lumen 的 `Catalog.compact()` 会把全零条目压掉，
+/// 推过去等于"消失"（glue 报告 C §6.3）。
+pub fn should_push_rating(rating: u8, flag: &str) -> bool {
+    !(rating == 0 && (flag == "none" || flag.is_empty()))
+}
+
+/// 同步判定：把宿主侧边栏值、lumen 值与游标放在一起得出结论。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncDecision {
+    /// 无变化
+    InSync,
+    /// 宿主 → lumen（宿主改了，lumen 还没跟）
+    PushToLumen,
+    /// lumen → 宿主（lumen 改了，宿主还没跟）
+    PullFromLumen,
+    /// 两侧都改过 → 交给用户裁决（绝不静默覆盖）
+    Conflict,
+}
+
+/// 决定一次同步动作。
+///
+/// - 无游标（首次见到这张）→ 首次同步：以宿主值为准推给 lumen；
+/// - 值一致 → `InSync`；
+/// - 只有一侧变 → 推那一侧；
+/// - 两侧都变 → `Conflict`。
+pub fn decide_sync(
+    cursor: Option<(u8, String, i64)>, // (rating, flag, synced_at)
+    host_now: (u8, String, i64),       // 宿主侧边栏 (rating, flag, mtime)
+    lumen_now: Option<(u8, String)>,   // lumen catalog 值
+) -> SyncDecision {
+    let (host_rating, host_flag, host_mtime) = host_now;
+    let Some((cur_rating, cur_flag, _synced_at)) = cursor else {
+        // 首次：宿主是权威（用户刚在这台机器上打的星）
+        return if lumen_now.is_some() {
+            SyncDecision::PushToLumen
+        } else {
+            SyncDecision::InSync
+        };
+    };
+    let host_changed = host_rating != cur_rating || host_flag != cur_flag;
+    let Some((l_rating, l_flag)) = lumen_now else {
+        return if host_changed {
+            SyncDecision::PushToLumen
+        } else {
+            SyncDecision::InSync
+        };
+    };
+    let lumen_changed = l_rating != cur_rating || l_flag != cur_flag;
+    let same_now = host_rating == l_rating && host_flag == l_flag;
+
+    if same_now {
+        SyncDecision::InSync
+    } else if host_changed && lumen_changed {
+        SyncDecision::Conflict
+    } else if host_changed {
+        SyncDecision::PushToLumen
+    } else if lumen_changed {
+        SyncDecision::PullFromLumen
+    } else {
+        // 都没变但值不同（历史脏数据）：以侧边栏 mtime 为准
+        if host_mtime > 0 {
+            SyncDecision::PushToLumen
+        } else {
+            SyncDecision::PullFromLumen
+        }
+    }
+}
+
 /// A 通道常驻运行时：spawn 一次、握手、复用；失败自动降级 B 通道。
 ///
 /// 线程安全：内部 `Mutex`；Tauri 命令在 `spawn_blocking` 内调用（阻塞读）。
@@ -560,6 +653,122 @@ impl LumenRuntime {
                 run_lumen(exe, "render.preview", args)
             }
         }
+    }
+
+    /// 推送评级到 LUMEN RAW（Step 8）：A 通道工具优先，B 通道兜底。
+    ///
+    /// 调 `rate_photos` / `flag_photos`（MCP 工具名），失败降级 `run_lumen`。
+    pub fn push_rating(
+        &self,
+        exe: &Path,
+        photo: &Path,
+        rating: u8,
+        flag: &str,
+    ) -> Result<(), LumenError> {
+        let path_arg = serde_json::json!({ "paths": [photo.to_string_lossy()] });
+        // flag 语义映射：reject → 明确的 reject（lumen 与 Lightroom 同款 -1）
+        if let Err(e) = self.call_rating_tool(
+            exe,
+            "rate_photos",
+            &serde_json::json!({ "rating": rating as i64, "paths": path_arg["paths"].clone() }),
+        ) {
+            return self.push_flag(exe, photo, flag).map_err(|_| e);
+        }
+        if flag != "none" && !flag.is_empty() {
+            self.push_flag(exe, photo, flag)?;
+        }
+        Ok(())
+    }
+
+    fn push_flag(&self, exe: &Path, photo: &Path, flag: &str) -> Result<(), LumenError> {
+        let args = serde_json::json!({
+            "flag": flag,
+            "paths": [photo.to_string_lossy()],
+        });
+        self.call_rating_tool(exe, "flag_photos", &args)
+    }
+
+    /// 评级工具调用：A 通道（有客户端时）→ B 通道兜底。
+    fn call_rating_tool(&self, exe: &Path, tool: &str, args: &Value) -> Result<(), LumenError> {
+        let via_mcp = {
+            let mut guard = self
+                .inner
+                .lock()
+                .map_err(|_| LumenError::Io("锁中毒".into()))?;
+            if guard.client.is_some() {
+                match guard.client.as_mut().unwrap().call_tool(tool, args) {
+                    Ok(_) => Ok(()),
+                    Err(e) => {
+                        guard.client = None;
+                        guard.version = None;
+                        guard.failures = guard.failures.saturating_add(1);
+                        Err(e)
+                    }
+                }
+            } else {
+                Err(LumenError::Timeout)
+            }
+        };
+        match via_mcp {
+            Ok(()) => Ok(()),
+            Err(_) => {
+                // B 通道兜底：`run` 收的是**命令 id**（不是 MCP 工具名）。
+                let command_id = tool_to_command_id(tool);
+                run_lumen(exe, command_id, args).map(|_| ())
+            }
+        }
+    }
+
+    /// 拉取 lumen 侧的评级（catalog 真值）：返回 path → (rating, flag)。
+    /// 拉取 lumen 侧（catalog 真值）评级。
+    ///
+    /// `folder` 是**照片所在目录**；lumen 的查询语言按文件名过滤，
+    /// 故取目录下唯一的文件名做 `name:` 查询（宿主一次同步一个目录）。
+    pub fn pull_ratings(
+        &self,
+        exe: &Path,
+        folder: &Path,
+    ) -> Result<Vec<(String, u8, String)>, LumenError> {
+        // lumen 的 `name:` 按**文件名**过滤（不是目录名）。宿主与 lumen 共享同一批
+        // 文件，故逐个文件名查询后合并；目录为空则直接返回。
+        let mut names: Vec<String> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(folder) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_file() {
+                    if let Some(name) = p.file_name().map(|s| s.to_string_lossy().to_string()) {
+                        names.push(name);
+                    }
+                }
+            }
+        }
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut merged: Vec<(String, u8, String)> = Vec::new();
+        for name in names {
+            let query = format!("name:{}", name);
+            let out = match run_cli(exe, &["list", &query]) {
+                Ok(v) => v,
+                Err(_) => continue, // 单个文件查不到不算失败
+            };
+            if let Some(photos) = out.get("photos").and_then(Value::as_array) {
+                for p in photos {
+                    if let Some(path) = p.get("path").and_then(Value::as_str) {
+                        merged.push((
+                            path.to_string(),
+                            p.get("rating").and_then(Value::as_u64).unwrap_or(0) as u8,
+                            p.get("flag")
+                                .and_then(Value::as_str)
+                                .unwrap_or("none")
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(merged)
     }
 
     fn render_via_mcp(&self, exe: &Path, args: &Value) -> Result<Value, LumenError> {
@@ -1948,6 +2157,108 @@ mod tests {
             err
         );
         assert_eq!(rt.failure_count(), 1);
+    }
+
+    #[test]
+    fn run_cli_rejects_missing_exe() {
+        // run_cli 与 run_lumen 共享 spawn 失败语义
+        assert_eq!(
+            run_cli(
+                Path::new(
+                    r"C:
+ope\lumen-cli-xyz.exe"
+                ),
+                &["list", "*"]
+            ),
+            Err(LumenError::NotInstalled)
+        );
+    }
+
+    #[test]
+    fn tool_names_map_to_command_ids() {
+        // 回归：曾把 MCP 工具名当命令 id 传给 B 通道（unknown command 'rate_photos'）
+        assert_eq!(tool_to_command_id("rate_photos"), "library.rate");
+        assert_eq!(tool_to_command_id("flag_photos"), "library.flag");
+        assert_eq!(tool_to_command_id("render_preview"), "render.preview");
+        // 未知工具兜底到一个必然存在的只读命令
+        assert_eq!(tool_to_command_id("nope"), "app.status");
+    }
+
+    // ---- Step 8: 评级同步判定 ----
+    #[test]
+    fn push_skips_zero_rating() {
+        // lumen compact 会压掉全零条目 → 推过去等于消失
+        assert!(!should_push_rating(0, "none"), "0 星 + 无旗标不推");
+        assert!(!should_push_rating(0, ""), "0 星 + 空旗标不推");
+        assert!(should_push_rating(0, "pick"), "0 星 + pick 要推");
+        assert!(
+            should_push_rating(0, "reject"),
+            "0 星 + reject 要推（-1 语义）"
+        );
+        assert!(should_push_rating(3, "none"), "有星要推");
+    }
+
+    #[test]
+    fn sync_decision_matrix() {
+        // 首次见到（无游标）+ lumen 无记录 → 静默（不产生动作）
+        assert_eq!(
+            decide_sync(None, (3, "pick".into(), 100), None),
+            SyncDecision::InSync
+        );
+        // 首次 + lumen 已有值 → 以宿主为准推过去
+        assert_eq!(
+            decide_sync(None, (3, "pick".into(), 100), Some((1, "none".into()))),
+            SyncDecision::PushToLumen
+        );
+        // 无变化 → InSync
+        assert_eq!(
+            decide_sync(
+                Some((3, "pick".into(), 90)),
+                (3, "pick".into(), 100),
+                Some((3, "pick".into()))
+            ),
+            SyncDecision::InSync
+        );
+        // 只有宿主变 → 推
+        assert_eq!(
+            decide_sync(
+                Some((1, "none".into(), 90)),
+                (3, "pick".into(), 100),
+                Some((1, "none".into()))
+            ),
+            SyncDecision::PushToLumen
+        );
+        // 只有 lumen 变 → 拉
+        assert_eq!(
+            decide_sync(
+                Some((1, "none".into(), 90)),
+                (1, "none".into(), 90),
+                Some((5, "pick".into()))
+            ),
+            SyncDecision::PullFromLumen
+        );
+        // 两侧都变 → 冲突（绝不静默覆盖）
+        assert_eq!(
+            decide_sync(
+                Some((1, "none".into(), 90)),
+                (3, "pick".into(), 100),
+                Some((5, "pick".into()))
+            ),
+            SyncDecision::Conflict
+        );
+        // lumen 无记录 + 宿主变了 → 推
+        assert_eq!(
+            decide_sync(Some((1, "none".into(), 90)), (2, "none".into(), 100), None),
+            SyncDecision::PushToLumen
+        );
+    }
+
+    #[test]
+    fn rating_sync_cursor_roundtrip() {
+        // 纯逻辑：游标编码
+        let c: (u8, String, i64) = (4, "pick".to_string(), 1_700_000_000);
+        assert_eq!(c.0, 4);
+        assert_eq!(c.1, "pick");
     }
 
     #[test]

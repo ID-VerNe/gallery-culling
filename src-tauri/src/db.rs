@@ -1,10 +1,10 @@
 use crate::models::AppSettings;
 use rusqlite::{params, Connection};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 pub struct Database {
-    conn: Mutex<Connection>,
+    conn: std::sync::Arc<Mutex<Connection>>,
 }
 
 /// 设置键值对（纯函数，供 save/load 与单测共用）。
@@ -40,6 +40,14 @@ pub(crate) fn apply_setting(settings: &mut AppSettings, key: &str, value: &str) 
     }
 }
 
+impl Clone for Database {
+    fn clone(&self) -> Self {
+        Self {
+            conn: std::sync::Arc::clone(&self.conn),
+        }
+    }
+}
+
 impl Database {
     pub fn new() -> Result<Self, String> {
         let db_path = get_db_path();
@@ -56,6 +64,21 @@ impl Database {
         )
         .map_err(|e| format!("创建 settings 表失败: {}", e))?;
 
+        // Rating sync cursor: host has no rating timestamps, so incremental sync and
+        // conflict detection need explicit bookkeeping (glue report C §3).
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS rating_sync (
+                photo_path    TEXT PRIMARY KEY,
+                rating        INTEGER NOT NULL,
+                flag          TEXT NOT NULL,
+                source        TEXT NOT NULL,
+                sidecar_mtime INTEGER NOT NULL,
+                synced_at     INTEGER NOT NULL
+            )",
+            [],
+        )
+        .map_err(|e| format!("创建 rating_sync 表失败: {}", e))?;
+
         conn.execute(
             "CREATE TABLE IF NOT EXISTS sessions (
                 jpg_folder TEXT PRIMARY KEY,
@@ -69,7 +92,7 @@ impl Database {
         .map_err(|e| format!("创建 sessions 表失败: {}", e))?;
 
         Ok(Self {
-            conn: Mutex::new(conn),
+            conn: std::sync::Arc::new(Mutex::new(conn)),
         })
     }
 
@@ -108,6 +131,60 @@ impl Database {
             .map_err(|e| format!("保存设置 '{}' 失败: {}", k, e))?;
         }
 
+        Ok(())
+    }
+
+    /// 记录一次评级同步（upsert 游标）。
+    pub fn upsert_rating_sync(
+        &self,
+        photo_path: &str,
+        rating: u8,
+        flag: &str,
+        source: &str,
+        sidecar_mtime: i64,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let now = now_secs();
+        conn.execute(
+            "INSERT INTO rating_sync (photo_path, rating, flag, source, sidecar_mtime, synced_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(photo_path) DO UPDATE SET
+                rating = ?2, flag = ?3, source = ?4, sidecar_mtime = ?5, synced_at = ?6",
+            params![photo_path, rating as i64, flag, source, sidecar_mtime, now],
+        )
+        .map_err(|e| format!("记录评级同步失败: {}", e))?;
+        Ok(())
+    }
+
+    /// 查询某张照片的同步游标。
+    pub fn lookup_rating_sync(
+        &self,
+        photo_path: &str,
+    ) -> Result<Option<(u8, String, String, i64)>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT rating, flag, source, sidecar_mtime FROM rating_sync WHERE photo_path = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![photo_path], |row| {
+                Ok((
+                    row.get::<_, i64>(0)? as u8,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
+    /// 清空同步游标（引擎关闭时）。
+    pub fn clear_rating_sync(&self) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM rating_sync", [])
+            .map_err(|e| format!("清空评级同步失败: {}", e))?;
         Ok(())
     }
 
@@ -174,6 +251,22 @@ fn get_db_path() -> PathBuf {
     } else {
         std::env::temp_dir().join("gallery_culling.db")
     }
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+pub fn file_mtime_secs(path: &Path) -> i64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(-1)
 }
 
 #[cfg(test)]

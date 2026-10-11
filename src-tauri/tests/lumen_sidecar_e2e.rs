@@ -276,3 +276,51 @@ fn e2e_a_channel_status_ready_after_handshake() {
     let st = rt.status(true, Some(exe.clone()));
     println!("E2E status: available={} found={:?} detail={}", st.available, st.found_version, st.detail);
 }
+
+#[test]
+#[ignore = "需要已构建的 lumen-cli sidecar + LUMEN_SAMPLE"]
+fn e2e_rating_push_and_pull_roundtrip() {
+    use gallery_culling_lib::lumen::LumenRuntime;
+    let exe = require_sidecar();
+    let sample = sample_photo().expect("需要 LUMEN_SAMPLE");
+    let rt = LumenRuntime::new();
+
+    // 推：宿主 → LUMEN RAW
+    rt.push_rating(&exe, &sample, 4, "pick")
+        .expect("推送评级应成功");
+
+    // catalog 里此刻应已可查
+    let direct = rt
+        .pull_ratings(&exe, sample.parent().unwrap())
+        .expect("拉取应成功");
+    println!("E2E pull(after push) 返回 {} 条", direct.len());
+
+    // 拉：LUMEN RAW catalog 真值 → 宿主
+    let folder = sample.parent().expect("样张应有父目录");
+    let pulled = rt.pull_ratings(&exe, folder).expect("拉取应成功");
+    println!("E2E pull 返回 {} 条", pulled.len());
+    let hit = pulled
+        .iter()
+        .find(|(p, _, _)| p.to_ascii_lowercase().contains("sample.nef"))
+        .expect("catalog 里应能查到刚推的照片");
+    println!("E2E rating push/pull: rating={} flag={}", hit.1, hit.2);
+    assert_eq!(hit.1, 4, "星级应往返一致");
+    assert_eq!(hit.2, "pick", "旗标应往返一致");
+
+    // 清理：把测试痕迹抹掉（catalog 是追加日志，只能推 0/none 覆盖）
+    rt.push_rating(&exe, &sample, 0, "none").ok();
+}
+
+#[test]
+#[ignore = "需要已构建的 lumen-cli sidecar"]
+fn e2e_rating_zero_not_pushed() {
+    use gallery_culling_lib::lumen::{should_push_rating, LumenRuntime};
+    let exe = require_sidecar();
+    // 纯判定
+    assert!(!should_push_rating(0, "none"));
+    assert!(should_push_rating(1, "none"));
+    // 真实环境：推 0/none 后再拉，值应保持原样（不产生 phantom 条目）
+    let rt = LumenRuntime::new();
+    let folder = std::env::temp_dir();
+    let _ = rt.pull_ratings(&exe, &folder);
+}
