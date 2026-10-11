@@ -1616,6 +1616,19 @@ mod tests {
     }
 
     #[test]
+    fn process_transport_timeout_is_none() {
+        // 发送端存活但永不投递 → recv_timeout 必须超时 → Ok(None)（区别于通道断开的分支）
+        let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+        let transport = ProcessTransport {
+            stdin: StdMutex::new(None),
+            incoming: rx,
+        };
+        let got = transport.read_line(std::time::Duration::from_millis(200));
+        assert_eq!(got, Ok(None), "超时必须是 Ok(None)，不得挂死或 Err");
+        drop(tx);
+    }
+
+    #[test]
     fn process_transport_spawn_failure() {
         let err = ProcessTransport::spawn(
             Path::new(r"C:\definitely\not\here\lumen-cli-xyz987.exe"),
