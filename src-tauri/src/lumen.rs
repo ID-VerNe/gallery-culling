@@ -283,6 +283,184 @@ pub fn next_backoff(attempt: u32) -> std::time::Duration {
     std::time::Duration::from_millis(shifted.min(CAP_MS))
 }
 
+/// 自动重启次数上限（防无限风暴，A 报告 G3）。
+pub const MAX_RESTARTS: u32 = 8;
+
+/// 生产传输层：子进程 stdin（写）/ stdout（读线程 + mpsc）。
+///
+/// stderr 单独线程丢弃 —— 绝不并入协议流（`mcp.py:205-207` 同理：stdout 只承载协议）。
+#[derive(Debug)]
+pub struct ProcessTransport {
+    stdin: std::sync::Mutex<Option<std::process::ChildStdin>>,
+    incoming: std::sync::mpsc::Receiver<Result<String, String>>,
+}
+
+impl ProcessTransport {
+    /// 拉起子进程并启动读线程。args 由调用方给出（A 通道固定 `["mcp", "--headless"]`）。
+    pub fn spawn(exe: &Path, args: &[&str]) -> Result<Self, LumenError> {
+        use std::io::{BufRead, BufReader};
+
+        let mut child = Command::new(exe)
+            .args(args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|_| LumenError::NotInstalled)?;
+
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take();
+        // stderr：只排空不收集，防管道写满阻塞子进程
+        if let Some(mut err) = child.stderr.take() {
+            std::thread::spawn(move || {
+                let mut sink = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut err, &mut sink);
+            });
+        }
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        if let Some(out) = stdout {
+            std::thread::spawn(move || {
+                // map_while：遇到 Err 即止（flatten 会在持续 Err 时死循环）
+                for line in BufReader::new(out).lines().map_while(Result::ok) {
+                    if tx.send(Ok(line)).is_err() {
+                        break; // 宿主已丢弃客户端
+                    }
+                }
+            });
+        }
+
+        // 子进程句柄丢弃即不等待；进程由 stdin EOF 自行退出（mcp.py:102-104）
+        drop(child);
+        Ok(Self {
+            stdin: std::sync::Mutex::new(stdin),
+            incoming: rx,
+        })
+    }
+}
+
+impl LineTransport for ProcessTransport {
+    fn write_line(&self, line: &str) -> Result<(), LumenError> {
+        use std::io::Write;
+        let mut guard = self
+            .stdin
+            .lock()
+            .map_err(|_| LumenError::Io("stdin 锁中毒".into()))?;
+        let stdin = guard
+            .as_mut()
+            .ok_or_else(|| LumenError::Io("sidecar 已关闭".into()))?;
+        stdin
+            .write_all(line.as_bytes())
+            .and_then(|_| stdin.flush())
+            .map_err(|e| LumenError::Io(format!("写入 sidecar stdin 失败: {}", e)))
+    }
+
+    fn read_line(&self, timeout: std::time::Duration) -> Result<Option<String>, LumenError> {
+        match self.incoming.recv_timeout(timeout) {
+            Ok(Ok(line)) => Ok(Some(line)),
+            Ok(Err(e)) => Err(LumenError::Io(e)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(None),
+            // 通道断开 = 子进程 stdout 已关闭（EOF）
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Ok(None),
+        }
+    }
+}
+
+impl Drop for ProcessTransport {
+    fn drop(&mut self) {
+        // 关闭 stdin → lumen-cli mcp 读到 EOF 自行退出（干净回收）
+        if let Ok(mut guard) = self.stdin.lock() {
+            guard.take();
+        }
+    }
+}
+
+/// 监督器状态（崩溃退避 + 干净回收）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SupervisorState {
+    Down,
+    Ready { version: String },
+    Dead { attempt: u32 },
+}
+
+/// 常驻 sidecar 监督器：拉起 → 握手 → Ready；失败 → Dead + 指数退避。
+#[derive(Debug)]
+pub struct Supervisor {
+    state: SupervisorState,
+    last_error: Option<String>,
+}
+
+impl Default for Supervisor {
+    fn default() -> Self {
+        Self {
+            state: SupervisorState::Down,
+            last_error: None,
+        }
+    }
+}
+
+impl Supervisor {
+    pub fn state(&self) -> &SupervisorState {
+        &self.state
+    }
+
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
+    pub fn mark_ready(&mut self, version: &str) {
+        self.state = SupervisorState::Ready {
+            version: version.to_string(),
+        };
+        self.last_error = None;
+    }
+
+    /// 标记崩溃；返回下一次重启的退避时长（超过 MAX_RESTARTS 则 None = 不再自动重启）。
+    pub fn mark_dead(&mut self, err: &str) -> Option<std::time::Duration> {
+        self.last_error = Some(err.to_string());
+        let attempt = match self.state {
+            SupervisorState::Dead { attempt } => attempt + 1,
+            _ => 1,
+        };
+        self.state = SupervisorState::Dead { attempt };
+        if attempt > MAX_RESTARTS {
+            None
+        } else {
+            Some(next_backoff(attempt - 1))
+        }
+    }
+
+    /// 拉起（必要时）并握手。Ready 直接返回缓存版本。
+    pub fn ensure_running(&mut self, exe: &Path) -> Result<String, LumenError> {
+        if let SupervisorState::Ready { version } = &self.state {
+            return Ok(version.clone());
+        }
+        // 固定 --headless：禁止误连本机 GUI（A 报告 G3/R4）
+        let transport = match ProcessTransport::spawn(exe, &["mcp", "--headless"]) {
+            Ok(t) => t,
+            Err(e) => {
+                self.mark_dead(&e.to_string());
+                return Err(e);
+            }
+        };
+        let mut client = McpClient::new(transport);
+        match client.handshake() {
+            Ok(()) => {
+                let version = client
+                    .server_version()
+                    .unwrap_or(PINNED_LUMEN_VERSION)
+                    .to_string();
+                self.mark_ready(&version);
+                Ok(version)
+            }
+            Err(e) => {
+                self.mark_dead(&e.to_string());
+                Err(e)
+            }
+        }
+    }
+}
+
 /// 常驻 MCP 客户端（legacy）：initialize → tools/list → tools/call。
 pub struct McpClient<T: LineTransport> {
     transport: T,
@@ -413,6 +591,11 @@ impl<T: LineTransport> McpClient<T> {
                 serde_json::from_str(text)
                     .map_err(|e| LumenError::Protocol(format!("工具结果 JSON 解析失败: {}", e)))
             })
+    }
+
+    /// 服务器版本（握手成功后有值）。
+    pub fn server_version(&self) -> Option<&str> {
+        self.server_version.as_deref()
     }
 
     /// 测试专用：取出传输层以断言发出的行。
@@ -1327,5 +1510,203 @@ mod tests {
         assert_eq!(next_backoff(2), std::time::Duration::from_millis(2000));
         assert_eq!(next_backoff(5), std::time::Duration::from_millis(8000));
         assert_eq!(next_backoff(50), std::time::Duration::from_millis(8000));
+    }
+
+    // ---- Step 4: 生产传输层 + 监督器（真实子进程） ----
+    fn line_echo_fixture() -> PathBuf {
+        // 必须绝对路径（反斜杠）：cmd 会把正斜杠当开关
+        Path::new("tests/fixtures/line_echo.cmd")
+            .canonicalize()
+            .expect("夹具应存在")
+    }
+
+    fn spawn_echo() -> ProcessTransport {
+        // 直接 spawn .cmd（不经 `cmd /C`：Rust 直接执行 .cmd 稳定可用，
+        // 而 `cmd /C <path>` 在 Rust 的 argv 转义下会报"系统找不到指定的路径"）
+        let fixture = line_echo_fixture();
+        let mut cmd = Command::new(&fixture);
+        cmd.stdin(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+        let mut child = cmd.spawn().expect("夹具应可 spawn");
+        // 复用 ProcessTransport 内部逻辑：手动装配测试传输
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take().expect("stdout piped");
+        if let Some(mut err) = child.stderr.take() {
+            std::thread::spawn(move || {
+                let mut sink = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut err, &mut sink);
+            });
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if tx.send(Ok(line)).is_err() {
+                    break;
+                }
+            }
+        });
+        drop(child);
+        // 构造与 ProcessTransport 同构的实例（字段私有，仅测试内可造）
+        ProcessTransport {
+            stdin: StdMutex::new(stdin),
+            incoming: rx,
+        }
+    }
+
+    #[test]
+    fn process_transport_roundtrip_real_process() {
+        let t = spawn_echo();
+        // 行式协议：换行由调用方提供（rpc_encode 已带 \n）；夹具的 set /p 需要换行才输出
+        t.write_line("{\"a\":1}\n").expect("写 stdin 应成功");
+        let line = t
+            .read_line(std::time::Duration::from_secs(10))
+            .expect("读不应报错")
+            .expect("应有回显行");
+        assert!(
+            line.contains(r#"{"a":1}"#),
+            "回显内容应包含写入行: {}",
+            line
+        );
+    }
+
+    #[test]
+    fn process_transport_eof_is_none() {
+        let t = spawn_echo();
+        // 夹具只回显一行；不写则它一直等 set /p → 我们直接 drop stdin 让它退出
+        drop(t);
+        // 新起一个立刻退出的进程：cmd /C exit
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", "exit"]);
+        let mut child = cmd
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn");
+        let stdout = child.stdout.take().unwrap();
+        // 回收子进程：先 wait 释放句柄（stdin 仍持有 → cmd /C exit 立即返回）
+        let _status = child.wait().expect("wait");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if tx.send(Ok(line)).is_err() {
+                    break;
+                }
+            }
+        });
+        let transport = ProcessTransport {
+            stdin: StdMutex::new(None),
+            incoming: rx,
+        };
+        assert_eq!(
+            transport
+                .read_line(std::time::Duration::from_millis(500))
+                .expect("读不应报错"),
+            None,
+            "子进程退出后（EOF）应返回 None"
+        );
+    }
+
+    #[test]
+    fn process_transport_spawn_failure() {
+        let err = ProcessTransport::spawn(
+            Path::new(r"C:\definitely\not\here\lumen-cli-xyz987.exe"),
+            &["mcp", "--headless"],
+        )
+        .expect_err("不存在 exe 应 Err");
+        assert_eq!(err, LumenError::NotInstalled);
+    }
+
+    #[test]
+    fn supervisor_state_machine_and_backoff() {
+        let mut sup = Supervisor::default();
+        assert_eq!(sup.state(), &SupervisorState::Down);
+
+        let d1 = sup.mark_dead("boom").expect("第 1 次应给退避");
+        assert_eq!(d1, std::time::Duration::from_millis(500));
+        let d2 = sup.mark_dead("boom").expect("第 2 次应给退避");
+        assert_eq!(d2, std::time::Duration::from_millis(1000));
+        assert!(matches!(sup.state(), SupervisorState::Dead { attempt: 2 }));
+        assert_eq!(sup.last_error(), Some("boom"));
+
+        sup.mark_ready("1.6.0");
+        assert_eq!(
+            sup.state(),
+            &SupervisorState::Ready {
+                version: "1.6.0".into()
+            }
+        );
+        assert_eq!(sup.last_error(), None, "成功后清空错误");
+
+        // ready 后再 crash：attempt 重新计数
+        let d3 = sup.mark_dead("again").expect("ready 后 crash 仍应退避");
+        assert_eq!(d3, std::time::Duration::from_millis(500));
+    }
+
+    #[test]
+    fn supervisor_max_restarts_stops_auto_retry() {
+        let mut sup = Supervisor::default();
+        for i in 0..MAX_RESTARTS {
+            assert!(sup.mark_dead("boom").is_some(), "第 {} 次应仍给退避", i + 1);
+        }
+        assert!(
+            sup.mark_dead("boom").is_none(),
+            "超过 MAX_RESTARTS 后不再自动重启"
+        );
+    }
+
+    #[test]
+    fn non_mcp_child_fails_request_protocol() {
+        // 真实进程：回显夹具把我们的请求包在 {"echoed":...} 里 → id 不匹配，
+        // 读尽后无有效 MCP 应答 → 必须失败（Timeout/Protocol/Command 均可：
+        // 核心契约是"非 MCP 对端绝不产生假 Ok"）。
+        let mut client = McpClient::new(spawn_echo());
+        let err = client
+            .request(
+                "initialize",
+                serde_json::json!({"protocolVersion": LEGACY_PROTOCOL_VERSION}),
+            )
+            .expect_err("回显不是合法 MCP 应答，必须失败");
+        assert!(
+            matches!(
+                err,
+                LumenError::Timeout | LumenError::Protocol(_) | LumenError::Command(_)
+            ),
+            "实际: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn supervisor_ensure_running_marks_dead_on_bad_exe() {
+        let mut sup = Supervisor::default();
+        let err = sup
+            .ensure_running(Path::new(r"C:\definitely\not\here\lumen-cli-xyz987.exe"))
+            .expect_err("不存在 exe 应 Err");
+        assert_eq!(err, LumenError::NotInstalled);
+        assert!(
+            matches!(sup.state(), SupervisorState::Dead { attempt: 1 }),
+            "失败后应 Dead，实际: {:?}",
+            sup.state()
+        );
+    }
+
+    #[test]
+    fn supervisor_ready_short_circuits_spawn() {
+        let mut sup = Supervisor::default();
+        sup.mark_ready("1.6.0");
+        // 已 Ready 时不再 spawn（即使 exe 不存在也应直接返回版本）
+        let got = sup
+            .ensure_running(Path::new(r"C:\definitely\not\here\lumen-cli-xyz987.exe"))
+            .expect("Ready 应短路返回");
+        assert_eq!(got, "1.6.0");
     }
 }
