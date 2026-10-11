@@ -550,6 +550,60 @@ mod tests {
         let _ = fs::remove_file(&xmp);
     }
 
+
+    #[test]
+    fn flag_mapping_matrix() {
+        // Rating=-1 → reject（优先于 Label）
+        assert_eq!(
+            flag_from_xmp(&XmpMetadata { rating: 0, rejected: true, label: "Green".into(), ..Default::default() }),
+            "reject"
+        );
+        // Label=Green → pick（宿主历史约定）
+        assert_eq!(
+            flag_from_xmp(&XmpMetadata { rating: 3, label: "Green".into(), ..Default::default() }),
+            "pick"
+        );
+        // Label=Red → reject（旧文件兼容）
+        assert_eq!(
+            flag_from_xmp(&XmpMetadata { rating: 0, label: "Red".into(), ..Default::default() }),
+            "reject"
+        );
+        // 其余（含 LUMEN RAW 的其它色标）→ none
+        assert_eq!(
+            flag_from_xmp(&XmpMetadata { rating: 2, label: "Blue".into(), ..Default::default() }),
+            "none"
+        );
+        assert_eq!(
+            flag_from_xmp(&XmpMetadata { rating: 4, ..Default::default() }),
+            "none"
+        );
+    }
+
+    #[test]
+    fn roundtrip_rating_flag_through_sidecar() {
+        // 写 → 读 闭环：pick/reject/none 都必须原样回来
+        for (rating, flag) in [(3u8, "pick"), (0u8, "reject"), (5u8, "none"), (1u8, "none")] {
+            let img = std::env::temp_dir()
+                .join(format!("xmp_rt_{}_{}_{}.jpg", std::process::id(), rating, flag));
+            let xmp = get_xmp_path(&img);
+            let _ = fs::remove_file(&xmp);
+            write_xmp(&img, rating, flag).expect("写应成功");
+            let back = read_xmp_full(&xmp).expect("读应成功");
+            assert_eq!(
+                flag_from_xmp(&back),
+                flag,
+                "flag 闭环失败: rating={} flag={} → {:?}",
+                rating,
+                flag,
+                back
+            );
+            if flag != "reject" {
+                assert_eq!(back.rating, rating, "rating 闭环失败");
+            }
+            let _ = fs::remove_file(&xmp);
+        }
+    }
+
     #[test]
     fn lightroom_main_block_with_all_ns_is_not_replaced() {
         // 关键风险：Lightroom 的主块也可能同时声明 xmp/exif/crs/aux（但顺序不同）。
@@ -699,5 +753,21 @@ mod tests {
         assert_eq!(full_meta.contrast, Some(10.0));
 
         let _ = fs::remove_file(xmp_file);
+    }
+}
+
+/// 唯一的 flag 映射：XMP → 宿主 flag。
+///
+/// - `Rating = -1` → reject（Lightroom / LUMEN RAW 约定，优先于 Label）
+/// - `Label = Green` → pick（宿主历史约定；客体把 Green 读作色标，此处保持兼容）
+/// - `Label = Red` → reject（兼容宿主旧文件）
+pub fn flag_from_xmp(meta: &XmpMetadata) -> String {
+    if meta.rejected {
+        return "reject".to_string();
+    }
+    match meta.label.as_str() {
+        "Green" => "pick".to_string(),
+        "Red" => "reject".to_string(),
+        _ => "none".to_string(),
     }
 }

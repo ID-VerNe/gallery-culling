@@ -6,7 +6,7 @@ use std::path::Path;
 use crate::models::{
     ExifData, FolderScanResult, PhotoFileInfo, PhotoGroupInfo, PhotoGroupStatus, ToneAdjustments,
 };
-use crate::xmp::{check_sidecar_exists, get_xmp_path, read_xmp_full, XmpMetadata};
+use crate::xmp::{check_sidecar_exists, flag_from_xmp, get_xmp_path, read_xmp_full, XmpMetadata};
 
 const RAW_EXTENSIONS: &[&str] = &[
     "arw", "cr2", "cr3", "nef", "dng", "orf", "rw2", "raf", "pef", "sr2", "srf", "x3f",
@@ -304,12 +304,7 @@ pub fn scan_folders(
             };
 
             let (rating, flag) = if let Some(m) = &xmp_meta {
-                let flag_str = match m.label.as_str() {
-                    "Green" => "pick",
-                    "Red" => "reject",
-                    _ => "none",
-                };
-                (m.rating, flag_str.to_string())
+                (m.rating, flag_from_xmp(m))
             } else {
                 (0, "none".to_string())
             };
@@ -377,11 +372,8 @@ pub fn scan_folders(
                     let xmp_path = get_xmp_path(raw_p);
                     if let Some(m) = read_xmp_full(&xmp_path) {
                         rating = m.rating;
-                        flag = match m.label.as_str() {
-                            "Green" => "pick".to_string(),
-                            "Red" => "reject".to_string(),
-                            _ => "none".to_string(),
-                        };
+                        // 统一映射（Rating=-1 / Label 约定见 xmp::flag_from_xmp）
+                        flag = flag_from_xmp(&m);
                         xmp_meta = Some(m);
                     }
                 }
@@ -392,11 +384,8 @@ pub fn scan_folders(
                     let xmp_path = get_xmp_path(jpg_p);
                     if let Some(m) = read_xmp_full(&xmp_path) {
                         rating = m.rating;
-                        flag = match m.label.as_str() {
-                            "Green" => "pick".to_string(),
-                            "Red" => "reject".to_string(),
-                            _ => "none".to_string(),
-                        };
+                        // 统一映射（Rating=-1 / Label 约定见 xmp::flag_from_xmp）
+                        flag = flag_from_xmp(&m);
                         xmp_meta = Some(m);
                     }
                 }
