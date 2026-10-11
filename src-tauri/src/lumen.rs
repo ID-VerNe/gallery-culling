@@ -1629,6 +1629,57 @@ mod tests {
     }
 
     #[test]
+    fn noisy_stderr_child_still_serves_protocol_cleanly() {
+        // 夹具：先向 stderr 狂写 2000 行（远超 64KB 管道缓冲），再回显 stdin 一行。
+        // 两条契约：(1) stdout 协议流不被 stderr 污染；(2) stderr 必须被独立排空，
+        // 否则子进程阻塞在 stderr 写、协议行永远不出现。
+        let script = std::env::temp_dir().join(format!("lumen_noisy_{}.cmd", std::process::id()));
+        std::fs::write(
+            &script,
+            "@echo off\nfor /L %%i in (1,1,2000) do 1>&2 echo NOISE_NOISE_NOISE_NOISE_NOISE_NOISE\nset /p line=\necho {\"echoed\":%line%}\n",
+        )
+        .expect("写噪声夹具");
+        let mut cmd = Command::new(&script);
+        cmd.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = cmd.spawn().expect("噪声夹具可 spawn");
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take().expect("stdout piped");
+        if let Some(mut err) = child.stderr.take() {
+            std::thread::spawn(move || {
+                let mut sink = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut err, &mut sink);
+            });
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+                if tx.send(Ok(line)).is_err() {
+                    break;
+                }
+            }
+        });
+        let transport = ProcessTransport {
+            stdin: StdMutex::new(stdin),
+            incoming: rx,
+        };
+        transport.write_line("{\"z\":9}\n").expect("写应成功");
+        let line = transport
+            .read_line(std::time::Duration::from_secs(30))
+            .expect("读不应报错")
+            .expect("噪声子进程仍必须吐出协议行（stderr 未阻塞）");
+        assert!(
+            line.contains(r#"{"z":9}"#) && !line.contains("NOISE"),
+            "协议流必须干净（只含回显，不含 stderr 噪声）: {}",
+            line
+        );
+        drop(transport);
+        let _ = std::fs::remove_file(&script);
+    }
+
+    #[test]
     fn process_transport_spawn_failure() {
         let err = ProcessTransport::spawn(
             Path::new(r"C:\definitely\not\here\lumen-cli-xyz987.exe"),
