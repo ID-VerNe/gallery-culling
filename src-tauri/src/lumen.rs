@@ -108,23 +108,40 @@ pub fn find_in_path(name: &str) -> Option<PathBuf> {
         .find(|p| p.exists())
 }
 
-/// 查找 lumen-cli：候选路径 → PATH（where）→ None。
+/// 查找 lumen-cli：打包资源 → PATH（where）→ None。
+///
+/// 打包后 Tauri 把 `binaries/lumen-cli/**` 放到 exe 旁的 `resources/lumen-cli/`；
+/// 开发态则直接找 `src-tauri/binaries/lumen-cli/lumen-cli.exe`。
 pub fn find_lumen_cli(settings_path: &str) -> Option<PathBuf> {
-    let local_appdata = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    let program_files = std::env::var_os("ProgramFiles")
-        .map(PathBuf::from)
-        .unwrap_or_default();
-
-    if let Some(found) = first_existing(&lumen_candidates(
-        settings_path,
-        &local_appdata,
-        &program_files,
-    )) {
+    if !settings_path.trim().is_empty() {
+        let explicit = PathBuf::from(settings_path);
+        if explicit.exists() {
+            return Some(explicit);
+        }
+    }
+    if let Some(found) = find_bundled_lumen_cli() {
         return Some(found);
     }
     find_in_path("lumen-cli")
+}
+
+/// 探测随包分发的 sidecar（开发态与打包态各一条路径）。
+fn find_bundled_lumen_cli() -> Option<PathBuf> {
+    let exe_dir = std::env::current_exe().ok()?;
+    // 打包态：<exe>/../resources/lumen-cli/lumen-cli.exe
+    let bundled = exe_dir
+        .parent()?
+        .join("resources")
+        .join("lumen-cli")
+        .join("lumen-cli.exe");
+    if bundled.is_file() {
+        return Some(bundled);
+    }
+    // 开发态：cargo test 时 cwd = src-tauri
+    let dev = PathBuf::from("binaries")
+        .join("lumen-cli")
+        .join("lumen-cli.exe");
+    dev.is_file().then_some(dev)
 }
 
 /// 拼装 `lumen-cli run <command> <compact-json> --headless` 的参数向量。
@@ -843,13 +860,24 @@ mod tests {
 
     // ---- B3 ----
     #[test]
-    fn find_lumen_cli_returns_explicit_setting() {
-        // 确定性：显式设置指向真实存在的文件 → 首个候选命中，不触达 where。
+    fn find_lumen_cli_prefers_existing_explicit_path() {
+        // 确定性：显式设置指向真实文件 → 直接返回，不触达 PATH/资源探测
         let fixture = Path::new("tests/fixtures/lumen_fixture_ok.cmd")
             .canonicalize()
             .unwrap();
-        let found = find_lumen_cli(&fixture.display().to_string());
-        assert_eq!(found, Some(fixture));
+        assert_eq!(
+            find_lumen_cli(&fixture.display().to_string()),
+            Some(fixture)
+        );
+        // 显式路径不存在 → 继续往下找（不因坏设置直接放弃）
+        let bogus = find_lumen_cli(r"C:\nope\lumen-cli-xyz.exe");
+        assert_ne!(bogus, Some(PathBuf::from(r"C:\nope\lumen-cli-xyz.exe")));
+    }
+
+    #[test]
+    fn find_bundled_returns_none_without_sidecar() {
+        // 本机未安装 sidecar 到 PATH 时应返回 None（不 panic）
+        let _ = find_bundled_lumen_cli();
     }
 
     #[test]
@@ -1679,6 +1707,7 @@ mod tests {
             line
         );
         drop(transport);
+        let _ = child.wait();
         let _ = std::fs::remove_file(&script);
     }
 

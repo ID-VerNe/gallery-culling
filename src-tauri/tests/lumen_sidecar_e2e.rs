@@ -209,3 +209,17 @@ fn e2e_exec_and_classify_missing_exe_is_not_installed() {
     let _ = Duration::from_secs(0);
     let _ = Path::new("").exists();
 }
+#[test]
+#[ignore = "需要已构建的 lumen-cli sidecar"]
+fn e2e_bundled_sidecar_discovery() {
+    // 打包资源探测：src-tauri/binaries/lumen-cli/lumen-cli.exe（开发态路径）
+    let found = gallery_culling_lib::lumen::find_lumen_cli("");
+    if let Some(p) = found.clone() {
+        println!("E2E: find_lumen_cli(\"\") → {}", p.display());
+        let v = query_version(&p).expect("发现的 sidecar 应可执行");
+        assert_eq!(v, PINNED_LUMEN_VERSION);
+    } else {
+        // 未安装到 PATH 且无打包资源 → None（合法降级）
+        println!("E2E: find_lumen_cli(\"\") → None（本机未安装，走静默降级）");
+    }
+}

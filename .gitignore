@@ -5,6 +5,9 @@ node_modules/
 # Rust / Tauri build artifacts
 src-tauri/target/
 
+# LUMEN RAW sidecar (184MB, built by .plan/patches/build_lumen_sidecar.ps1)
+src-tauri/binaries/
+
 # Frontend build outputs
 dist/
 dist-ssr/
