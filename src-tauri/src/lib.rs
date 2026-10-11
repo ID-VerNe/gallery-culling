@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+pub mod lumen;
 mod luminar;
 mod models;
 mod scanner;
