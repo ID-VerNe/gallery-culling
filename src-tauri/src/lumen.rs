@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -34,6 +35,8 @@ pub enum LumenError {
     Protocol(String),
     /// 其他退出码（含被信号杀死时 code 为 None 的语义由调用方包装）
     Exit(i32),
+    /// 磁盘 IO 失败（缓存目录创建 / rename 等）
+    Io(String),
 }
 
 impl fmt::Display for LumenError {
@@ -53,6 +56,7 @@ impl fmt::Display for LumenError {
             LumenError::Exit(code) => {
                 write!(f, "LUMEN RAW 进程异常退出 (Exit Code: {})", code)
             }
+            LumenError::Io(m) => write!(f, "LUMEN RAW 预览缓存写入失败: {}", m),
         }
     }
 }
@@ -233,6 +237,180 @@ pub fn preview_cache_path(
     cache_root
         .join("lumen")
         .join(format!("{}_{}{}_lumen.jpg", key, width, suffix))
+}
+
+/// lumen-raw 版本钉死：sidecar 与此不符即整体禁用 RAW 链路（协议漂移保护）。
+pub const PINNED_LUMEN_VERSION: &str = "1.6.0";
+
+/// 前端握手用的集成状态（`lumen_status_cmd` 的纯映射来源）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LumenStatus {
+    pub available: bool,
+    pub enabled: bool,
+    pub pinned_version: String,
+    pub found_version: Option<String>,
+    /// 面向用户的中文说明
+    pub detail: String,
+}
+
+/// 解析 `lumen-cli --version` 输出（如 `LUMEN RAW 1.6.0`）中的语义版本号。
+///
+/// 只取首行第一个 `\d+\.\d+\.\d+`；垃圾输出 → None。
+pub fn parse_lumen_version(stdout: &str) -> Option<String> {
+    let line = stdout.lines().next()?;
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            let mut dots = 0;
+            let mut j = i;
+            while j < bytes.len() && (bytes[j].is_ascii_digit() || bytes[j] == b'.') {
+                if bytes[j] == b'.' {
+                    dots += 1;
+                }
+                j += 1;
+            }
+            if dots == 2 {
+                let candidate = &line[start..j];
+                let parts: Vec<&str> = candidate.split('.').collect();
+                if parts.len() == 3 && parts.iter().all(|p| !p.is_empty()) {
+                    return Some(candidate.to_string());
+                }
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+/// 查询 sidecar 版本（真实 spawn `lumen-cli --version`，解析失败 = None）。
+pub fn query_version(exe: &Path) -> Option<String> {
+    let output = Command::new(exe).arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_lumen_version(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// 组装 `render.preview` 的 JSON 参数（4 键，不得多键）。
+pub fn preview_args(src: &Path, width: u32, variant: PreviewVariant, output: &Path) -> Value {
+    serde_json::json!({
+        "path": src.to_string_lossy(),
+        "size": width,
+        "original": matches!(variant, PreviewVariant::Original),
+        "output": output.to_string_lossy(),
+    })
+}
+
+/// 缓存命中判定：目标文件存在且是普通文件。
+pub fn cached_preview(
+    cache_root: &Path,
+    key: &str,
+    width: u32,
+    variant: PreviewVariant,
+) -> Option<PathBuf> {
+    let path = preview_cache_path(cache_root, key, width, variant);
+    path.is_file().then_some(path)
+}
+
+/// 预览缓存键的全部输入（打包以保持函数签名 ≤7 参数，clippy too_many_arguments）。
+#[derive(Debug, Clone, Copy)]
+pub struct PreviewCacheInputs {
+    pub width: u32,
+    pub variant: PreviewVariant,
+    pub lumen_version: &'static str,
+    pub src_mtime: Option<SystemTime>,
+    pub project_mtime: Option<SystemTime>,
+}
+
+impl PreviewCacheInputs {
+    pub fn key(&self, src: &Path) -> String {
+        lumen_cache_key(
+            src,
+            self.width,
+            self.variant,
+            self.lumen_version,
+            self.src_mtime,
+            self.project_mtime,
+        )
+    }
+
+    pub fn cache_path(&self, cache_root: &Path, key: &str) -> PathBuf {
+        preview_cache_path(cache_root, key, self.width, self.variant)
+    }
+}
+
+/// 预览渲染编排：命中缓存直接返回；否则 tmp 渲染 + 原子 rename。
+///
+/// `render` 是进程边界注入（真实实现为 `run_lumen(exe, "render.preview", args)`）。
+pub fn ensure_preview(
+    src: &Path,
+    cache_root: &Path,
+    inputs: PreviewCacheInputs,
+    render: impl FnOnce(&Path, &Value) -> Result<(), LumenError>,
+) -> Result<PathBuf, LumenError> {
+    let key = inputs.key(src);
+    let out = inputs.cache_path(cache_root, &key);
+    if out.is_file() {
+        return Ok(out); // 缓存命中：不碰渲染边界
+    }
+
+    let file_name = out
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .ok_or_else(|| LumenError::Protocol("缓存路径非法".to_string()))?;
+    let tmp = out
+        .parent()
+        .unwrap_or(cache_root)
+        .join(format!("{}.tmp", file_name));
+
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| LumenError::Io(e.to_string()))?;
+    }
+
+    let args = preview_args(src, inputs.width, inputs.variant, &tmp);
+    render(&tmp, &args)?;
+    if !tmp.is_file() {
+        return Err(LumenError::Protocol(
+            "LUMEN RAW 未生成预览输出文件".to_string(),
+        ));
+    }
+    std::fs::rename(&tmp, &out).map_err(|e| LumenError::Io(e.to_string()))?;
+    Ok(out)
+}
+
+/// 握手状态纯映射：enabled × exe × version(==PINNED) → LumenStatus。
+pub fn lumen_status_from(
+    enabled: bool,
+    exe_found: Option<PathBuf>,
+    version: Option<String>,
+) -> LumenStatus {
+    let pinned = version.as_deref() == Some(PINNED_LUMEN_VERSION);
+    let available = enabled && exe_found.is_some() && pinned;
+    let detail = if !enabled {
+        "未启用 LUMEN RAW 引擎集成".to_string()
+    } else if exe_found.is_none() {
+        "未找到 lumen-cli.exe，请安装 LUMEN RAW 或在设置中指定路径".to_string()
+    } else if !pinned {
+        format!(
+            "LUMEN RAW 版本不匹配（需要 {}，当前 {}）",
+            PINNED_LUMEN_VERSION,
+            version.as_deref().unwrap_or("未知")
+        )
+    } else {
+        "LUMEN RAW 引擎就绪".to_string()
+    };
+    LumenStatus {
+        available,
+        enabled,
+        pinned_version: PINNED_LUMEN_VERSION.to_string(),
+        found_version: version,
+        detail,
+    }
 }
 
 #[cfg(test)]
@@ -569,5 +747,201 @@ mod tests {
             .to_string()
             .contains("应用内部缺陷"));
         assert!(LumenError::Exit(7).to_string().contains("Exit Code: 7"));
+    }
+
+    // ---- Step 2: B1 ----
+    #[test]
+    fn parse_lumen_version_standard_output() {
+        assert_eq!(
+            parse_lumen_version("LUMEN RAW 1.6.0\r\n"),
+            Some("1.6.0".to_string())
+        );
+        assert_eq!(parse_lumen_version("1.6.0"), Some("1.6.0".to_string()));
+    }
+
+    #[test]
+    fn parse_lumen_version_rejects_junk() {
+        assert_eq!(parse_lumen_version(""), None);
+        assert_eq!(parse_lumen_version("LUMEN RAW"), None);
+        assert_eq!(parse_lumen_version("garbage output"), None);
+        assert_eq!(parse_lumen_version("LUMEN RAW vNext"), None);
+    }
+
+    // ---- Step 2: B2 ----
+    #[test]
+    fn preview_args_four_keys_exact() {
+        let args = preview_args(
+            Path::new(r"D:\shoot\DSC.CR2"),
+            1600,
+            PreviewVariant::Edited,
+            Path::new(r"D:\cache\out.jpg"),
+        );
+        let obj = args.as_object().expect("应是对象");
+        assert_eq!(
+            obj.len(),
+            4,
+            "additionalProperties:false 下不得多键: {:?}",
+            obj
+        );
+        assert_eq!(obj["path"], serde_json::json!(r"D:\shoot\DSC.CR2"));
+        assert_eq!(obj["size"], serde_json::json!(1600));
+        assert_eq!(obj["original"], serde_json::json!(false));
+        assert_eq!(obj["output"], serde_json::json!(r"D:\cache\out.jpg"));
+    }
+
+    #[test]
+    fn preview_args_original_flag() {
+        let args = preview_args(
+            Path::new("a.ARW"),
+            800,
+            PreviewVariant::Original,
+            Path::new("o.jpg"),
+        );
+        assert_eq!(args["original"], serde_json::json!(true));
+        assert_eq!(args["size"], serde_json::json!(800));
+    }
+
+    // ---- Step 2: B3 ----
+    #[test]
+    fn cached_preview_hit_and_miss() {
+        let root = tmp("cp_root");
+        let hit = preview_cache_path(&root, "k1", 1600, PreviewVariant::Edited);
+        std::fs::create_dir_all(hit.parent().unwrap()).unwrap();
+        std::fs::write(&hit, b"jpg").unwrap();
+        assert_eq!(
+            cached_preview(&root, "k1", 1600, PreviewVariant::Edited),
+            Some(hit)
+        );
+
+        // 不存在 → None
+        assert_eq!(
+            cached_preview(&root, "nope", 1600, PreviewVariant::Edited),
+            None
+        );
+
+        // 是目录而非文件 → None
+        let dir_as_file = preview_cache_path(&root, "kdir", 1600, PreviewVariant::Edited);
+        std::fs::create_dir_all(&dir_as_file).unwrap();
+        assert_eq!(
+            cached_preview(&root, "kdir", 1600, PreviewVariant::Edited),
+            None
+        );
+    }
+
+    // ---- Step 2: B4 ----
+    fn ep_inputs(src_mtime: Option<SystemTime>) -> PreviewCacheInputs {
+        PreviewCacheInputs {
+            width: 1600,
+            variant: PreviewVariant::Edited,
+            lumen_version: PINNED_LUMEN_VERSION,
+            src_mtime,
+            project_mtime: None,
+        }
+    }
+
+    #[test]
+    fn ensure_preview_cache_hit_skips_render() {
+        let root = tmp("ep_root");
+        let inputs = ep_inputs(Some(t_plus(1)));
+        let out = inputs.cache_path(&root, &inputs.key(Path::new("src.ARW")));
+        std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+        std::fs::write(&out, b"cached").unwrap();
+
+        let mut called = false;
+        let got = ensure_preview(Path::new("src.ARW"), &root, inputs, |_tmp, _args| {
+            called = true;
+            Err(LumenError::Command("不应被调用".into()))
+        })
+        .expect("命中应直接 Ok");
+        assert!(!called, "缓存命中不得调用渲染边界");
+        assert_eq!(got, out);
+    }
+
+    #[test]
+    fn ensure_preview_success_writes_tmp_then_renames() {
+        let root = tmp("ep_ok");
+        let inputs = ep_inputs(None);
+        let out = inputs.cache_path(&root, &inputs.key(Path::new("src.ARW")));
+        let tmp_expected = {
+            let name = out.file_name().unwrap().to_string_lossy().to_string();
+            out.parent().unwrap().join(format!("{}.tmp", name))
+        };
+
+        let got = ensure_preview(Path::new("src.ARW"), &root, inputs, |tmp, args| {
+            assert_eq!(args["size"], serde_json::json!(1600));
+            assert!(args["output"].as_str().unwrap().ends_with(".tmp"));
+            std::fs::write(tmp, b"rendered").unwrap(); // 模拟 lumen 落盘
+            Ok(())
+        })
+        .expect("渲染成功应 Ok");
+        assert_eq!(got, out);
+        assert!(out.is_file(), "最终产物应存在");
+        assert!(!tmp_expected.exists(), "rename 后不得残留 tmp");
+    }
+
+    #[test]
+    fn ensure_preview_missing_output_is_protocol_error() {
+        let root = tmp("ep_missing");
+        let err = ensure_preview(
+            Path::new("src.ARW"),
+            &root,
+            ep_inputs(None),
+            |_tmp, _args| Ok(()), // “渲染成功”但什么都没写
+        )
+        .expect_err("输出缺失应 Err");
+        assert!(matches!(err, LumenError::Protocol(_)), "实际: {:?}", err);
+    }
+
+    #[test]
+    fn ensure_preview_propagates_render_error_and_leaves_no_file() {
+        let root = tmp("ep_err");
+        let inputs = ep_inputs(None);
+        let out = inputs.cache_path(&root, &inputs.key(Path::new("src.ARW")));
+        let err = ensure_preview(Path::new("src.ARW"), &root, inputs, |_tmp, _args| {
+            Err(LumenError::Command("lumen 炸了".into()))
+        })
+        .expect_err("渲染错误应透传");
+        assert!(matches!(err, LumenError::Command(_)));
+        assert!(!out.exists(), "失败时最终路径不得存在");
+    }
+
+    // ---- Step 2: B5 ----
+    #[test]
+    fn query_version_real_spawn_of_fixture() {
+        // 真实 spawn .cmd 夹具（Rust Command 可直接执行 .cmd）：
+        // 覆盖 query_version 的 成功解析路径（fixture 打印 "LUMEN RAW 1.6.0"）。
+        assert_eq!(
+            query_version(Path::new("tests/fixtures/lumen_fixture_version.cmd")),
+            Some("1.6.0".to_string())
+        );
+        // ok 夹具打印的是 JSON 而非版本串 → None
+        assert_eq!(
+            query_version(Path::new("tests/fixtures/lumen_fixture_ok.cmd")),
+            None
+        );
+    }
+
+    #[test]
+    fn status_from_matrix() {
+        let off = lumen_status_from(false, None, None);
+        assert!(!off.available && !off.enabled);
+
+        let no_exe = lumen_status_from(true, None, None);
+        assert!(!no_exe.available && no_exe.enabled);
+
+        let ok = lumen_status_from(
+            true,
+            Some(PathBuf::from(r"C:\lumen\lumen-cli.exe")),
+            Some("1.6.0".into()),
+        );
+        assert!(ok.available);
+        assert_eq!(ok.pinned_version, "1.6.0");
+        assert_eq!(ok.found_version.as_deref(), Some("1.6.0"));
+
+        // 版本漂移 → 不可用（A 报告 G4）
+        let drift = lumen_status_from(true, Some(PathBuf::from("x.exe")), Some("1.7.0".into()));
+        assert!(!drift.available);
+        let noversion = lumen_status_from(true, Some(PathBuf::from("x.exe")), None);
+        assert!(!noversion.available);
     }
 }

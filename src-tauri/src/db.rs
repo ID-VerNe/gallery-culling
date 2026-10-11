@@ -7,6 +7,39 @@ pub struct Database {
     conn: Mutex<Connection>,
 }
 
+/// 设置键值对（纯函数，供 save/load 与单测共用）。
+pub(crate) fn settings_pairs(settings: &AppSettings) -> Vec<(&'static str, String)> {
+    vec![
+        ("default_jpg_folder", settings.default_jpg_folder.clone()),
+        ("default_raw_folder", settings.default_raw_folder.clone()),
+        ("photoshop_path", settings.photoshop_path.clone()),
+        ("thumbnail_width", settings.thumbnail_width.to_string()),
+        ("sort_order", settings.sort_order.clone()),
+        ("lumen_enabled", settings.lumen_enabled.to_string()),
+        ("lumen_cli_path", settings.lumen_cli_path.clone()),
+    ]
+}
+
+/// 把单个 (key, value) 应用回 AppSettings（纯函数，load 与单测共用）。
+///
+/// 旧库没有 lumen 两个键 → 保持默认（关闭/空路径），零迁移风险。
+pub(crate) fn apply_setting(settings: &mut AppSettings, key: &str, value: &str) {
+    match key {
+        "default_jpg_folder" => settings.default_jpg_folder = value.to_string(),
+        "default_raw_folder" => settings.default_raw_folder = value.to_string(),
+        "photoshop_path" => settings.photoshop_path = value.to_string(),
+        "thumbnail_width" => {
+            if let Ok(w) = value.parse::<u32>() {
+                settings.thumbnail_width = w;
+            }
+        }
+        "sort_order" => settings.sort_order = value.to_string(),
+        "lumen_enabled" => settings.lumen_enabled = value == "true",
+        "lumen_cli_path" => settings.lumen_cli_path = value.to_string(),
+        _ => {}
+    }
+}
+
 impl Database {
     pub fn new() -> Result<Self, String> {
         let db_path = get_db_path();
@@ -55,18 +88,7 @@ impl Database {
             .map_err(|e| e.to_string())?;
 
         for row in rows.flatten() {
-            match row.0.as_str() {
-                "default_jpg_folder" => settings.default_jpg_folder = row.1,
-                "default_raw_folder" => settings.default_raw_folder = row.1,
-                "photoshop_path" => settings.photoshop_path = row.1,
-                "thumbnail_width" => {
-                    if let Ok(w) = row.1.parse::<u32>() {
-                        settings.thumbnail_width = w;
-                    }
-                }
-                "sort_order" => settings.sort_order = row.1,
-                _ => {}
-            }
+            apply_setting(&mut settings, &row.0, &row.1);
         }
 
         Ok(settings)
@@ -75,13 +97,7 @@ impl Database {
     pub fn save_settings(&self, settings: &AppSettings) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
 
-        let pairs = [
-            ("default_jpg_folder", settings.default_jpg_folder.as_str()),
-            ("default_raw_folder", settings.default_raw_folder.as_str()),
-            ("photoshop_path", settings.photoshop_path.as_str()),
-            ("thumbnail_width", &settings.thumbnail_width.to_string()),
-            ("sort_order", settings.sort_order.as_str()),
-        ];
+        let pairs = settings_pairs(settings);
 
         for (k, v) in pairs {
             conn.execute(
@@ -157,5 +173,56 @@ fn get_db_path() -> PathBuf {
         local
     } else {
         std::env::temp_dir().join("gallery_culling.db")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_pairs_contains_lumen_keys() {
+        let s = AppSettings::default();
+        let pairs = settings_pairs(&s);
+        let map: std::collections::HashMap<&str, String> = pairs.into_iter().collect();
+        assert_eq!(map.get("lumen_enabled").map(String::as_str), Some("false"));
+        assert_eq!(map.get("lumen_cli_path").map(String::as_str), Some(""));
+        // 既有 5 键不回归
+        assert!(map.contains_key("photoshop_path"));
+        assert!(map.contains_key("thumbnail_width"));
+        assert_eq!(map.len(), 7);
+    }
+
+    #[test]
+    fn apply_setting_lumen_roundtrip() {
+        let mut s = AppSettings::default();
+        assert!(!s.lumen_enabled);
+        apply_setting(&mut s, "lumen_enabled", "true");
+        assert!(s.lumen_enabled);
+        apply_setting(&mut s, "lumen_enabled", "false");
+        assert!(!s.lumen_enabled);
+        apply_setting(&mut s, "lumen_cli_path", r"C:\lumen\lumen-cli.exe");
+        assert_eq!(s.lumen_cli_path, r"C:\lumen\lumen-cli.exe");
+    }
+
+    #[test]
+    fn apply_setting_existing_keys_unchanged() {
+        let mut s = AppSettings::default();
+        apply_setting(&mut s, "photoshop_path", r"C:\ps\PS.exe");
+        apply_setting(&mut s, "thumbnail_width", "300");
+        apply_setting(&mut s, "sort_order", "rating");
+        assert_eq!(s.photoshop_path, r"C:\ps\PS.exe");
+        assert_eq!(s.thumbnail_width, 300);
+        assert_eq!(s.sort_order, "rating");
+    }
+
+    #[test]
+    fn apply_setting_junk_values_tolerated() {
+        let mut s = AppSettings::default();
+        apply_setting(&mut s, "lumen_enabled", "yes"); // 非 true/false → 保持默认 false
+        assert!(!s.lumen_enabled);
+        apply_setting(&mut s, "thumbnail_width", "not-a-number");
+        assert_eq!(s.thumbnail_width, 200); // 默认值不被污染
+        apply_setting(&mut s, "unknown_future_key", "x"); // 未知键静默忽略
     }
 }

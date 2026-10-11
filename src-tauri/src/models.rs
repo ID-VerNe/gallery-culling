@@ -78,6 +78,10 @@ pub struct AppSettings {
     pub photoshop_path: String,
     pub thumbnail_width: u32,
     pub sort_order: String,
+    /// 是否启用 LUMEN RAW 引擎（sidecar）集成的 RAW 链路；默认关闭，零迁移风险
+    pub lumen_enabled: bool,
+    /// lumen-cli.exe 路径（留空 = 自动查找）
+    pub lumen_cli_path: String,
 }
 
 impl Default for AppSettings {
@@ -89,8 +93,20 @@ impl Default for AppSettings {
                 .to_string(),
             thumbnail_width: 200,
             sort_order: "time_filename".to_string(),
+            lumen_enabled: false,
+            lumen_cli_path: String::new(),
         }
     }
+}
+
+/// `lumen_preview_cmd` 返回：preview_path = None 表示引擎不可用（前端静默降级）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LumenPreviewResult {
+    pub preview_path: Option<String>,
+    pub width: u32,
+    pub original: bool,
+    pub cached: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -36,6 +36,8 @@ pub fn run() {
             load_session_cmd,
             update_tone_adjustments_cmd,
             open_in_luminar_roundtrip_cmd,
+            lumen_status_cmd,
+            lumen_preview_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

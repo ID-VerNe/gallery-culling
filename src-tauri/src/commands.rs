@@ -1,12 +1,13 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::State;
 
 use crate::db::Database;
-use crate::models::{AppSettings, ExportItem, FolderScanResult};
+use crate::lumen::{self, LumenStatus, PreviewVariant, PINNED_LUMEN_VERSION};
+use crate::models::{AppSettings, ExportItem, FolderScanResult, LumenPreviewResult};
 use crate::scanner::scan_folders;
-use crate::thumbnail::get_or_create_thumbnail;
+use crate::thumbnail::{get_cache_dir, get_or_create_thumbnail};
 use crate::xmp::{update_xmp_metadata, write_xmp};
 
 pub struct AppState {
@@ -283,3 +284,109 @@ pub async fn open_in_luminar_roundtrip_cmd(file_path: String) -> Result<String, 
     Ok(edited_path.to_string_lossy().to_string())
 }
 
+/// LUMEN RAW 集成握手状态（供前端徽标/降级判断）。
+///
+/// 不可用不是错误：返回 available=false + 中文 detail，前端静默降级。
+#[tauri::command]
+pub async fn lumen_status_cmd(state: State<'_, AppState>) -> Result<LumenStatus, String> {
+    let settings = state.db.load_settings()?;
+    if !settings.lumen_enabled {
+        return Ok(lumen::lumen_status_from(false, None, None));
+    }
+    let exe = match lumen::find_lumen_cli(&settings.lumen_cli_path) {
+        Some(e) => e,
+        None => return Ok(lumen::lumen_status_from(true, None, None)),
+    };
+
+    let exe_for_version = exe.clone();
+    let version = tokio::task::spawn_blocking(move || lumen::query_version(&exe_for_version))
+        .await
+        .map_err(|e| format!("LUMEN 版本查询任务异常: {}", e))?;
+
+    Ok(lumen::lumen_status_from(true, Some(exe), version))
+}
+
+/// 经 LUMEN RAW sidecar 渲染 RAW 预览（命中磁盘缓存直接返回）。
+///
+/// 引擎未启用/未安装 → `preview_path: None`（前端回退内嵌 JPEG 路径），
+/// 仅真实渲染失败才 `Err`。
+#[tauri::command]
+pub async fn lumen_preview_cmd(
+    file_path: String,
+    width: Option<u32>,
+    original: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<LumenPreviewResult, String> {
+    let settings = state.db.load_settings()?;
+    let original = original.unwrap_or(false);
+    let width = width.unwrap_or(1600).clamp(128, 1600); // sidecar 源上限 1600
+
+    let unavailable = || LumenPreviewResult {
+        preview_path: None,
+        width,
+        original,
+        cached: false,
+    };
+
+    if !settings.lumen_enabled {
+        return Ok(unavailable());
+    }
+    let exe = match lumen::find_lumen_cli(&settings.lumen_cli_path) {
+        Some(e) => e,
+        None => return Ok(unavailable()),
+    };
+
+    let src = PathBuf::from(&file_path);
+    if !src.exists() {
+        return Err(format!("原图片文件不存在: {}", file_path));
+    }
+
+    let src_mtime = fs::metadata(&src).and_then(|m| m.modified()).ok();
+    // 兄弟 .lumen 工程：存在则把其 mtime 纳入缓存键（session 会自动拾取工程）
+    let project = src.with_extension("lumen");
+    let project_mtime = project
+        .exists()
+        .then(|| fs::metadata(&project).and_then(|m| m.modified()).ok())
+        .flatten();
+
+    let variant = if original {
+        PreviewVariant::Original
+    } else {
+        PreviewVariant::Edited
+    };
+    let cache_root = get_cache_dir().join("gallery");
+
+    let key = lumen::lumen_cache_key(
+        &src,
+        width,
+        variant,
+        PINNED_LUMEN_VERSION,
+        src_mtime,
+        project_mtime,
+    );
+    let was_cached = lumen::cached_preview(&cache_root, &key, width, variant).is_some();
+
+    let exe_for_render = exe.clone();
+    let inputs = lumen::PreviewCacheInputs {
+        width,
+        variant,
+        lumen_version: PINNED_LUMEN_VERSION,
+        src_mtime,
+        project_mtime,
+    };
+    let rendered = tokio::task::spawn_blocking(move || {
+        lumen::ensure_preview(&src, &cache_root, inputs, |_tmp, args| {
+            lumen::run_lumen(&exe_for_render, "render.preview", args).map(|_| ())
+        })
+    })
+    .await
+    .map_err(|e| format!("LUMEN 渲染任务异常: {}", e))?
+    .map_err(|e| e.to_string())?;
+
+    Ok(LumenPreviewResult {
+        preview_path: Some(rendered.to_string_lossy().to_string()),
+        width,
+        original,
+        cached: was_cached,
+    })
+}
