@@ -296,6 +296,16 @@ mod tests {
 
     // ---- B3 ----
     #[test]
+    fn find_lumen_cli_returns_explicit_setting() {
+        // 确定性：显式设置指向真实存在的文件 → 首个候选命中，不触达 where。
+        let fixture = Path::new("tests/fixtures/lumen_fixture_ok.cmd")
+            .canonicalize()
+            .unwrap();
+        let found = find_lumen_cli(&fixture.display().to_string());
+        assert_eq!(found, Some(fixture));
+    }
+
+    #[test]
     fn where_lumen_cli_missing_returns_none() {
         assert_eq!(find_in_path("definitely-not-a-real-exe-xyz-987"), None);
     }
