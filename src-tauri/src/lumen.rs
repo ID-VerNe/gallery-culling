@@ -1655,7 +1655,10 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             use std::io::BufRead;
-            for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
                 if tx.send(Ok(line)).is_err() {
                     break;
                 }
@@ -1677,6 +1680,77 @@ mod tests {
         );
         drop(transport);
         let _ = std::fs::remove_file(&script);
+    }
+
+    #[test]
+    fn drop_closes_stdin_so_child_exits() {
+        // 契约：Drop 关 stdin → 子进程读到 EOF 自行退出（mcp.py:102-104）。
+        // 夹具 wait_eof.cmd 阻塞在 set /p，收到 EOF 后写标记文件。
+        let marker = std::env::temp_dir().join(format!("lumen_eof_{}.txt", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        let fixture = Path::new("tests/fixtures/wait_eof.cmd")
+            .canonicalize()
+            .expect("夹具应存在");
+        let mut cmd = Command::new(&fixture);
+        cmd.env("LUMEN_TEST_MARKER", &marker)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = cmd.spawn().expect("应能 spawn");
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take().expect("stdout piped");
+        if let Some(mut err) = child.stderr.take() {
+            std::thread::spawn(move || {
+                let mut sink = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut err, &mut sink);
+            });
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if tx.send(Ok(line)).is_err() {
+                    break;
+                }
+            }
+        });
+        drop(child);
+        let transport = ProcessTransport {
+            stdin: StdMutex::new(stdin),
+            incoming: rx,
+        };
+        drop(transport); // ← 契约本体：Drop 关 stdin
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        assert!(
+            marker.exists(),
+            "Drop 后子进程应因 stdin EOF 退出并写标记（说明 stdin 已被关闭）"
+        );
+        let _ = std::fs::remove_file(&marker);
+    }
+
+    #[test]
+    fn ensure_running_rejects_non_mcp_child() {
+        // 契约：ensure_running 必须真握手；对着"吐垃圾"的对端不得宣称 Ready。
+        let fixture = Path::new("tests/fixtures/mcp_garbage.cmd")
+            .canonicalize()
+            .expect("夹具应存在");
+        let mut sup = Supervisor::default();
+        let err = sup
+            .ensure_running(&fixture)
+            .expect_err("非 MCP 对端握手必须失败");
+        assert!(
+            matches!(err, LumenError::Protocol(_) | LumenError::Command(_)),
+            "实际: {:?}",
+            err
+        );
+        assert!(
+            matches!(sup.state(), SupervisorState::Dead { .. }),
+            "握手失败后应 Dead，实际: {:?}",
+            sup.state()
+        );
     }
 
     #[test]
