@@ -12,6 +12,8 @@ use crate::xmp::{update_xmp_metadata, write_xmp};
 
 pub struct AppState {
     pub db: Database,
+    /// LUMEN RAW 常驻运行时（A 通道）：spawn 一次、握手、复用
+    pub lumen: lumen::LumenRuntime,
 }
 
 #[tauri::command]
@@ -295,8 +297,14 @@ pub async fn lumen_status_cmd(state: State<'_, AppState>) -> Result<LumenStatus,
     }
     let exe = match lumen::find_lumen_cli(&settings.lumen_cli_path) {
         Some(e) => e,
-        None => return Ok(lumen::lumen_status_from(true, None, None)),
+        None => return Ok(state.lumen.status(false, None)),
     };
+
+    // 已握手的运行时直接给缓存版本（零 IO）；否则问一次 --version
+    let cached = state.lumen.status(true, Some(exe.clone()));
+    if cached.available {
+        return Ok(cached);
+    }
 
     let exe_for_version = exe.clone();
     let version = tokio::task::spawn_blocking(move || lumen::query_version(&exe_for_version))
@@ -366,7 +374,7 @@ pub async fn lumen_preview_cmd(
     );
     let was_cached = lumen::cached_preview(&cache_root, &key, width, variant).is_some();
 
-    let exe_for_render = exe.clone();
+    let runtime = state.lumen.clone();
     let inputs = lumen::PreviewCacheInputs {
         width,
         variant,
@@ -376,7 +384,9 @@ pub async fn lumen_preview_cmd(
     };
     let rendered = tokio::task::spawn_blocking(move || {
         lumen::ensure_preview(&src, &cache_root, inputs, |_tmp, args| {
-            lumen::run_lumen(&exe_for_render, "render.preview", args).map(|_| ())
+            // A 通道优先（常驻 sidecar，热态省掉每次 ~2s 的解释器冷启动）；
+            // 失败时 runtime 内部自动降级到 B 通道单发。
+            runtime.render_preview(&exe, args).map(|_| ())
         })
     })
     .await

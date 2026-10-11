@@ -20,7 +20,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
-        .manage(AppState { db })
+        .manage(AppState {
+            db,
+            lumen: lumen::LumenRuntime::new(),
+        })
         .invoke_handler(tauri::generate_handler![
             scan_folders_cmd,
             get_thumbnail_cmd,

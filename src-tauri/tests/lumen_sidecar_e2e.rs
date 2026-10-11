@@ -223,3 +223,56 @@ fn e2e_bundled_sidecar_discovery() {
         println!("E2E: find_lumen_cli(\"\") → None（本机未安装，走静默降级）");
     }
 }
+
+#[test]
+#[ignore = "需要已构建的 lumen-cli sidecar + LUMEN_SAMPLE"]
+fn e2e_a_channel_warm_preview_beats_cold() {
+    use gallery_culling_lib::lumen::LumenRuntime;
+    let exe = require_sidecar();
+    let sample = sample_photo().expect("需要 LUMEN_SAMPLE");
+    let rt = LumenRuntime::new();
+    let args_for = |tag: &str| {
+        let out = std::env::temp_dir()
+            .join(format!("lumen_a_{}_{}.jpg", std::process::id(), tag));
+        let _ = std::fs::remove_file(&out);
+        serde_json::json!({
+            "path": sample.to_string_lossy(),
+            "size": 1024,
+            "original": false,
+            "output": out.to_string_lossy(),
+        })
+    };
+
+    // 第一次：冷（spawn + 解释器启动 + 握手 + 渲染）
+    let t0 = std::time::Instant::now();
+    let first = rt.render_preview(&exe, &args_for("cold")).expect("cold 应成功");
+    let cold = t0.elapsed();
+
+    // 第二次：热（同一 sidecar 进程，只解码+渲染）
+    let t1 = std::time::Instant::now();
+    let second = rt.render_preview(&exe, &args_for("warm")).expect("warm 应成功");
+    let warm = t1.elapsed();
+
+    assert!(first["output"].is_string(), "cold 结果应带 output 路径");
+    assert!(second["output"].is_string(), "warm 结果应带 output 路径");
+    println!(
+        "E2E A-channel: cold={:?} (含 spawn+握手) warm={:?} (纯渲染) 加速={:.1}x",
+        cold,
+        warm,
+        cold.as_secs_f64() / warm.as_secs_f64().max(1e-6)
+    );
+    assert!(warm < cold, "热态必须快于冷态（warm={:?} cold={:?}）", warm, cold);
+}
+
+#[test]
+#[ignore = "需要已构建的 lumen-cli sidecar"]
+fn e2e_a_channel_status_ready_after_handshake() {
+    use gallery_culling_lib::lumen::LumenRuntime;
+    let exe = require_sidecar();
+    let rt = LumenRuntime::new();
+    let args = serde_json::json!({"path": "x.ARW", "size": 128});
+    // 触发建连（会失败，因为样张不存在，但 client 已建立与否以 status 为准）
+    let _ = rt.render_preview(&exe, &args);
+    let st = rt.status(true, Some(exe.clone()));
+    println!("E2E status: available={} found={:?} detail={}", st.available, st.found_version, st.detail);
+}

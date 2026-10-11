@@ -478,6 +478,112 @@ impl Supervisor {
     }
 }
 
+/// A 通道常驻运行时：spawn 一次、握手、复用；失败自动降级 B 通道。
+///
+/// 线程安全：内部 `Mutex`；Tauri 命令在 `spawn_blocking` 内调用（阻塞读）。
+pub struct LumenRuntime {
+    // Arc 包裹：命令层需要把运行时搬进 spawn_blocking 线程
+    inner: std::sync::Arc<std::sync::Mutex<RuntimeInner>>,
+}
+
+#[derive(Default)]
+struct RuntimeInner {
+    client: Option<McpClient<ProcessTransport>>,
+    version: Option<String>,
+    failures: u32,
+    last_error: Option<String>,
+}
+
+impl Default for LumenRuntime {
+    fn default() -> Self {
+        Self {
+            inner: std::sync::Arc::new(std::sync::Mutex::new(RuntimeInner::default())),
+        }
+    }
+}
+
+impl Clone for LumenRuntime {
+    fn clone(&self) -> Self {
+        Self {
+            inner: std::sync::Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl LumenRuntime {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 握手状态（零 IO；仅返回缓存）。
+    pub fn status(&self, enabled: bool, exe_found: Option<PathBuf>) -> LumenStatus {
+        if !enabled {
+            return lumen_status_from(false, None, None);
+        }
+        let version = self.inner.lock().ok().and_then(|g| g.version.clone());
+        lumen_status_from(true, exe_found, version)
+    }
+
+    /// 连续失败次数（测试/诊断用）。
+    pub fn failure_count(&self) -> u32 {
+        self.inner.lock().map(|g| g.failures).unwrap_or(0)
+    }
+
+    /// 显式关闭：丢客户端（Drop 关 stdin → 子进程退出）。
+    pub fn shutdown(&self) {
+        if let Ok(mut g) = self.inner.lock() {
+            g.client = None;
+            g.version = None;
+            g.failures = 0;
+            g.last_error = None;
+        }
+    }
+
+    /// A 通道渲染预览；失败则**单次 B 通道兜底**（spec B1）。
+    pub fn render_preview(&self, exe: &Path, args: &Value) -> Result<Value, LumenError> {
+        match self.render_via_mcp(exe, args) {
+            Ok(v) => {
+                if let Ok(mut g) = self.inner.lock() {
+                    g.failures = 0;
+                    g.last_error = None;
+                }
+                Ok(v)
+            }
+            Err(e) => {
+                if let Ok(mut g) = self.inner.lock() {
+                    g.failures = g.failures.saturating_add(1);
+                    g.last_error = Some(e.to_string());
+                    g.client = None; // 坏连接丢弃，下次重连
+                    g.version = None;
+                }
+                // 兜底：单发 B 通道（已被 E2E 验证）
+                run_lumen(exe, "render.preview", args)
+            }
+        }
+    }
+
+    fn render_via_mcp(&self, exe: &Path, args: &Value) -> Result<Value, LumenError> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| LumenError::Io("运行时锁中毒".to_string()))?;
+        // 达到重连上限 → 直接走兜底（防无限重启风暴）
+        if guard.failures >= MAX_RESTARTS {
+            return Err(LumenError::Timeout);
+        }
+        if guard.client.is_none() {
+            // 首次：拉起 + 握手（版本钉死在 handshake 内）
+            let transport = ProcessTransport::spawn(exe, &["mcp", "--headless"])?;
+            let mut client = McpClient::new(transport);
+            client.handshake()?;
+            guard.version = client.server_version().map(str::to_string);
+            guard.client = Some(client);
+        }
+        let client = guard.client.as_mut().expect("client 已建立");
+        client.call_tool("render_preview", args)
+    }
+}
+
 /// 常驻 MCP 客户端（legacy）：initialize → tools/list → tools/call。
 pub struct McpClient<T: LineTransport> {
     transport: T,
@@ -1780,6 +1886,68 @@ mod tests {
             "握手失败后应 Dead，实际: {:?}",
             sup.state()
         );
+    }
+
+    #[test]
+    fn runtime_status_matrix_without_sidecar() {
+        let rt = LumenRuntime::new();
+        // enabled=false → 不可用且零请求
+        let off = rt.status(false, None);
+        assert!(!off.available && !off.enabled);
+        // enabled 但无 exe → 不可用
+        let no_exe = rt.status(true, None);
+        assert!(!no_exe.available);
+    }
+
+    #[test]
+    fn runtime_falls_back_when_sidecar_missing() {
+        // 侧信道完全不存在：A 通道必失败 → B 通道兜底同样失败 → 错误必须透出
+        let rt = LumenRuntime::new();
+        let err = rt
+            .render_preview(
+                Path::new(r"C:\definitely\not\here\lumen-cli-xyz987.exe"),
+                &serde_json::json!({"path": "x.ARW"}),
+            )
+            .expect_err("无 sidecar 时应失败");
+        assert!(matches!(err, LumenError::NotInstalled), "实际: {:?}", err);
+    }
+
+    #[test]
+    fn runtime_failure_count_stops_reconnect() {
+        let rt = LumenRuntime::new();
+        let exe = Path::new(r"C:\definitely\not\here\lumen-cli-xyz987.exe");
+        for _ in 0..3 {
+            let _ = rt.render_preview(exe, &serde_json::json!({"path": "x.ARW"}));
+        }
+        assert_eq!(rt.failure_count(), 3, "每次失败应累计");
+    }
+
+    #[test]
+    fn runtime_shutdown_clears_state() {
+        let rt = LumenRuntime::new();
+        let exe = Path::new(r"C:\definitely\not\here\lumen-cli-xyz987.exe");
+        let _ = rt.render_preview(exe, &serde_json::json!({"path": "x.ARW"}));
+        assert!(rt.failure_count() > 0);
+        rt.shutdown();
+        assert_eq!(rt.failure_count(), 0, "shutdown 应清空失败计数");
+    }
+
+    #[test]
+    fn runtime_rejects_non_mcp_child_and_counts_failure() {
+        // 垃圾对端：A 通道握手失败 → 记一次失败 → B 通道兜底也失败（夹具不认 render.preview）
+        let fixture = Path::new("tests/fixtures/mcp_garbage.cmd")
+            .canonicalize()
+            .expect("夹具应存在");
+        let rt = LumenRuntime::new();
+        let err = rt
+            .render_preview(&fixture, &serde_json::json!({"path": "x.ARW"}))
+            .expect_err("垃圾对端两条通道都应失败");
+        assert!(
+            matches!(err, LumenError::Protocol(_) | LumenError::Command(_)),
+            "实际: {:?}",
+            err
+        );
+        assert_eq!(rt.failure_count(), 1);
     }
 
     #[test]
