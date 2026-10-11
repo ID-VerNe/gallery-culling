@@ -73,3 +73,12 @@ Rust 内联：`parse_lumen_version`×5、`preview_args`×2、`cached_preview`×2
 5. 覆盖层：无工具 → 手动映射 + 已知缺口记录
 6. 手动变异 5 个：缓存命中不判 is_file、ensure_preview 不 create_dir_all、preview_args 丢 output、status 的版本钉死比较反向、settings 的 bool 存 "1" 与 load 的 "true" 不匹配
 7. flake：suite 跑 2 次
+
+---
+
+## 修订记录（实现揭示的 spec 缺口，显式修订而非静默漂移）
+
+- **R1（B4）**：新增 `LumenError::Io(String)` 变体 —— 实现时发现 create_dir_all/rename 的磁盘故障与"协议错误"语义不同，需要独立分类。Display: "LUMEN RAW 预览缓存写入失败: {m}"。
+- **R2（B4）**：`ensure_preview` 的 6 个缓存键输入打包为 `PreviewCacheInputs` 结构体 —— REFACTOR 阶段 clippy `too_many_arguments (8/7)` 触发（-D warnings 下是真失败），断言不变、纯签名重构。
+- **R3（附带）**：`commands.rs:282` 的既有 rustfmt drift 在本 step 格式化该文件时被顺带修复（该文件本就在改动范围内）。
+
