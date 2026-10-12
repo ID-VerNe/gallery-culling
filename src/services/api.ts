@@ -3,6 +3,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import {
   AppSettings,
   ExportItem,
+  ExportOutcome,
   FolderScanResult,
   LumenCapabilities,
   LumenMask,
@@ -115,15 +116,16 @@ export const api = {
   },
 
   /**
-   * Batch copy/export selected photos
+   * Batch copy/export selected photos.
+   * 返回成功 / 跳过 / 失败明细（后端对每项显式累计结果，不再静默失败）。
    */
   batchExport: async (
     items: ExportItem[],
     targetFolder: string,
     includeRaw: boolean,
     includeJpg: boolean,
-  ): Promise<number> => {
-    return await invoke<number>('batch_export_cmd', {
+  ): Promise<ExportOutcome> => {
+    return await invoke<ExportOutcome>('batch_export_cmd', {
       items,
       targetFolder,
       includeRaw,

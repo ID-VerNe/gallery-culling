@@ -374,7 +374,6 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           </button>
           <span
             className="text-[11px] font-mono tabular-nums text-white/80 w-11 text-center select-none"
-            aria-live="polite"
             aria-label={`当前缩放 ${zoomPercent}`}
           >
             {zoomPercent}

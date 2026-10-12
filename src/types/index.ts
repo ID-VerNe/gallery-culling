@@ -171,6 +171,22 @@ export interface ExportItem {
   rawPath?: string;
 }
 
+/** 导出中单个失败项（batch_export_cmd 的错误累计，不再静默吞掉 Err） */
+export interface ExportFailure {
+  path: string;
+  reason: string;
+}
+
+/**
+ * batch_export_cmd 的返回：成功 / 跳过（目标已存在同名文件）/ 失败明细。
+ * 与 Rust 侧 `ExportOutcome` 对齐（serde camelCase，字段均为单词故同名）。
+ */
+export interface ExportOutcome {
+  exported: number;
+  skipped: number;
+  failed: ExportFailure[];
+}
+
 export interface FolderScanResult {
   groups: PhotoGroupInfo[];
   totalCount: number;

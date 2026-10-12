@@ -1,7 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const XPACKET_UUID: &str = "W5M0MpCehiHzreSzNTczkc9d";
+
+/// 临时文件名的进程内自增序号：保证并发写同一图片时每个线程持有**各自**的
+/// 临时文件（避免互相 clobber），同时后缀仍不会匹配 `get_xmp_path` / sidecar 规则。
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct XmpMetadata {
@@ -323,8 +328,23 @@ pub fn write_xmp_preserving(image_path: &Path, meta: &XmpMetadata) -> Result<Pat
         Err(_) => build_fresh_document(meta),
     };
 
-    fs::write(&xmp_path, merged)
-        .map_err(|e| format!("写入 XMP 失败 ({}): {}", xmp_path.display(), e))?;
+    // 原子写：写同目录临时文件 → rename 覆盖最终名。
+    // 直接 `fs::write(xmp_path, …)` 是「截断后写」，并发调用会让两个写入交错，
+    // 产出被截断/半写的侧边栏。rename 是原子的：读者要么看到旧内容、要么看到
+    // 完整新内容，永不会看到半个文件。
+    // 临时名用 `.xmp.tmp<pid>_<seq>` 后缀：既不会被 `get_xmp_path`（`with_extension("xmp")`）
+    // 或 `check_sidecar_exists`（查 `.xmp`/`.acr`）误认成照片 sidecar，也不会在多线程
+    // 并发时互相覆盖。
+    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = xmp_path.with_extension(format!("xmp.tmp{}_{}", std::process::id(), seq));
+    if let Err(e) = fs::write(&tmp, &merged) {
+        let _ = fs::remove_file(&tmp); // 尽力清理残留
+        return Err(format!("写入 XMP 失败 ({}): {}", xmp_path.display(), e));
+    }
+    if let Err(e) = fs::rename(&tmp, &xmp_path) {
+        let _ = fs::remove_file(&tmp); // 尽力清理残留
+        return Err(format!("写入 XMP 失败 ({}): {}", xmp_path.display(), e));
+    }
     Ok(xmp_path)
 }
 
@@ -932,5 +952,45 @@ mod tests {
         assert_eq!(full_meta.contrast, Some(10.0));
 
         let _ = fs::remove_file(xmp_file);
+    }
+
+    #[test]
+    fn concurrent_writes_never_produce_truncated_xmp() {
+        // 回归：旧的 `fs::write(&xmp_path, merged)` 是截断后写，并发调用会交错
+        // 产出半写/截断的侧边栏。原子写（tmp → rename）后必须始终是完整文件。
+        let img = std::env::temp_dir().join(format!("xmp_concurrent_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        let _ = fs::remove_file(&xmp);
+
+        // 先写一份合法侧边栏，保证并发开始前文件存在
+        write_xmp(&img, 1, "none").expect("初始写应成功");
+
+        let mut handles = Vec::new();
+        for i in 0..8u8 {
+            let img = img.clone();
+            handles.push(std::thread::spawn(move || {
+                let _ = write_xmp(&img, (i % 5) + 1, "none");
+            }));
+        }
+        for h in handles {
+            h.join().expect("并发写线程不应 panic");
+        }
+
+        // 内容必须仍可解析，且以 xpacket 尾正常收尾 —— 不存在半写/截断。
+        let meta = read_xmp_full(&xmp).expect("并发写后侧边栏必须仍可解析");
+        assert!(meta.rating <= 5, "rating 应在 0..=5: {}", meta.rating);
+        let content = fs::read_to_string(&xmp).unwrap();
+        assert!(
+            content.contains("<?xpacket end=\"w\"?>"),
+            "侧边栏必须以 xpacket 尾正常收尾（不得半写）: {}",
+            content
+        );
+        assert!(
+            content.contains("<xmp:Rating>"),
+            "侧边栏必须含本方块: {}",
+            content
+        );
+
+        let _ = fs::remove_file(&xmp);
     }
 }

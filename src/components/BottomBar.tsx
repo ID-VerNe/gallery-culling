@@ -58,6 +58,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
       {/* Center: Keyboard Cheat Sheet (abridged — full list behind "?") */}
       <div
         className="hidden md:flex items-center gap-2 text-white/70 select-none"
+        role="group"
         aria-label="常用快捷键提示"
       >
         <KeyHint keys="1~5" label="打分" />

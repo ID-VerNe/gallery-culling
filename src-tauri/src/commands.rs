@@ -193,64 +193,126 @@ pub async fn trash_photos_cmd(file_paths: Vec<String>) -> Result<usize, String> 
     .map_err(|e| format!("移动至回收站失败: {}", e))?
 }
 
+/// 单个文件复制失败的明细（替代原来 `.is_ok()` 静默吞掉的错误）。
+#[derive(Debug, serde::Serialize, Default)]
+pub struct ExportFailure {
+    pub path: String,
+    pub reason: String,
+}
+
+/// 批量导出结果。**这是与前端约定好的固定契约，字段名不要改。**
+#[derive(Debug, serde::Serialize, Default)]
+pub struct ExportOutcome {
+    /// 本次真正复制成功的文件数
+    pub exported: usize,
+    /// 因目标已存在同名文件而跳过的文件数
+    pub skipped: usize,
+    /// 失败明细（原来被 `.is_ok()` 静默吞掉的错误）
+    pub failed: Vec<ExportFailure>,
+}
+
 #[tauri::command]
 pub async fn batch_export_cmd(
     items: Vec<ExportItem>,
     target_folder: String,
     include_raw: bool,
     include_jpg: bool,
-) -> Result<usize, String> {
+) -> Result<ExportOutcome, String> {
     tokio::task::spawn_blocking(move || {
-        let target_dir = Path::new(&target_folder);
-        if !target_dir.exists() {
-            fs::create_dir_all(target_dir).map_err(|e| format!("创建目标导出目录失败: {}", e))?;
-        }
-
-        let mut exported = 0;
-        for item in items {
-            // Copy JPG if requested
-            if include_jpg {
-                if let Some(jpg_path_str) = &item.jpg_path {
-                    let src = Path::new(jpg_path_str);
-                    if src.exists() {
-                        if let Some(file_name) = src.file_name() {
-                            let dst = target_dir.join(file_name);
-                            if fs::copy(src, dst).is_ok() {
-                                exported += 1;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Copy RAW if requested
-            if include_raw {
-                if let Some(raw_path_str) = &item.raw_path {
-                    let src = Path::new(raw_path_str);
-                    if src.exists() {
-                        if let Some(file_name) = src.file_name() {
-                            let dst = target_dir.join(file_name);
-                            if fs::copy(src, dst).is_ok() {
-                                exported += 1;
-                            }
-                        }
-                        // Also copy matching .xmp if exists
-                        let xmp_src = src.with_extension("xmp");
-                        if xmp_src.exists() {
-                            if let Some(xmp_name) = xmp_src.file_name() {
-                                let xmp_dst = target_dir.join(xmp_name);
-                                let _ = fs::copy(xmp_src, xmp_dst);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(exported)
+        export_items(items, Path::new(&target_folder), include_raw, include_jpg)
     })
     .await
     .map_err(|e| format!("批量导出任务异常: {}", e))?
+}
+
+/// 复制单个文件到目标目录（与 `#[tauri::command]` 解耦，便于单测）。
+///
+/// - 源不存在 → 跳过（沿用既有「只复制存在文件」语义）；
+/// - 目标已存在同名文件 → 计入 `skipped`，**不覆盖**（避免静默覆盖用户文件）；
+/// - `fs::copy` 失败 → 计入 `failed`；
+/// - 成功 → `exported += 1`。
+fn copy_one_to_dir(src: &Path, target_dir: &Path, outcome: &mut ExportOutcome) {
+    if !src.exists() {
+        return;
+    }
+    let Some(file_name) = src.file_name() else {
+        return;
+    };
+    let dst = target_dir.join(file_name);
+    if dst.exists() {
+        outcome.skipped += 1;
+        return;
+    }
+    match fs::copy(src, &dst) {
+        Ok(_) => outcome.exported += 1,
+        Err(e) => outcome.failed.push(ExportFailure {
+            path: src.to_string_lossy().to_string(),
+            reason: e.to_string(),
+        }),
+    }
+}
+
+/// 批量导出的**纯实现**（不含 tauri 命令属性，可直接被单测调用）。
+///
+/// 进入复制循环前先做「目标目录 == 任一源文件父目录」的自检：一旦命中即
+/// **整体拒绝**、不复制任何文件。否则 `target_dir` 与源同目录时
+/// `fs::copy(src, dst)` 的 `src == dst` 会让 Rust 标准库**截断源文件**
+/// （Unix 走 O_TRUNC 确定清零；Windows 走 CopyFileEx 可能截断或失败），
+/// 即用户原始 RAW/JPG 被不可逆破坏。
+pub fn export_items(
+    items: Vec<ExportItem>,
+    target_folder: &Path,
+    include_raw: bool,
+    include_jpg: bool,
+) -> Result<ExportOutcome, String> {
+    fs::create_dir_all(target_folder)
+        .map_err(|e| format!("创建目标导出目录失败: {}", e))?;
+
+    // 自检：canonicalize 归一化大小写 / 短名 / `..` / 尾斜杠后逐项比较，
+    // 不自己写字符串比较（Windows 下路径规范化必须交给 OS）。
+    let target_canon = fs::canonicalize(target_folder)
+        .map_err(|e| format!("无法解析目标导出目录: {}", e))?;
+    for item in &items {
+        for src_str in [&item.jpg_path, &item.raw_path].into_iter().flatten() {
+            let src = Path::new(src_str);
+            if let Some(parent) = src.parent() {
+                if let Ok(parent_canon) = fs::canonicalize(parent) {
+                    if parent_canon == target_canon {
+                        return Err(
+                            "导出目标不能是源照片所在目录，请另选一个目标文件夹".to_string(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    let mut outcome = ExportOutcome::default();
+    for item in items {
+        // Copy JPG if requested
+        if include_jpg {
+            if let Some(jpg_path_str) = &item.jpg_path {
+                copy_one_to_dir(Path::new(jpg_path_str), target_folder, &mut outcome);
+            }
+        }
+
+        // Copy RAW if requested
+        if include_raw {
+            if let Some(raw_path_str) = &item.raw_path {
+                let src = Path::new(raw_path_str);
+                if src.exists() {
+                    copy_one_to_dir(src, target_folder, &mut outcome);
+                    // Also copy matching .xmp if exists
+                    let xmp_src = src.with_extension("xmp");
+                    if xmp_src.exists() {
+                        copy_one_to_dir(&xmp_src, target_folder, &mut outcome);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(outcome)
 }
 
 #[tauri::command]
@@ -692,16 +754,29 @@ pub async fn apply_tone_cmd(
     let settings = state.db.load_settings()?;
     let path = PathBuf::from(&file_path);
 
-    // 1) XMP（同步、必做）
-    crate::xmp::update_xmp_tone(
-        &path,
-        Some(tone.exposure),
-        Some(tone.highlights),
-        Some(tone.shadows),
-        Some(tone.temperature),
-        Some(tone.tint),
-        Some(tone.contrast),
-    )?;
+    // 1) XMP（同步 IO、必做）。挪进阻塞线程池，避免同步文件写入阻塞 async 执行器。
+    //    tone 的 6 个分量是 f32（Copy），先取出再 move 进闭包，保证 tone 后续仍可用。
+    let (exposure, highlights, shadows, temperature, tint, contrast) = (
+        tone.exposure,
+        tone.highlights,
+        tone.shadows,
+        tone.temperature,
+        tone.tint,
+        tone.contrast,
+    );
+    tokio::task::spawn_blocking(move || {
+        crate::xmp::update_xmp_tone(
+            &path,
+            Some(exposure),
+            Some(highlights),
+            Some(shadows),
+            Some(temperature),
+            Some(tint),
+            Some(contrast),
+        )
+    })
+    .await
+    .map_err(|e| format!("调色写入任务异常: {}", e))??;
     let mut report = ToneWriteReport {
         xmp_written: true,
         ..Default::default()
@@ -875,4 +950,113 @@ pub async fn lumen_list_masks_cmd(
     tokio::task::spawn_blocking(move || runtime.list_masks(&exe, &file_path))
         .await
         .map_err(|e| format!("读取蒙版任务异常: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 造一个唯一临时子目录（进程 id + 纳秒时间戳，避免并发/重复运行撞名）。
+    fn unique_dir(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "gallery_export_test_{}_{}_{}",
+            tag,
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn item_with_jpg(path: &Path) -> ExportItem {
+        ExportItem {
+            base_name: path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            jpg_path: Some(path.to_string_lossy().to_string()),
+            raw_path: None,
+        }
+    }
+
+    /// 目标目录 == 源目录时必须整体拒绝，且**源文件字节数/内容不变**。
+    /// 修复前：`fs::copy(src, src)` 会把源文件截断（清空）。
+    #[test]
+    fn export_rejects_target_equal_to_source_dir() {
+        let dir = unique_dir("reject_same");
+        let jpg = dir.join("IMG_0001.jpg");
+        let payload = vec![0x41u8; 64]; // 几十字节的假 JPG
+        fs::write(&jpg, &payload).unwrap();
+        let before = fs::metadata(&jpg).unwrap().len();
+
+        let items = vec![item_with_jpg(&jpg)];
+        let res = export_items(items, &dir, false, true);
+
+        assert!(res.is_err(), "目标==源目录时必须整体拒绝");
+        assert_eq!(
+            res.unwrap_err(),
+            "导出目标不能是源照片所在目录，请另选一个目标文件夹"
+        );
+        assert_eq!(
+            fs::metadata(&jpg).unwrap().len(),
+            before,
+            "源文件字节数不得改变"
+        );
+        assert_eq!(fs::read(&jpg).unwrap(), payload, "源文件内容不得改变");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 目标目录已存在同名（但内容不同）文件时：跳过、不覆盖、计入 skipped。
+    #[test]
+    fn export_skips_existing_same_name_file() {
+        let src_dir = unique_dir("skip_src");
+        let dst_dir = unique_dir("skip_dst");
+
+        let src_jpg = src_dir.join("IMG_0002.jpg");
+        fs::write(&src_jpg, b"SRC-CONTENT").unwrap();
+
+        let dst_jpg = dst_dir.join("IMG_0002.jpg");
+        fs::write(&dst_jpg, b"EXISTING-DIFFERENT").unwrap();
+
+        let items = vec![item_with_jpg(&src_jpg)];
+        let outcome = export_items(items, &dst_dir, false, true).expect("不应报错");
+
+        assert_eq!(outcome.exported, 0, "不应复制");
+        assert_eq!(outcome.skipped, 1, "同名文件应计入 skipped");
+        assert!(outcome.failed.is_empty(), "不应有失败");
+        assert_eq!(
+            fs::read(&dst_jpg).unwrap(),
+            b"EXISTING-DIFFERENT",
+            "已存在的同名文件不得被覆盖"
+        );
+
+        let _ = fs::remove_dir_all(&src_dir);
+        let _ = fs::remove_dir_all(&dst_dir);
+    }
+
+    /// 复制失败（源是同名的目录 → `fs::copy` 报错）应计入 failed，不再静默吞掉。
+    #[test]
+    fn export_reports_copy_failure() {
+        let src_dir = unique_dir("fail_src");
+        let dst_dir = unique_dir("fail_dst");
+
+        // 名为 IMG_0003.jpg 的目录：exists() 为真、file_name 有值，但 fs::copy 必失败。
+        let bogus = src_dir.join("IMG_0003.jpg");
+        fs::create_dir_all(&bogus).unwrap();
+
+        let items = vec![item_with_jpg(&bogus)];
+        let outcome = export_items(items, &dst_dir, false, true).expect("整体不应报错");
+
+        assert_eq!(outcome.exported, 0);
+        assert!(!outcome.failed.is_empty(), "复制失败应计入 failed");
+        assert_eq!(outcome.failed[0].path, bogus.to_string_lossy().to_string());
+
+        let _ = fs::remove_dir_all(&src_dir);
+        let _ = fs::remove_dir_all(&dst_dir);
+    }
 }

@@ -3,6 +3,7 @@ import { Sliders, CheckCircle2, Sparkles } from 'lucide-react';
 import { PhotoGroupInfo } from '../types';
 import { api } from '../services/api';
 import { Modal } from './Modal';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface MetadataEditorModalProps {
   isOpen: boolean;
@@ -28,6 +29,13 @@ const COMMON_MANUAL_LENSES = [
   { name: 'Zeiss Planar T* 50mm f/1.4', focal: '50mm', aperture: 'f/1.4' },
 ];
 
+/** 同步范围的「可读」名称：写进 footer、确认按钮与事后反馈，避免只显示数字。 */
+const SCOPE_LABELS: Record<'current' | 'filtered' | 'all', string> = {
+  current: '仅当前照片',
+  filtered: '当前筛选集',
+  all: '全部扫描照片',
+};
+
 export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
   isOpen,
   onClose,
@@ -40,9 +48,12 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
   const [lensModel, setLensModel] = useState('');
   const [focalLength, setFocalLength] = useState('');
   const [aperture, setAperture] = useState('');
-  const [syncScope, setSyncScope] = useState<'current' | 'filtered' | 'all'>('all');
+  // 默认只作用于「当前照片」：批量写入必须由用户显式扩大范围，
+  // 否则一次误点会把当前照片的镜头信息覆盖到整个已扫描目录（H-03）。
+  const [syncScope, setSyncScope] = useState<'current' | 'filtered' | 'all'>('current');
   const [isSaving, setIsSaving] = useState(false);
   const [saveResult, setSaveResult] = useState<string | null>(null);
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
 
   const lensId = useId();
   const focalId = useId();
@@ -67,6 +78,8 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
       ? filteredGroups
       : allGroups;
 
+  const scopeLabel = SCOPE_LABELS[syncScope];
+
   const handleApplyPreset = (preset: {
     name: string;
     focal: string;
@@ -77,20 +90,8 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
     setAperture(preset.aperture);
   };
 
-  const handleSave = async () => {
-    if (targetGroups.length === 0) {
-      onError?.('没有可更新的目标照片，请先扫描文件夹。');
-      return;
-    }
-    if (
-      !lensModel.trim() &&
-      !focalLength.trim() &&
-      !aperture.trim()
-    ) {
-      onError?.('请至少填写一项镜头信息：镜头型号、焦段或光圈值。');
-      return;
-    }
-
+  /** 真正落盘的写操作。只在「1 张」或「二次确认通过」后调用。 */
+  const performSave = async () => {
     setIsSaving(true);
     setSaveResult(null);
 
@@ -111,7 +112,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
       const targetIds = targetGroups.map((g) => g.id);
       onMetadataUpdated(targetIds, lensModel.trim(), focalLength.trim(), aperture.trim());
 
-      setSaveResult(`已写入 ${updatedCount} 张照片的 XMP 侧边栏。`);
+      setSaveResult(`已写入「${scopeLabel}」的 ${updatedCount} 张照片的 XMP 侧边栏。`);
     } catch (err) {
       onError?.(`同步元数据失败：${String(err)}`);
     } finally {
@@ -119,7 +120,26 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
     }
   };
 
+  const handleSave = () => {
+    if (targetGroups.length === 0) {
+      onError?.('没有可更新的目标照片，请先扫描文件夹。');
+      return;
+    }
+    if (!lensModel.trim() && !focalLength.trim() && !aperture.trim()) {
+      onError?.('请至少填写一项镜头信息：镜头型号、焦段或光圈值。');
+      return;
+    }
+
+    // 只有单张才允许直接写盘；批量范围必须经二次确认，堵住「打开即误点」。
+    if (targetGroups.length === 1) {
+      void performSave();
+      return;
+    }
+    setIsConfirmOpen(true);
+  };
+
   return (
+    <>
     <Modal
       isOpen={isOpen}
       onClose={onClose}
@@ -129,7 +149,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
       footer={
         <>
           <span className="mr-auto text-white/70 text-[11px]">
-            将更新{' '}
+            将更新 <strong className="text-white">「{scopeLabel}」</strong> 的{' '}
             <strong className="text-white font-mono tabular-nums">
               {targetGroups.length}
             </strong>{' '}
@@ -146,7 +166,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
             disabled={isSaving || targetGroups.length === 0}
             className="focus-ring px-5 py-2 text-xs font-medium bg-white hover:bg-white/90 text-black active:scale-95 disabled:opacity-50 disabled:pointer-events-none rounded-lg transition-transform shadow-md"
           >
-            {isSaving ? '正在写入 XMP…' : '确认并批量同步'}
+            {isSaving ? '正在写入 XMP…' : `确认并同步「${scopeLabel}」`}
           </button>
         </>
       }
@@ -252,11 +272,17 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
                 label: '当前筛选集',
                 count: filteredGroups.length,
               },
-              { value: 'all' as const, label: '全部扫描照片', count: allGroups.length },
+              {
+                value: 'all' as const,
+                label: '全部扫描照片',
+                count: allGroups.length,
+                hint: '含未被筛选显示的照片',
+              },
             ] satisfies Array<{
               value: 'current' | 'filtered' | 'all';
               label: string;
               count: number;
+              hint?: string;
             }>
           ).map((option) => {
             const checked = syncScope === option.value;
@@ -281,6 +307,11 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
                 <span className="text-[10px] text-white/60 font-mono tabular-nums">
                   ({option.count} 张)
                 </span>
+                {option.hint && (
+                  <span className="text-[10px] text-amber-300/80 leading-tight">
+                    {option.hint}
+                  </span>
+                )}
               </label>
             );
           })}
@@ -305,5 +336,22 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
         </div>
       )}
     </Modal>
+
+    {/* 批量范围二次确认：只有单张才允许直接写盘。作为兄弟节点渲染，
+        避免嵌进上一层的 dialog 面板（焦点陷阱 / Escape 语义互相污染）。 */}
+    <ConfirmDialog
+      isOpen={isConfirmOpen}
+      onClose={() => setIsConfirmOpen(false)}
+      onConfirm={() => {
+        void performSave();
+      }}
+      destructive
+      icon={<Sliders className="w-4 h-4" aria-hidden="true" />}
+      title={`将覆盖 ${targetGroups.length} 张照片的镜头信息`}
+      message={`这会重写 ${targetGroups.length} 个 XMP 侧边栏里的镜头型号 / 焦段 / 光圈，且无法撤销。建议改用「仅当前照片」或「当前筛选集」缩小范围。`}
+      confirmLabel={`仍然覆盖 ${targetGroups.length} 张`}
+      cancelLabel="返回"
+    />
+    </>
   );
 };

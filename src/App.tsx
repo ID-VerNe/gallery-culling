@@ -65,6 +65,8 @@ function AppShell() {
   // Tonal & Luminar state
   const [toneMap, setToneMap] = useState<Record<string, ToneAdjustments>>({});
   const [showTonalPanel, setShowTonalPanel] = useState(false);
+  /** 调色保存进行中：禁用保存按钮并挡住重入，避免连点写两次 XMP/工程。 */
+  const [isSavingTone, setIsSavingTone] = useState(false);
   const [isLuminarRunning, setIsLuminarRunning] = useState(false);
   const [isHoldOriginal, setIsHoldOriginal] = useState(false);
 
@@ -607,12 +609,15 @@ function AppShell() {
    * - 引擎失败不回滚 XMP，只把 warning 如实提示出来。
    */
   const handleSaveTone = useCallback(async () => {
+    // 重入短路：一次保存还没落地时，再点（键盘/程序化触发）直接忽略。
+    if (isSavingTone) return;
     if (!currentGroup) return;
     const toneToSave =
       toneMap[currentGroup.id] || currentGroup.tone || DEFAULT_TONE;
     const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
     if (!targetPath) return;
 
+    setIsSavingTone(true);
     try {
       const report = await api.applyTone(targetPath, toneToSave);
       setGroups((prev) =>
@@ -638,8 +643,11 @@ function AppShell() {
     } catch (err) {
       console.error('Failed to save tone:', err);
       toast.error(`保存调色失败：${String(err)}`);
+    } finally {
+      // 无论成功/失败/异常都必须复位，否则按钮会永久卡在「保存中…」。
+      setIsSavingTone(false);
     }
-  }, [currentGroup, toneMap, toast]);
+  }, [currentGroup, toneMap, toast, isSavingTone]);
 
   /**
    * 打开调色面板时读回统一状态：生效值 + XMP 真值 + lumen 工程真值 + 是否分歧。
@@ -1018,6 +1026,7 @@ function AppShell() {
               onReset={handleResetTone}
               onAuto={handleAutoTone}
               onSave={handleSaveTone}
+              isSaving={isSavingTone}
               divergent={toneDivergent}
               masks={lumenMasks}
               onApplyMask={

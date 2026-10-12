@@ -324,6 +324,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
           >
             AI 局部蒙版
           </label>
+          {/* 行 1：区域 + 套用。滑杆挪到独立一行，避免与控件抢宽度。 */}
           <div className="flex items-center gap-1.5">
             <select
               id="tonal-mask-region"
@@ -337,16 +338,6 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
                 </option>
               ))}
             </select>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={5}
-              value={maskDehaze}
-              onChange={(e) => setMaskDehaze(Number(e.target.value))}
-              className="focus-ring flex-1 min-w-0 accent-white"
-              aria-label="蒙版去薄雾强度"
-            />
             <button
               onClick={handleApplyMaskClick}
               disabled={isMasking}
@@ -355,6 +346,30 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
             >
               {isMasking ? '检测中…' : '套用'}
             </button>
+          </div>
+          {/* 行 2：与上方 6 根调色滑杆同构 —— 复用 .tone-slider 与数值读数。 */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex justify-between items-center text-white/80 gap-2">
+              <span className="flex items-center gap-1.5 min-w-0">
+                <CloudSun className="w-3.5 h-3.5 text-white/60" aria-hidden="true" />
+                <span className="truncate">去薄雾</span>
+              </span>
+              <span className="font-mono text-[11px] tabular-nums text-white/70 shrink-0">
+                {maskDehaze}%
+              </span>
+            </div>
+            <input
+              id="tonal-mask-dehaze"
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={maskDehaze}
+              onChange={(e) => setMaskDehaze(Number(e.target.value))}
+              className="tone-slider"
+              aria-label="蒙版去薄雾强度"
+              aria-valuetext={`${maskDehaze}%`}
+            />
           </div>
           <p className="text-[10px] leading-relaxed text-white/60">
             {isMasking

@@ -461,6 +461,8 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
     <div
       role="option"
       aria-selected={isSelected}
+      aria-setsize={total}
+      aria-posinset={index + 1}
       aria-label={description}
       id={makeOptionId(group.id)}
       tabIndex={-1}
@@ -488,7 +490,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
           />
         ) : thumbSrc === undefined ? (
           <div
-            className="text-[10px] text-white/40 font-mono"
+            className="text-[10px] text-white/60 font-mono"
             title="缩略图不可用：引擎与内嵌预览都读取失败"
             role="img"
             aria-label="缩略图不可用"
