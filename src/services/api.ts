@@ -1,6 +1,13 @@
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import { AppSettings, ExportItem, FolderScanResult, ToneAdjustments } from '../types';
+import {
+  AppSettings,
+  ExportItem,
+  FolderScanResult,
+  LumenPreviewResult,
+  LumenStatus,
+  ToneAdjustments,
+} from '../types';
 
 export const api = {
   /**
@@ -193,5 +200,35 @@ export const api = {
    */
   toAssetUrl: (filePath: string): string => {
     return convertFileSrc(filePath);
+  },
+
+  /**
+   * LUMEN RAW 集成握手状态（available=false 时前端静默降级）
+   */
+  getLumenStatus: async (): Promise<LumenStatus> => {
+    return await invoke<LumenStatus>('lumen_status_cmd');
+  },
+
+  /**
+   * 经 LUMEN RAW sidecar 渲染 RAW 预览。
+   * previewPath 为 null 表示引擎不可用（调用方应回退内嵌 JPEG 路径）。
+   */
+  getLumenPreview: async (
+    filePath: string,
+    opts?: { width?: number; original?: boolean },
+  ): Promise<LumenPreviewResult> => {
+    return await invoke<LumenPreviewResult>('lumen_preview_cmd', {
+      filePath,
+      width: opts?.width ?? null,
+      original: opts?.original ?? null,
+    });
+  },
+
+  /**
+   * 从 LUMEN RAW 拉取该文件夹的评级并写回侧边栏（返回被更新的文件路径）。
+   * 引擎关闭或未安装时返回空数组（静默降级）。
+   */
+  syncLumenRatings: async (folder: string): Promise<string[]> => {
+    return await invoke<string[]>('lumen_sync_ratings_cmd', { folder });
   },
 };
