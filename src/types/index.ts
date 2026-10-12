@@ -76,6 +76,29 @@ export interface LumenRecipe {
   monochrome: boolean;
 }
 
+/** 统一调色写入的结果：一条命令、两个落点各自成功与否 */
+export interface ToneWriteReport {
+  /** XMP 侧边栏是否写成功（互操作底线） */
+  xmpWritten: boolean;
+  /** LUMEN RAW 编辑态是否应用成功 */
+  lumenApplied: boolean;
+  /** 落盘的 .lumen 工程路径 */
+  projectPath: string | null;
+  /** 非致命问题（引擎失败原因等） */
+  warnings: string[];
+}
+
+/** 统一调色读取：XMP（互操作真值）+ lumen 工程（渲染真值） */
+export interface ToneState {
+  /** 当前生效的调色（引擎可用时优先 lumen） */
+  tone: ToneAdjustments;
+  xmpTone: ToneAdjustments;
+  lumenTone: ToneAdjustments | null;
+  /** 两侧不一致 —— UI 必须提示，绝不静默取舍 */
+  divergent: boolean;
+  lumenAvailable: boolean;
+}
+
 /** 评级同步结果：写回了什么、跳过什么、哪里冲突（冲突绝不自动覆盖） */
 export interface LumenRatingConflict {
   path: string;

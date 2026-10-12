@@ -2,10 +2,10 @@ mod commands;
 mod db;
 pub mod lumen;
 mod luminar;
-mod models;
+pub mod models;
 mod scanner;
 mod thumbnail;
-mod xmp;
+pub mod xmp;
 
 use commands::*;
 use db::Database;
@@ -46,6 +46,8 @@ pub fn run() {
             lumen_apply_recipe_cmd,
             lumen_capabilities_cmd,
             lumen_apply_preset_cmd,
+            apply_tone_cmd,
+            get_tone_state_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

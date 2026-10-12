@@ -29,7 +29,6 @@ import {
 } from './types';
 import { api } from './services/api';
 import { computeAutoTone, DEFAULT_TONE } from './utils/autoTone';
-import { toneToRecipe } from './utils/toneToRecipe';
 
 function AppShell() {
   const toast = useToast();
@@ -50,6 +49,8 @@ function AppShell() {
   const [isMetadataOpen, setIsMetadataOpen] = useState(false);
   const [isShortcutHelpOpen, setIsShortcutHelpOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  /** XMP 与 LUMEN RAW 工程两侧调色是否不一致（统一管线的分歧标记） */
+  const [toneDivergent, setToneDivergent] = useState(false);
 
   // Grid search (progressive disclosure; owned here so the TopBar toggle and
   // the grid can share it across the tonal-panel swap).
@@ -595,7 +596,13 @@ function AppShell() {
     tempImg.src = src;
   }, [currentGroup, handleToneChange, toast]);
 
-  const handleSaveToneToXmp = useCallback(async () => {
+  /**
+   * 统一保存调色：**一条命令、两个落点**。
+   * - 总是写 XMP（Lightroom / Capture One / Photoshop 互操作）；
+   * - 引擎可用时同时写入 LUMEN RAW 编辑态并落盘 .lumen 工程；
+   * - 引擎失败不回滚 XMP，只把 warning 如实提示出来。
+   */
+  const handleSaveTone = useCallback(async () => {
     if (!currentGroup) return;
     const toneToSave =
       toneMap[currentGroup.id] || currentGroup.tone || DEFAULT_TONE;
@@ -603,62 +610,110 @@ function AppShell() {
     if (!targetPath) return;
 
     try {
-      await api.updateToneAdjustments(targetPath, toneToSave);
+      const report = await api.applyTone(targetPath, toneToSave);
       setGroups((prev) =>
         prev.map((g) =>
           g.id === currentGroup.id
-            ? { ...g, hasXmp: true, tone: toneToSave }
+            ? { ...g, hasXmp: report.xmpWritten, tone: toneToSave }
             : g,
         ),
       );
-      toast.success(
-        '调色参数已写入同名 .xmp 文件。\nPhotoshop / ACR 打开时将自动载入该效果。',
-      );
+      setToneDivergent(false);
+      if (report.lumenApplied) {
+        toast.success(
+          report.projectPath
+            ? '调色已保存：XMP 侧边栏 + LUMEN RAW 工程。'
+            : '调色已保存：XMP 侧边栏 + LUMEN RAW。',
+        );
+      } else if (report.warnings.length > 0) {
+        // XMP 写成功了，只是引擎那侧没成 —— 必须说清楚，别让用户以为两边都存了
+        toast.error(`XMP 已写入，但 LUMEN RAW 未同步：${report.warnings[0]}`);
+      } else {
+        toast.success('调色参数已写入同名 .xmp 文件。\nPhotoshop / ACR 打开时将自动载入。');
+      }
     } catch (err) {
-      console.error('Failed to write tone to XMP:', err);
-      toast.error(`写入 XMP 失败：${String(err)}`);
+      console.error('Failed to save tone:', err);
+      toast.error(`保存调色失败：${String(err)}`);
     }
   }, [currentGroup, toneMap, toast]);
 
   /**
-   * 把调色滑杆写入 LUMEN RAW 的 recipe（edit.apply，最终值语义）。
-   * 引擎不可用时按钮不出现 —— 前端行为与今天逐像素一致。
+   * 打开调色面板时读回统一状态：生效值 + XMP 真值 + lumen 工程真值 + 是否分歧。
+   * 引擎关闭时只读 XMP（零请求）。
    */
-  const handleSaveToneToLumen = useCallback(async () => {
-    if (!currentGroup) return;
-    const toneToSave =
-      toneMap[currentGroup.id] || currentGroup.tone || DEFAULT_TONE;
+  useEffect(() => {
+    if (!showTonalPanel || !currentGroup) {
+      setToneDivergent(false);
+      return;
+    }
     const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
     if (!targetPath) return;
+    let active = true;
+    api
+      .getToneState(targetPath)
+      .then((st) => {
+        if (!active) return;
+        setToneDivergent(st.divergent);
+        // 只在宿主还没有本地改动时用真值回填，避免覆盖用户刚拖的滑杆
+        if (!toneMap[currentGroup.id]) {
+          handleToneChange(st.tone);
+        }
+      })
+      .catch((e) => console.warn('读取调色状态失败:', e));
+    return () => {
+      active = false;
+    };
+  }, [showTonalPanel, currentGroup?.id]);
 
-    try {
-      await api.applyLumenRecipe(targetPath, toneToRecipe(toneToSave));
-      setGroups((prev) =>
-        prev.map((g) =>
-          g.id === currentGroup.id ? { ...g, tone: toneToSave } : g,
-        ),
-      );
-      toast.success('调色参数已应用到 LUMEN RAW。');
-    } catch (err) {
-      console.error('Failed to apply LUMEN RAW recipe:', err);
-      toast.error(`应用调色到 LUMEN RAW 失败：${String(err)}`);
-    }
-  }, [currentGroup, toneMap, toast]);
+  /**
+   * 应用 LUMEN RAW 内置预设（编辑态是进程内 session，后端保证 apply+save 同进程）。
+   * 套完用统一读取把真实值拉回来，滑杆立刻反映。
+   */
+  const handleApplyLumenPreset = useCallback(
+    async (name: string) => {
+      if (!currentGroup) return;
+      const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
+      if (!targetPath) return;
+      try {
+        await api.applyLumenPreset(targetPath, name, 100);
+        const st = await api.getToneState(targetPath);
+        setGroups((prev) =>
+          prev.map((g) =>
+            g.id === currentGroup.id ? { ...g, tone: st.tone } : g,
+          ),
+        );
+        handleToneChange(st.tone);
+        setToneDivergent(st.divergent);
+        toast.success(`已应用预设「${name}」。`);
+      } catch (err) {
+        console.error('Failed to apply preset:', err);
+        toast.error(`应用预设失败：${String(err)}`);
+      }
+    },
+    [currentGroup, handleToneChange, toast],
+  );
 
   /**
    * 设置里的"从 LUMEN RAW 同步评级"：拉 catalog 真值并写回侧边栏。
-   * 只写回 LUMEN 侧有值、宿主侧无改动的照片；两侧都动过的跳过并计数。
+   * 冲突由后端判定并回报（两侧都改过的不覆盖）。
    */
   const handleSyncLumenRatings = useCallback(
     async (folder: string): Promise<number> => {
       const target =
-        folder || settings?.defaultRawFolder || currentGroup?.raw?.path || currentGroup?.jpg?.path || '';
+        folder ||
+        settings?.defaultRawFolder ||
+        currentGroup?.raw?.path ||
+        currentGroup?.jpg?.path ||
+        '';
       if (!target) {
         toast.error('没有可同步的路径，请先设置默认 RAW 目录。');
         return 0;
       }
       // 取所在目录（同时兼容 / 与 \ 分隔符）
-      const lastSlash = Math.max(target.lastIndexOf('/'), target.lastIndexOf(String.fromCharCode(92)));
+      const lastSlash = Math.max(
+        target.lastIndexOf('/'),
+        target.lastIndexOf(String.fromCharCode(92)),
+      );
       const folderPath = lastSlash > 0 ? target.slice(0, lastSlash) : '';
       if (!folderPath) {
         toast.error('无法确定所在目录，请先设置默认 RAW 目录。');
@@ -671,11 +726,9 @@ function AppShell() {
         if (jpgFolder) await handleScan();
       }
       if (result.conflicts.length > 0) {
-        // 两侧都改过 —— 不自动覆盖，明确告诉用户哪几张需要裁决
         const first = result.conflicts[0];
         toast.error(
-          `${result.conflicts.length} 张照片在两边都被改过，已保持本机值不覆盖。
-` +
+          `${result.conflicts.length} 张照片在两边都被改过，已保持本机值不覆盖。\n` +
             `例如 ${first.path}：本机 ${first.hostRating}★/${first.hostFlag}，` +
             `LUMEN RAW ${first.lumenRating}★/${first.lumenFlag}。`,
         );
@@ -684,30 +737,6 @@ function AppShell() {
     },
     // `handleScan` 依赖 jpgFolder/rawFolder/sortOrder
     [settings, currentGroup, toast, jpgFolder, handleScan],
-  );
-
-  /** 应用 LUMEN RAW 内置预设（编辑态是进程内 session，由后端保证同进程）。 */
-  const handleApplyLumenPreset = useCallback(
-    async (name: string) => {
-      if (!currentGroup) return;
-      const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
-      if (!targetPath) return;
-      try {
-        await api.applyLumenPreset(targetPath, name, 100);
-        // 套预设后把 lumen 侧的实际调整读回来，让滑杆反映真实状态
-        const recipe = await api.getLumenRecipe(targetPath);
-        setGroups((prev) =>
-          prev.map((g) =>
-            g.id === currentGroup.id ? { ...g, tone: recipe.tone } : g,
-          ),
-        );
-        toast.success(`已应用预设「${name}」。`);
-      } catch (err) {
-        console.error('Failed to apply preset:', err);
-        toast.error(`应用预设失败：${String(err)}`);
-      }
-    },
-    [currentGroup, toast],
   );
 
   // Luminar AI Roundtrip Handler
@@ -943,8 +972,8 @@ function AppShell() {
               onChange={handleToneChange}
               onReset={handleResetTone}
               onAuto={handleAutoTone}
-              onSaveXmp={handleSaveToneToXmp}
-              onSaveToLumen={lumenAvailable ? handleSaveToneToLumen : undefined}
+              onSave={handleSaveTone}
+              divergent={toneDivergent}
               lumenPresets={lumenCaps?.presets ?? []}
               aiAvailable={lumenCaps?.aiMasks ?? false}
               onApplyPreset={lumenAvailable ? handleApplyLumenPreset : undefined}

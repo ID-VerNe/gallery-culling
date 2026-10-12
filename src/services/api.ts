@@ -10,6 +10,8 @@ import {
   LumenRecipe,
   LumenStatus,
   ToneAdjustments,
+  ToneState,
+  ToneWriteReport,
 } from '../types';
 
 export const api = {
@@ -257,5 +259,18 @@ export const api = {
   /** 应用 LUMEN RAW 内置预设（amount 0..100） */
   applyLumenPreset: async (filePath: string, name: string, amount = 100): Promise<void> => {
     await invoke('lumen_apply_preset_cmd', { filePath, name, amount });
+  },
+
+  /**
+   * 统一调色写入：XMP + （引擎可用时）LUMEN RAW 编辑态并落盘 .lumen 工程。
+   * 引擎失败不会回滚 XMP，只在 report.warnings 里说明。
+   */
+  applyTone: async (filePath: string, tone: ToneAdjustments): Promise<ToneWriteReport> => {
+    return await invoke<ToneWriteReport>('apply_tone_cmd', { filePath, tone });
+  },
+
+  /** 统一调色读取：返回生效值 + 两个真值 + 是否分歧 */
+  getToneState: async (filePath: string): Promise<ToneState> => {
+    return await invoke<ToneState>('get_tone_state_cmd', { filePath });
   },
 };

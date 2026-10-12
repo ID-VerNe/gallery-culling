@@ -20,11 +20,15 @@ interface TonalAdjusterProps {
   onAutoTone?: () => void;
   onAuto?: () => void;
   onReset?: () => void;
-  onSaveXmp: () => void;
+  /** 统一保存：一条命令同时写 XMP 与 LUMEN RAW（引擎可用时）。 */
+  onSave: () => Promise<void>;
   onClose: () => void;
   isSaving?: boolean;
-  /** LUMEN RAW 引擎可用时出现：把滑杆写入 lumen recipe（而非 XMP）。 */
-  onSaveToLumen?: () => void;
+  /**
+   * XMP 与 LUMEN RAW 工程两侧调色不一致 —— 必须提示，绝不静默取舍。
+   * 常见成因：在另一处（Lightroom / LUMEN RAW）改了调色，或换了引擎。
+   */
+  divergent?: boolean;
   /** LUMEN RAW 内置预设（来自 commands.list，非硬编码） */
   lumenPresets?: string[];
   /** AI 蒙版是否可用（GPU flavor 才有）。false 时显示说明而不是假装能用。 */
@@ -117,16 +121,15 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
   onAutoTone,
   onAuto,
   onReset,
-  onSaveXmp,
+  onSave,
   onClose,
-  onSaveToLumen,
+  divergent = false,
   lumenPresets = [],
   aiAvailable = false,
   onApplyPreset,
   isSaving = false,
 }) => {
   const [saveFeedback, setSaveFeedback] = useState(false);
-  const [lumenFeedback, setLumenFeedback] = useState(false);
 
   const handleSlider = (field: keyof ToneAdjustments, value: number) => {
     onChange({
@@ -149,16 +152,9 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
   };
 
   const handleSaveClick = async () => {
-    await onSaveXmp();
+    await onSave();
     setSaveFeedback(true);
     setTimeout(() => setSaveFeedback(false), 2000);
-  };
-
-  const handleSaveToLumenClick = async () => {
-    if (!onSaveToLumen) return;
-    await onSaveToLumen();
-    setLumenFeedback(true);
-    setTimeout(() => setLumenFeedback(false), 2000);
   };
 
   return (
@@ -216,6 +212,18 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
           );
         })}
       </div>
+
+      {/* 分歧提示：两侧真值不一致，明确告知而不是静默取一个 */}
+      {divergent && (
+        <p
+          role="status"
+          aria-live="polite"
+          className="text-[10px] leading-relaxed text-amber-200/80 rounded-md border border-amber-200/25 px-2 py-1.5"
+        >
+          XMP 与 LUMEN RAW 的调色不一致（可能在本应用之外改过）。保存会以当前滑杆为准
+          同时覆盖两边。
+        </p>
+      )}
 
       {/* LUMEN RAW presets (from the sidecar's own command table) */}
       {onApplyPreset && lumenPresets.length > 0 && (
@@ -279,41 +287,21 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
           <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
         </button>
 
-        {/* Save to LUMEN RAW（引擎可用时） */}
-        {onSaveToLumen && (
-          <button
-            onClick={handleSaveToLumenClick}
-            disabled={isSaving}
-            className={`focus-ring flex-1 flex items-center justify-center gap-1.5 py-2 px-2 font-medium rounded-lg text-xs active:scale-[0.98] transition-colors ${
-              lumenFeedback
-                ? 'bg-emerald-600/40 text-emerald-200'
-                : 'bg-white hover:bg-white/90 text-black shadow-sm'
-            }`}
-            title="应用到 LUMEN RAW 的调色 recipe"
-            aria-label="应用调色至 LUMEN RAW"
-          >
-            <Save className="w-3.5 h-3.5" aria-hidden="true" />
-            <span className="pb-[1px]">
-              {lumenFeedback ? '已应用' : isSaving ? '应用中…' : '应用 RAW'}
-            </span>
-          </button>
-        )}
-
-        {/* Save to XMP Button */}
+        {/* 统一保存：XMP + LUMEN RAW（引擎可用时）一次写入 */}
         <button
           onClick={handleSaveClick}
           disabled={isSaving}
-          className={`focus-ring ${onSaveToLumen ? '' : 'flex-1'} flex items-center justify-center gap-1.5 py-2 px-2 font-medium rounded-lg text-xs active:scale-[0.98] transition-colors ${
+          className={`focus-ring flex-1 flex items-center justify-center gap-1.5 py-2 px-2 font-medium rounded-lg text-xs active:scale-[0.98] transition-colors ${
             saveFeedback
               ? 'bg-emerald-600/40 text-emerald-200'
               : 'bg-white hover:bg-white/90 text-black shadow-sm'
           }`}
-          title="将调色参数写入 .xmp"
-          aria-label="保存调色至 XMP"
+          title="同时写入 XMP 侧边栏与 LUMEN RAW 调色（引擎可用时）"
+          aria-label="保存调色"
         >
           <Save className="w-3.5 h-3.5" aria-hidden="true" />
           <span className="pb-[1px]">
-            {saveFeedback ? '已写入' : isSaving ? '保存中…' : '同步 XMP'}
+            {saveFeedback ? '已保存' : isSaving ? '保存中…' : '保存调色'}
           </span>
         </button>
       </div>

@@ -528,9 +528,11 @@ fn tool_to_command_id(tool: &str) -> &'static str {
 
 /// 宿主 ToneAdjustments → lumen recipe changes（**最终值**语义）。
 ///
-/// `include_temperature` 默认 false：lumen 的 temperature 是**相对偏移**（0.0 基线），
-/// 宿主写 XMP 用的是**绝对 K**（5350 基线）—— 量纲未闭环前透传会把画面彻底带偏
-/// （glue 报告 F §4.3-2）。有显式开关留给未来的换算实现。
+/// 六个滑杆全部直通，包括 temperature。Step 9 当时排除了 temperature，理由是
+/// "量纲不同"——实测证明真正量纲不同的是**宿主写 XMP 的标签**（`crs:Temperature`
+/// 是绝对 Kelvin），而不是 lumen：宿主滑杆量程 -100..=100（"冷暖偏移"），
+/// lumen `adjustments.temperature` 同为 ±100 相对偏移（实测传 500 → 存 100），
+/// 两侧现在都落到 `crs:Temperature2012`（Lightroom 的相对刻度）。
 pub fn tone_to_recipe(tone: &crate::models::ToneAdjustments, include_temperature: bool) -> Value {
     let mut adj = serde_json::Map::new();
     adj.insert("exposure".into(), json_f32(tone.exposure));
@@ -538,8 +540,14 @@ pub fn tone_to_recipe(tone: &crate::models::ToneAdjustments, include_temperature
     adj.insert("shadows".into(), json_f32(tone.shadows));
     adj.insert("tint".into(), json_f32(tone.tint));
     adj.insert("contrast".into(), json_f32(tone.contrast));
-    if include_temperature {
-        adj.insert("temperature".into(), json_f32(tone.temperature));
+    // 单位已统一（两侧都是 ±100 相对偏移），默认直通；
+    // include_temperature=false 保留只为兼容旧调用点。
+    adj.insert(
+        "temperature".into(),
+        json_f32(tone.temperature.clamp(-100.0, 100.0)),
+    );
+    if !include_temperature {
+        adj.remove("temperature");
     }
     serde_json::json!({ "adjustments": adj })
 }
@@ -553,7 +561,8 @@ pub fn recipe_to_tone(state: &Value) -> crate::models::ToneAdjustments {
         highlights: g("highlights"),
         shadows: g("shadows"),
         // temperature 同量纲问题：回读也只作展示，不参与回写
-        temperature: g("temperature"),
+        // 单位已统一（±100 相对），回读即滑杆值；越界值夹紧以免 UI 失控
+        temperature: g("temperature").clamp(-100.0, 100.0),
         tint: g("tint"),
         contrast: g("contrast"),
     }
@@ -866,6 +875,52 @@ impl LumenRuntime {
                 Err(e)
             }
         }
+    }
+
+    /// 落盘工程（`project.save`，工具名 `save_project`）。
+    ///
+    /// **必须与 `apply_edits` 同进程**：编辑态是 session 态，不落盘。少了这一步，
+    /// 调色在下次预览/重启后就消失了（`.lumen` 文件是跨进程唯一可读回的形式）。
+    pub fn save_project(&self, exe: &Path, photo: &str) -> Result<String, LumenError> {
+        let args = serde_json::json!({ "path": photo });
+        let out = self.call_session_tool(exe, "save_project", &args)?;
+        out.get("project")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| {
+                LumenError::Protocol("LUMEN RAW 未返回工程路径（project.save）".to_string())
+            })
+    }
+
+    /// 读回落盘工程的调色（任意进程可读，因为 .lumen 落盘了）。
+    /// 读不到返回 None —— 没有工程不是错误。
+    pub fn read_project_tone(
+        &self,
+        exe: &Path,
+        photo: &str,
+    ) -> Option<crate::models::ToneAdjustments> {
+        let out = run_lumen(
+            exe,
+            "edit.get",
+            &serde_json::json!({ "path": photo, "full": true }),
+        )
+        .ok()?;
+        Some(recipe_to_tone(out.get("state").unwrap_or(&Value::Null)))
+    }
+
+    /// 两份真值是否一致（统一管线的分歧检测）。
+    pub fn tone_diverges(
+        xmp: &crate::models::ToneAdjustments,
+        lumen: &crate::models::ToneAdjustments,
+    ) -> bool {
+        const EPS: f32 = 0.005;
+        let d = |a: f32, b: f32| (a - b).abs() > EPS;
+        d(xmp.exposure, lumen.exposure)
+            || d(xmp.highlights, lumen.highlights)
+            || d(xmp.shadows, lumen.shadows)
+            || d(xmp.temperature, lumen.temperature)
+            || d(xmp.tint, lumen.tint)
+            || d(xmp.contrast, lumen.contrast)
     }
 
     /// A 通道是否活着（调色等 session 态操作的前提）。
@@ -2558,30 +2613,101 @@ ope\lumen-cli-xyz.exe"
 
     // ---- Step 9: recipe 互通 ----
     #[test]
-    fn tone_to_recipe_excludes_temperature_by_default() {
+    fn tone_to_recipe_includes_temperature_after_unit_alignment() {
         let tone = crate::models::ToneAdjustments {
             exposure: 0.65,
             highlights: -20.0,
             shadows: 45.0,
-            temperature: 5350.0,
+            temperature: 30.0,
             tint: 5.0,
             contrast: 10.0,
         };
-        let r = tone_to_recipe(&tone, false);
-        let adj = r["adjustments"].as_object().unwrap();
-        assert_eq!(adj.len(), 5, "默认只透传 5 个字段，实际: {:?}", adj);
-        assert_eq!(adj["exposure"], serde_json::json!(0.65));
-        assert_eq!(adj["highlights"], serde_json::json!(-20.0));
-        assert!(
-            !adj.contains_key("temperature"),
-            "temperature 量纲未闭环（绝对 K vs 相对偏移），禁止透传"
+        // 单位已统一（两侧都是 ±100 相对）：六个字段全部直通
+        let obj = tone_to_recipe(&tone, true)["adjustments"].clone();
+        let map = obj.as_object().unwrap();
+        assert_eq!(map.len(), 6, "六个滑杆都该透传，实际: {:?}", map);
+        assert_eq!(map["exposure"], serde_json::json!(0.65));
+        assert_eq!(map["highlights"], serde_json::json!(-20.0));
+        assert_eq!(map["temperature"], serde_json::json!(30.0));
+        // 旧开关保留只为兼容旧调用点
+        let legacy = tone_to_recipe(&tone, false)["adjustments"].clone();
+        assert!(!legacy.as_object().unwrap().contains_key("temperature"));
+    }
+
+    #[test]
+    fn tone_to_recipe_clamps_temperature_to_slider_range() {
+        // lumen 侧实测会把 500 截断成 100；宿主先夹紧则两侧行为一致，
+        // 也避免把非法值写进 .lumen 工程。
+        let high = crate::models::ToneAdjustments {
+            temperature: 5350.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            tone_to_recipe(&high, true)["adjustments"]["temperature"],
+            serde_json::json!(100.0)
         );
-        // 显式开关才带上
-        let r2 = tone_to_recipe(&tone, true);
-        assert!(r2["adjustments"]
-            .as_object()
-            .unwrap()
-            .contains_key("temperature"));
+        let low = crate::models::ToneAdjustments {
+            temperature: -900.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            tone_to_recipe(&low, true)["adjustments"]["temperature"],
+            serde_json::json!(-100.0)
+        );
+    }
+
+    #[test]
+    fn tone_divergence_rules() {
+        let base = crate::models::ToneAdjustments {
+            exposure: 0.5,
+            highlights: -10.0,
+            shadows: 20.0,
+            temperature: 30.0,
+            tint: 5.0,
+            contrast: 10.0,
+        };
+        assert!(
+            !LumenRuntime::tone_diverges(&base, &base),
+            "相同值不该算分歧"
+        );
+        // 浮点噪声不算分歧
+        let mut noisy = base.clone();
+        noisy.exposure = 0.5 + 1e-6;
+        assert!(!LumenRuntime::tone_diverges(&base, &noisy));
+        // 任一字段不同即分歧（六个字段逐个钉死）
+        let mut hits = 0;
+        for field in [
+            "exposure",
+            "highlights",
+            "shadows",
+            "temperature",
+            "tint",
+            "contrast",
+        ] {
+            let mut other = base.clone();
+            match field {
+                "exposure" => other.exposure += 0.1,
+                "highlights" => other.highlights += 0.1,
+                "shadows" => other.shadows += 0.1,
+                "temperature" => other.temperature += 1.0,
+                "tint" => other.tint += 0.1,
+                "contrast" => other.contrast += 0.1,
+                _ => unreachable!(),
+            }
+            assert!(
+                LumenRuntime::tone_diverges(&base, &other),
+                "字段 {} 变化应算分歧",
+                field
+            );
+            hits += 1;
+        }
+        assert_eq!(hits, 6);
+    }
+
+    #[test]
+    fn recipe_to_tone_clamps_temperature() {
+        let state = serde_json::json!({"adjustments": {"temperature": 400.0}});
+        assert_eq!(recipe_to_tone(&state).temperature, 100.0, "越界回读应夹紧");
     }
 
     #[test]

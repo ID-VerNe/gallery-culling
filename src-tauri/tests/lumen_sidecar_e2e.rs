@@ -575,3 +575,136 @@ fn e2e_conflict_is_not_silently_overwritten() {
     );
     let _ = sample_photo();
 }
+
+#[test]
+#[ignore = "需要已构建的 lumen-cli sidecar + LUMEN_SAMPLE"]
+fn e2e_unified_tone_pipeline_persists_across_processes() {
+    // 统一管线的核心保证：apply（session 态）→ save_project（落盘）之后，
+    // **另一个 sidecar 进程**必须能读回同一组调色值。否则重启就丢。
+    use gallery_culling_lib::lumen::LumenRuntime;
+    let exe = require_sidecar();
+    let sample = sample_photo().expect("需要 LUMEN_SAMPLE");
+    let photo = sample.to_string_lossy().to_string();
+    let tone = gallery_culling_lib::models::ToneAdjustments {
+        exposure: 0.75,
+        highlights: -22.0,
+        shadows: 18.0,
+        temperature: 40.0,
+        tint: -6.0,
+        contrast: 12.0,
+    };
+
+    // 进程 A：apply + save_project
+    let rt_a = LumenRuntime::new();
+    let recipe = gallery_culling_lib::lumen::tone_to_recipe(&tone, true);
+    rt_a.apply_recipe(&exe, &photo, &recipe)
+        .expect("apply 应成功");
+    let project = rt_a
+        .save_project(&exe, &photo)
+        .expect("save_project 应成功");
+    assert!(
+        std::path::Path::new(&project).is_file(),
+        ".lumen 工程应真实落盘: {}",
+        project
+    );
+    drop(rt_a); // 关掉常驻进程
+
+    // 进程 B（全新运行时 = 全新 sidecar 进程）：读回落盘工程
+    let rt_b = LumenRuntime::new();
+    let back = rt_b
+        .read_project_tone(&exe, &photo)
+        .expect("落盘工程应能跨进程读回");
+    println!(
+        "E2E 统一管线: +{:.2}EV hl={:.0} sh={:.0} temp={:+.0} tint={:+.0} cr={:.0} → 跨进程读回一致={}",
+        tone.exposure, tone.highlights, tone.shadows, tone.temperature, tone.tint, tone.contrast,
+        !LumenRuntime::tone_diverges(&tone, &back)
+    );
+    assert!(
+        !LumenRuntime::tone_diverges(&tone, &back),
+        "跨进程读回应与写入一致：写入 {:?} 读回 {:?}",
+        tone,
+        back
+    );
+    // temperature 必须真的落进工程（此前被排除的字段）
+    assert_eq!(back.temperature, 40.0, "temperature 未落盘");
+
+    // 清理：归零并删工程，别污染样张
+    let zero = serde_json::json!({"adjustments": {
+        "exposure": 0.0, "highlights": 0.0, "shadows": 0.0,
+        "temperature": 0.0, "tint": 0.0, "contrast": 0.0
+    }});
+    rt_b.apply_recipe(&exe, &photo, &zero).ok();
+    let _ = rt_b.save_project(&exe, &photo);
+    let _ = std::fs::remove_file(&project);
+}
+
+#[test]
+#[ignore = "需要已构建的 lumen-cli sidecar + LUMEN_SAMPLE"]
+fn e2e_tone_two_sinks_agree_after_unified_write() {
+    // 统一管线的验收：一次写入后，XMP 与 lumen 工程读出的值必须一致
+    //（divergent=false）。以前这两条路径各写各的，必然漂移。
+    use gallery_culling_lib::lumen::LumenRuntime;
+    use gallery_culling_lib::xmp::{get_xmp_path, read_xmp_full, update_xmp_tone};
+    let exe = require_sidecar();
+    let sample = sample_photo().expect("需要 LUMEN_SAMPLE");
+    let photo = sample.to_string_lossy().to_string();
+    let tone = gallery_culling_lib::models::ToneAdjustments {
+        exposure: -0.4,
+        highlights: 30.0,
+        shadows: -12.0,
+        temperature: -55.0,
+        tint: 3.0,
+        contrast: -8.0,
+    };
+
+    // 落点 1：XMP（与 apply_tone_cmd 内的第一步完全相同）
+    update_xmp_tone(
+        &sample,
+        Some(tone.exposure),
+        Some(tone.highlights),
+        Some(tone.shadows),
+        Some(tone.temperature),
+        Some(tone.tint),
+        Some(tone.contrast),
+    )
+    .expect("XMP 写入应成功");
+
+    // 落点 2：lumen（apply + save，同进程）
+    let rt = LumenRuntime::new();
+    let recipe = gallery_culling_lib::lumen::tone_to_recipe(&tone, true);
+    rt.apply_recipe(&exe, &photo, &recipe)
+        .expect("apply 应成功");
+    let project = rt.save_project(&exe, &photo).expect("save_project 应成功");
+
+    // 两个真值读回来比较
+    let xmp = read_xmp_full(&get_xmp_path(&sample)).expect("XMP 应可读");
+    let from_xmp = gallery_culling_lib::models::ToneAdjustments {
+        exposure: xmp.exposure.unwrap_or(0.0),
+        highlights: xmp.highlights.unwrap_or(0.0),
+        shadows: xmp.shadows.unwrap_or(0.0),
+        temperature: xmp.temperature.unwrap_or(0.0),
+        tint: xmp.tint.unwrap_or(0.0),
+        contrast: xmp.contrast.unwrap_or(0.0),
+    };
+    let from_lumen = rt.read_project_tone(&exe, &photo).expect("工程应可读回");
+    println!(
+        "E2E 双落点一致: divergent={} xmp={:?} lumen={:?}",
+        LumenRuntime::tone_diverges(&from_xmp, &from_lumen),
+        from_xmp,
+        from_lumen
+    );
+    assert!(
+        !LumenRuntime::tone_diverges(&from_xmp, &from_lumen),
+        "统一写入后两个真值必须一致"
+    );
+
+    // 清理
+    let zero = serde_json::json!({"adjustments": {
+        "exposure": 0.0, "highlights": 0.0, "shadows": 0.0,
+        "temperature": 0.0, "tint": 0.0, "contrast": 0.0
+    }});
+    rt.apply_recipe(&exe, &photo, &zero).ok();
+    let _ = rt.save_project(&exe, &photo);
+    let _ = std::fs::remove_file(&project);
+    let _ = std::fs::remove_file(get_xmp_path(&sample));
+}

@@ -7,7 +7,7 @@ use crate::db::Database;
 use crate::lumen::{self, LumenError, LumenStatus, PreviewVariant, PINNED_LUMEN_VERSION};
 use crate::models::{
     AppSettings, ExportItem, FolderScanResult, LumenPreviewResult, LumenRatingConflict,
-    LumenRatingSync, LumenRecipe, ToneAdjustments,
+    LumenRatingSync, LumenRecipe, ToneAdjustments, ToneState, ToneWriteReport,
 };
 use crate::scanner::scan_folders;
 use crate::thumbnail::{get_cache_dir, get_or_create_thumbnail};
@@ -302,6 +302,8 @@ pub async fn update_tone_adjustments_cmd(
     file_path: String,
     tone: crate::models::ToneAdjustments,
 ) -> Result<bool, String> {
+    // 兼容入口：旧调用点只需要 XMP 写入。**不要**在这里加引擎写入 ——
+    // 统一管线走 apply_tone_cmd，避免两条写入路径再次分叉。
     tokio::task::spawn_blocking(move || {
         let path = Path::new(&file_path);
         crate::xmp::update_xmp_tone(
@@ -672,4 +674,142 @@ pub async fn lumen_apply_preset_cmd(
     })
     .await
     .map_err(|e| format!("应用预设任务异常: {}", e))?
+}
+
+/// 统一调色写入：**一条命令，两个落点**。
+///
+/// - 总是写 XMP（互操作底线，引擎挂了也不受影响）；
+/// - 引擎可用时在**同一常驻进程**内 `apply_edits` → `save_project`（落盘持久，
+///   否则重启后调色消失）；
+/// - 引擎失败不回滚 XMP，只在报告里带 warning。
+#[tauri::command]
+pub async fn apply_tone_cmd(
+    state: State<'_, AppState>,
+    file_path: String,
+    tone: ToneAdjustments,
+) -> Result<ToneWriteReport, String> {
+    let settings = state.db.load_settings()?;
+    let path = PathBuf::from(&file_path);
+
+    // 1) XMP（同步、必做）
+    crate::xmp::update_xmp_tone(
+        &path,
+        Some(tone.exposure),
+        Some(tone.highlights),
+        Some(tone.shadows),
+        Some(tone.temperature),
+        Some(tone.tint),
+        Some(tone.contrast),
+    )?;
+    let mut report = ToneWriteReport {
+        xmp_written: true,
+        ..Default::default()
+    };
+
+    if !settings.lumen_enabled {
+        report
+            .warnings
+            .push("LUMEN RAW 引擎未启用：只写入了 XMP，预览仍用 CSS 滤镜。".to_string());
+        return Ok(report);
+    }
+    let exe = match lumen::find_lumen_cli(&settings.lumen_cli_path) {
+        Some(e) => e,
+        None => {
+            report
+                .warnings
+                .push("未找到 lumen-cli：只写入了 XMP。".to_string());
+            return Ok(report);
+        }
+    };
+    let runtime = state.lumen.clone();
+
+    // 2) lumen：apply + save 必须同进程（编辑态是 session 态）
+    let applied = tokio::task::spawn_blocking(move || {
+        let changes = lumen::tone_to_recipe(&tone, true);
+        let applied = runtime.apply_recipe(&exe, &file_path, &changes);
+        let applied = match applied {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(format!("应用 LUMEN RAW 调色失败: {}", e));
+            }
+        };
+        // 落盘：不 save_project 的话调色下次就消失（session 不持久）
+        let project = runtime
+            .save_project(&exe, &file_path)
+            .map_err(|e| format!("保存 LUMEN RAW 工程失败: {}", e))?;
+        Ok((applied, project))
+    })
+    .await
+    .map_err(|e| format!("调色写入任务异常: {}", e))?;
+
+    match applied {
+        Ok((_state, project)) => {
+            report.lumen_applied = true;
+            report.project_path = Some(project);
+        }
+        Err(e) => {
+            // XMP 已写成功 —— 不回滚，只如实报告
+            report.warnings.push(e);
+        }
+    }
+    Ok(report)
+}
+
+/// 统一调色读取：XMP（互操作真值）+ lumen 工程（渲染真值），并报告是否分歧。
+#[tauri::command]
+pub async fn get_tone_state_cmd(
+    state: State<'_, AppState>,
+    file_path: String,
+) -> Result<ToneState, String> {
+    let settings = state.db.load_settings()?;
+    let path = PathBuf::from(&file_path);
+    let xmp_tone = read_xmp_tone(&xmp::get_xmp_path(&path));
+
+    let mut result = ToneState {
+        tone: xmp_tone.clone(),
+        xmp_tone,
+        ..Default::default()
+    };
+
+    if !settings.lumen_enabled {
+        return Ok(result); // 引擎关闭 → 零请求
+    }
+    let exe = match lumen::find_lumen_cli(&settings.lumen_cli_path) {
+        Some(e) => e,
+        None => return Ok(result),
+    };
+    let runtime = state.lumen.clone();
+    let lumen_tone =
+        tokio::task::spawn_blocking(move || runtime.read_project_tone(&exe, &file_path))
+            .await
+            .map_err(|e| format!("读取调色状态任务异常: {}", e))?;
+
+    match lumen_tone {
+        Some(t) => {
+            result.divergent = lumen::LumenRuntime::tone_diverges(&result.xmp_tone, &t);
+            // 引擎可用时以 lumen 为准（它决定实际渲染），分歧另行提示
+            result.tone = t.clone();
+            result.lumen_tone = Some(t);
+            result.lumen_available = true;
+        }
+        None => {
+            // 没有 .lumen 工程 → 引擎是"在的但这张没调过色"，仍算可用
+            result.lumen_available = true;
+        }
+    }
+    Ok(result)
+}
+
+/// 从 XMP 读回六滑杆（缺失按 0，与滑杆零点一致）。
+fn read_xmp_tone(path: &std::path::Path) -> ToneAdjustments {
+    read_xmp_full(path)
+        .map(|m| ToneAdjustments {
+            exposure: m.exposure.unwrap_or(0.0),
+            highlights: m.highlights.unwrap_or(0.0),
+            shadows: m.shadows.unwrap_or(0.0),
+            temperature: m.temperature.unwrap_or(0.0),
+            tint: m.tint.unwrap_or(0.0),
+            contrast: m.contrast.unwrap_or(0.0),
+        })
+        .unwrap_or_default()
 }

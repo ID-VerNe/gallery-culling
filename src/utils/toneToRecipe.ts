@@ -4,11 +4,12 @@ import { DEFAULT_TONE } from './autoTone';
 /**
  * 宿主 ToneAdjustments → LUMEN RAW recipe（`edit.apply` 的 changes 载荷）。
  *
- * **temperature 被刻意排除**：宿主的 temperature 是绝对 K（XMP `crs:Temperature`
- * 基线 5350，见 xmp.rs），而 LUMEN RAW 的 `adjustments.temperature` 是**相对偏移**
- * （实测 `edit.get` 默认 0.0）。两者量纲不同，透传会把画面色温彻底带偏，所以只有
- * 在显式打开开关（等换算实现落地）时才带上。Rust 侧 `lumen::tone_to_recipe` 有
- * 一份对应实现与逐字段测试，两边必须保持一致。
+ * **temperature 现在直通**：Step 12 修掉了真正的量纲错配。宿主滑杆是
+ * `-100..=100` 的"冷暖偏移"，但宿主曾把它写进 `crs:Temperature`（Lightroom 视为
+ * **绝对 Kelvin**，+30 → 30K → 通蓝废片）。现在两侧统一用相对刻度：宿主写
+ * `crs:Temperature2012`，lumen 用 `adjustments.temperature`（实测同为 ±100，传 500
+ * 会被截断成 100）。Rust 侧 `lumen::tone_to_recipe` 有对应实现与逐字段测试，
+ * 两边必须保持一致。
  *
  * 字段值是**最终值**（不是增量）——lumen 的 `edit.apply` 按目标状态覆盖。
  */
@@ -24,7 +25,8 @@ export function toneToRecipe(
     contrast: round4(tone.contrast),
   };
   if (includeTemperature) {
-    adjustments.temperature = round4(tone.temperature);
+    // 夹紧到滑杆量程：lumen 侧实测会把 500 截断成 100，宿主先夹紧则两侧一致
+    adjustments.temperature = round4(clamp(tone.temperature, -100, 100));
   }
   return { adjustments };
 }
@@ -42,8 +44,8 @@ export function recipeToTone(adjustments: Partial<Record<string, number>> | unde
     exposure: pick('exposure'),
     highlights: pick('highlights'),
     shadows: pick('shadows'),
-    // 回读也不参与回写（量纲问题同上），仅作展示
-    temperature: pick('temperature'),
+    // 单位已统一（±100 相对），越界值夹紧以免 UI 失控
+    temperature: clamp(pick('temperature'), -100, 100),
     tint: pick('tint'),
     contrast: pick('contrast'),
   };
@@ -63,4 +65,8 @@ export function toneIsDirty(tone: ToneAdjustments): boolean {
  */
 function round4(v: number): number {
   return Number.isFinite(v) ? Math.round(v * 10000) / 10000 : 0;
+}
+
+function clamp(v: number, min: number, max: number): number {
+  return Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : 0;
 }

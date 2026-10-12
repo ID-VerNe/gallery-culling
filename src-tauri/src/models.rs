@@ -151,3 +151,32 @@ pub struct LumenRatingConflict {
     pub lumen_rating: u8,
     pub lumen_flag: String,
 }
+
+/// `apply_tone_cmd` 的结果：一条写入路径的两个落点各自成功与否。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToneWriteReport {
+    /// XMP 侧边栏是否写成功（互操作底线：Lightroom / Capture One / Photoshop）
+    pub xmp_written: bool,
+    /// LUMEN RAW 编辑态是否应用成功（引擎关闭或失败时为 false）
+    pub lumen_applied: bool,
+    /// 落盘的 `.lumen` 工程路径（没有则为 None）
+    pub project_path: Option<String>,
+    /// 非致命问题（引擎失败原因等），前端据此提示但不阻断
+    pub warnings: Vec<String>,
+}
+
+/// `get_tone_state_cmd` 的结果：统一管线的读回视图。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToneState {
+    /// 当前生效的调色（引擎可用时优先 lumen，因为它决定渲染）
+    pub tone: ToneAdjustments,
+    /// XMP 侧边栏里的调色（互操作真值）
+    pub xmp_tone: ToneAdjustments,
+    /// LUMEN RAW 工程里的调色（渲染真值）；没有工程时为 None
+    pub lumen_tone: Option<ToneAdjustments>,
+    /// 两侧不一致 —— 前端必须提示，绝不静默取舍
+    pub divergent: bool,
+    pub lumen_available: bool,
+}

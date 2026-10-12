@@ -100,8 +100,15 @@ pub fn read_xmp_full(xmp_path: &Path) -> Option<XmpMetadata> {
         extract_tag_value(&content, "crs:Highlights2012").and_then(|s| s.parse::<f32>().ok());
     let shadows =
         extract_tag_value(&content, "crs:Shadows2012").and_then(|s| s.parse::<f32>().ok());
-    let temperature =
-        extract_tag_value(&content, "crs:Temperature").and_then(|s| s.parse::<f32>().ok());
+    let temperature = extract_tag_value(&content, "crs:Temperature2012")
+        .and_then(|s| s.parse::<f32>().ok())
+        .or_else(|| {
+            // 回退旧标签时只接受已经在滑杆量程内的值：历史宿主写下的绝对色温
+            // （5350/5500）不是滑杆值，灌进去等于复现那个 bug。
+            extract_tag_value(&content, "crs:Temperature")
+                .and_then(|s| s.parse::<f32>().ok())
+                .filter(|v| (-100.0..=100.0).contains(v))
+        });
     let tint = extract_tag_value(&content, "crs:Tint").and_then(|s| s.parse::<f32>().ok());
     let contrast =
         extract_tag_value(&content, "crs:Contrast2012").and_then(|s| s.parse::<f32>().ok());
@@ -209,9 +216,12 @@ fn build_our_description(meta: &XmpMetadata) -> String {
         ));
     }
     if let Some(temp) = meta.temperature {
+        // Temperature2012 = ±100 相对偏移（与调色滑杆、lumen adjustments 同单位）。
+        // 旧代码写 crs:Temperature，那是**绝对 Kelvin**：+30 会被 Lightroom 读成 30K。
         crs_tags.push_str(&format!(
-            "      <crs:Temperature>{:.0}</crs:Temperature>\n",
-            temp
+            "      <crs:Temperature2012>{:+.0}</crs:Temperature2012>
+",
+            temp.clamp(-100.0, 100.0)
         ));
     }
     if let Some(tint) = meta.tint {
@@ -567,6 +577,126 @@ mod tests {
     }
 
     #[test]
+    fn xmp_writes_temperature2012_not_absolute() {
+        // 回归：滑杆是 ±100 相对偏移，却写进 crs:Temperature（Lightroom 当绝对 Kelvin 读，
+        // +30 → 30K → 通蓝废片）。正确标签是 crs:Temperature2012（与滑杆/lumen 同单位）。
+        let img = std::env::temp_dir().join(format!("xmp_t2012_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        let _ = fs::remove_file(&xmp);
+        update_xmp_tone(
+            &img,
+            Some(0.0),
+            Some(0.0),
+            Some(0.0),
+            Some(30.0),
+            Some(0.0),
+            Some(0.0),
+        )
+        .expect("写调色应成功");
+        let content = fs::read_to_string(&xmp).unwrap();
+        assert!(
+            content.contains("<crs:Temperature2012>+30</crs:Temperature2012>"),
+            "必须写 Temperature2012: {}",
+            content
+        );
+        assert!(
+            !content.contains("<crs:Temperature>"),
+            "不能再写绝对色温 crs:Temperature: {}",
+            content
+        );
+        let _ = fs::remove_file(&xmp);
+    }
+
+    #[test]
+    fn read_prefers_2012_over_legacy_absolute() {
+        // 同一份侧边栏里两种标签都在（历史文件被宿主写坏过）：以 2012 为准
+        let img = std::env::temp_dir().join(format!("xmp_both_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        fs::write(
+            &xmp,
+            r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:aux="http://ns.adobe.com/exif/1.0/aux/"
+    xmlns:exif="http://ns.adobe.com/exif/1.0/"
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+   <xmp:Rating>0</xmp:Rating>
+   <crs:Temperature>30</crs:Temperature>
+   <crs:Temperature2012>-15</crs:Temperature2012>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>
+"#,
+        )
+        .unwrap();
+        let m = read_xmp_full(&xmp).expect("应可读");
+        assert_eq!(m.temperature, Some(-15.0), "2012 优先于旧绝对标签");
+        let _ = fs::remove_file(&xmp);
+    }
+
+    #[test]
+    fn legacy_absolute_temperature_does_not_pollute_slider() {
+        // 历史宿主写的绝对色温（5350/5500）不能灌进 ±100 的滑杆
+        let img = std::env::temp_dir().join(format!("xmp_abs_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        fs::write(
+            &xmp,
+            r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:aux="http://ns.adobe.com/exif/1.0/aux/"
+    xmlns:exif="http://ns.adobe.com/exif/1.0/"
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+   <xmp:Rating>0</xmp:Rating>
+   <crs:Temperature>5350</crs:Temperature>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>
+"#,
+        )
+        .unwrap();
+        let m = read_xmp_full(&xmp).expect("应可读");
+        assert_eq!(
+            m.temperature, None,
+            "绝对色温不该进滑杆（历史 bug 产物）；None = 滑杆 0"
+        );
+        let _ = fs::remove_file(&xmp);
+    }
+
+    #[test]
+    fn tone_temperature_roundtrips_within_slider_range() {
+        // 写 → 读 闭环：±100 相对偏移必须原样回来
+        for t in [-100.0f32, -15.0, 0.0, 30.0, 100.0] {
+            let img = std::env::temp_dir().join(format!(
+                "xmp_trt_{}_{}.jpg",
+                std::process::id(),
+                t.to_string().replace('.', "_")
+            ));
+            let xmp = get_xmp_path(&img);
+            let _ = fs::remove_file(&xmp);
+            update_xmp_tone(
+                &img,
+                Some(0.0),
+                Some(0.0),
+                Some(0.0),
+                Some(t),
+                Some(0.0),
+                Some(0.0),
+            )
+            .unwrap();
+            let back = read_xmp_full(&xmp).expect("应可读");
+            assert_eq!(back.temperature, Some(t), "temperature 闭环失败: {}", t);
+            let _ = fs::remove_file(&xmp);
+        }
+    }
+
+    #[test]
     fn flag_mapping_matrix() {
         // Rating=-1 → reject（优先于 Label）
         assert_eq!(
@@ -770,6 +900,9 @@ mod tests {
         let test_img = temp_dir.join("test_tone_sample.jpg");
         let _ = write_xmp(&test_img, 3, "pick");
 
+        // 契约修正：色温滑杆是 ±100 相对偏移，旧测试传 5350（绝对 Kelvin）并断言
+        // 原样读回 —— 那正是把 30K 当 +30 写进 Lightroom 的历史 bug。现在写入夹紧
+        // 到 +100 并落到 crs:Temperature2012。
         let xmp_file = update_xmp_tone(
             &test_img,
             Some(0.65),
@@ -781,13 +914,20 @@ mod tests {
         )
         .expect("Should update tone");
 
+        let written = fs::read_to_string(&xmp_file).unwrap();
+        assert!(
+            written.contains("<crs:Temperature2012>+100</crs:Temperature2012>"),
+            "5350 应夹紧到 +100 并写 2012: {}",
+            written
+        );
+
         let full_meta = read_xmp_full(&xmp_file).expect("Should read full xmp");
         assert_eq!(full_meta.rating, 3);
         assert_eq!(full_meta.label, "Green");
         assert_eq!(full_meta.exposure, Some(0.65));
         assert_eq!(full_meta.highlights, Some(-20.0));
         assert_eq!(full_meta.shadows, Some(45.0));
-        assert_eq!(full_meta.temperature, Some(5350.0));
+        assert_eq!(full_meta.temperature, Some(100.0), "夹紧后读回 +100");
         assert_eq!(full_meta.tint, Some(5.0));
         assert_eq!(full_meta.contrast, Some(10.0));
 
