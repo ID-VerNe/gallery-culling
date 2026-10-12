@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>UX 审计与修复报价 — Gallery Culling v1.1.1</title>
+<style>
+  :root{
+    --ink:#16181d; --ink-2:#4b5057; --ink-3:#767c85;
+    --line:#e4e6ea; --line-2:#f1f2f4;
+    --bg:#ffffff; --bg-2:#fafbfc; --bg-3:#f4f5f7;
+    --hi:#b42318; --hi-bg:#fef3f2; --hi-line:#fecdca;
+    --md:#b54708; --md-bg:#fffaeb; --md-line:#fedf89;
+    --lo:#475467; --lo-bg:#f8f9fb; --lo-line:#e4e7ec;
+    --ok:#027a48; --ok-bg:#ecfdf3; --ok-line:#abefc6;
+    --accent:#1d4ed8; --accent-bg:#eff4ff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Source Han Sans SC",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:var(--sans); font-size:14px; line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px; margin:0 auto; padding:48px 32px 96px}
+  header.doc{border-bottom:1px solid var(--line); padding-bottom:24px; margin-bottom:32px}
+  .eyebrow{font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); font-weight:600; margin:0 0 10px}
+  h1{font-size:30px; line-height:1.25; letter-spacing:-.02em; margin:0 0 12px; font-weight:700}
+  h2{font-size:19px; letter-spacing:-.01em; margin:44px 0 14px; padding-top:8px; font-weight:700}
+  h3{font-size:14px; margin:24px 0 8px; font-weight:700}
+  p{margin:0 0 12px; color:var(--ink-2)}
+  ul,ol{margin:0 0 12px; padding-left:22px; color:var(--ink-2)}
+  li{margin:4px 0}
+  code{font-family:var(--mono); font-size:12.5px; background:var(--bg-3); border:1px solid var(--line-2); border-radius:4px; padding:1px 5px; color:var(--ink)}
+  a{color:var(--accent)}
+  .meta{display:flex; flex-wrap:wrap; gap:8px; margin-top:14px}
+  .chip{font-size:11.5px; background:var(--bg-3); border:1px solid var(--line); color:var(--ink-2); border-radius:999px; padding:3px 11px}
+  .grid2{display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:16px}
+  .card{border:1px solid var(--line); border-radius:12px; padding:18px 20px; background:var(--bg-2)}
+  .card h3{margin:0 0 8px}
+  .scorebox{display:flex; align-items:baseline; gap:14px; margin:0 0 6px}
+  .score{font-size:44px; font-weight:700; letter-spacing:-.03em; line-height:1}
+  .score small{font-size:16px; color:var(--ink-3); font-weight:500; letter-spacing:0}
+  table{width:100%; border-collapse:collapse; margin:14px 0 20px; font-size:13px}
+  th,td{text-align:left; vertical-align:top; padding:9px 11px; border-bottom:1px solid var(--line)}
+  th{background:var(--bg-3); font-weight:600; font-size:12px; color:var(--ink); white-space:nowrap; border-bottom:1px solid var(--line)}
+  tbody tr:hover{background:var(--bg-2)}
+  td.loc{font-family:var(--mono); font-size:11.5px; color:var(--ink-2); white-space:nowrap}
+  .badge{display:inline-block; font-size:11px; font-weight:700; border-radius:5px; padding:1px 7px; border:1px solid; white-space:nowrap}
+  .b-hi{color:var(--hi); background:var(--hi-bg); border-color:var(--hi-line)}
+  .b-md{color:var(--md); background:var(--md-bg); border-color:var(--md-line)}
+  .b-lo{color:var(--lo); background:var(--lo-bg); border-color:var(--lo-line)}
+  .b-ok{color:var(--ok); background:var(--ok-bg); border-color:var(--ok-line)}
+  .b-in{color:var(--accent); background:var(--accent-bg); border-color:#c7d7fe}
+  .num{font-family:var(--mono); font-size:12px; color:var(--ink-3)}
+  .callout{border-left:3px solid var(--accent); background:var(--accent-bg); border-radius:0 8px 8px 0; padding:14px 18px; margin:18px 0}
+  .callout p:last-child{margin-bottom:0}
+  .warn{border-left-color:var(--md); background:var(--md-bg)}
+  .good{border-left-color:var(--ok); background:var(--ok-bg)}
+  .tier{border:1px solid var(--line); border-radius:12px; overflow:hidden; display:flex; flex-direction:column}
+  .tier header{padding:14px 18px; border-bottom:1px solid var(--line); background:var(--bg-3)}
+  .tier header b{font-size:15px; display:block}
+  .tier header span{font-size:12px; color:var(--ink-3)}
+  .tier .body{padding:16px 18px; flex:1}
+  .price{font-size:26px; font-weight:700; letter-spacing:-.02em; margin:0 0 2px}
+  .price small{font-size:12px; font-weight:500; color:var(--ink-3); letter-spacing:0}
+  .tier ul{padding-left:18px; margin:10px 0 0}
+  .rec{border:1.5px solid var(--accent); box-shadow:0 1px 0 var(--accent)}
+  .rec header{background:var(--accent-bg)}
+  .tier-foot{padding:12px 18px; border-top:1px solid var(--line); background:var(--bg-2); font-size:12px; color:var(--ink-3)}
+  footer.doc{margin-top:56px; padding-top:20px; border-top:1px solid var(--line); font-size:12px; color:var(--ink-3)}
+  .tbl-note{font-size:12px; color:var(--ink-3); margin:-8px 0 20px}
+  .kbd{font-family:var(--mono); font-size:11.5px; background:#fff; border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:0 5px}
+  @media print{ body{font-size:11.5px} .wrap{padding:0; max-width:none} h2{page-break-after:avoid} table{page-break-inside:auto} tr{page-break-inside:avoid} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <p class="eyebrow">Interface Audit · Findings &amp; Remediation Quote</p>
+  <h1>Gallery Culling 全项目 UX 审计与修复报价</h1>
+  <p>
+    <strong>审计对象：</strong>gallery-culling v1.1.1（Tauri 2.0 + React 19 + TypeScript + Tailwind 3 + lucide-react）<br />
+    <strong>审计范围：</strong>全部前端界面外壳 —— TopBar、ThumbnailGrid、PreviewViewport、SplitCompareViewport、BeforeAfterViewport、TonalAdjuster、BottomBar、BatchExportModal、SettingsModal、MetadataEditorModal、ShortcutHelpModal、Modal/Toast/ConfirmDialog、useKeyboardShortcuts、App 状态层。<br />
+    <strong>模式：</strong>full（六大界面域全量）<br />
+    <strong>方法：</strong>better-interface 统一编排（accessibility / layout / writing / typography / colors / ui）＋ Krug 四定律 ＋ Nielsen 十启发式 ＋ Apple 视觉与动效原则 ＋ WCAG 2.1 AA<br />
+    <strong>报告日期：</strong>2026-10-12
+  </p>
+  <div class="meta">
+    <span class="chip">源码 24 个 tsx 全量通读</span>
+    <span class="chip">typecheck 通过</span>
+    <span class="chip">生产构建通过</span>
+    <span class="chip">104 个单测全绿（需换 pool）</span>
+    <span class="chip">3 项 HIGH · 17 项 MEDIUM（含 2 项工程基座）· 11 项 LOW</span>
+  </div>
+</header>
+
+<h2>1. 结论摘要</h2>
+<div class="grid2">
+  <div class="card">
+    <h3>UX 自评得分</h3>
+    <div class="scorebox"><span class="score">6<small> / 10</small></span></div>
+    <p style="margin:0">Quick Diagnostic 10 行中 3 行不通过（进度反馈、撤销/回退、"让我愣一下"各 1 行）。相较上一版审计的 0/10（30 项全部修复）已是可用状态，本次问题集中在<strong>交互真值不一致</strong>与<strong>长任务反馈缺失</strong>两类。</p>
+  </div>
+  <div class="card">
+    <h3>最需要先修的四件事</h3>
+    <ol style="margin:0">
+      <li>全局快捷键守卫漏掉 <code>select</code> 与已聚焦按钮 —— 会产生<strong>非本意的 XMP 落盘写入</strong>。</li>
+      <li>调色"保存"没有进行中状态 —— 连点即<strong>重复写 XMP + LUMEN 工程</strong>。</li>
+      <li>"镜头信息"批量同步默认范围为<strong>全部扫描照片</strong> —— 一次误点重写上万份侧边栏。</li>
+      <li>导出未校验"目标目录 = 源目录" —— <code>std::fs::copy</code> 同源自拷贝会<strong>把原图截断为 0 字节</strong>（复核后由 LOW 升为 HIGH）。</li>
+    </ol>
+  </div>
+</div>
+
+<div class="callout">
+  <p><strong>修复报价（明细见 §7）：</strong>完整修复 <strong>31.0 人天 ≈ ¥37,200</strong>（按 ¥1,200/人天，含实机回归与测试补建）。可分档累积报价：紧急止血 3.5 人天 ≈ ¥4,200 · 标准修复（★建议）14.0 人天 ≈ ¥16,800 · 完整交付 25.0 人天 ≈ ¥30,000 · 工程加固 31.0 人天 ≈ ¥37,200。<br><small>初版报价（9.0 人天 / ¥10,800）已被六条并行调查轨道的复核结论修订——上调主因：后端需真实基础设施改造、索引/状态真值问题比初判更深、回归网需补建。逐条结论、修复方案与风险评估见 <code>.plan/ux_fix_00_master.md</code> 与 <code>.plan/ux_fix_01…06_*.md</code>。</small></p>
+</div>
+
+<h2>2. 范围与覆盖</h2>
+<p>六大域全部检查完毕。证据 = 源码位置（<code>path:line</code>）＋ 构建产物（<code>dist/assets/*.css</code> 规则存在性）＋ 实跑命令结果。</p>
+<table>
+  <thead><tr><th>域</th><th>检查的证据</th><th>结果</th></tr></thead>
+  <tbody>
+    <tr><td>Accessibility</td><td>全部 24 个 tsx 的 ARIA 角色/名称/状态、焦点管理、键盘路径、<code>dist</code> 中 <code>focus-visible</code> 与 <code>prefers-reduced-motion</code> 规则（各 2 处 / 1 处，均已生成）、WCAG 对比度计算</td><td><span class="badge b-hi">4 项</span></td></tr>
+    <tr><td>Layout</td><td>TopBar 两行呼吸布局、<code>minWidth 960 / minHeight 640</code>（<code>tauri.conf.json</code>）下的换行、390px 固定侧栏、虚拟化宫格</td><td><span class="badge b-ok">Clear</span></td></tr>
+    <tr><td>Writing</td><td>全部可见文案、空态、错误文案、快捷键清单、Toast 文案</td><td><span class="badge b-md">3 项</span></td></tr>
+    <tr><td>Typography</td><td>字号阶梯（9–30px）、<code>tabular-nums</code>/<code>font-mono</code> 用法、行高</td><td><span class="badge b-ok">Clear</span></td></tr>
+    <tr><td>Colors</td><td><code>text-white/{30,40,50,60,70,80}</code> 全量清单与逐项对比度计算</td><td><span class="badge b-md">1 项</span></td></tr>
+    <tr><td>UI / 视觉与动效 / 防错</td><td>三套视口的一致性、控件与真值是否同源、过渡与 <code>prefers-reduced-motion</code>、静态徽章与伪控件、导出同路径自检</td><td><span class="badge b-md">11 项</span></td></tr>
+    <tr><td>工程基座<small>（六域之外）</small></td><td><code>vitest.config.ts</code>、<code>package.json</code> tests 脚本、测试护栏有效性、会话落盘路径、双包管理器残留</td><td><span class="badge b-md">2 项</span></td></tr>
+  </tbody>
+</table>
+
+<h2>3. Quick Diagnostic 评分</h2>
+<table>
+  <thead><tr><th>#</th><th>诊断问题</th><th>结果</th><th>触发的严重度</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>一眼能看出这是什么应用/页面吗</td><td><span class="badge b-ok">Pass</span></td><td>—</td></tr>
+    <tr><td>2</td><td>主要动作是否明显</td><td><span class="badge b-ok">Pass</span></td><td>—</td></tr>
+    <tr><td>3</td><td>导航是否清晰</td><td><span class="badge b-ok">Pass</span></td><td>—</td></tr>
+    <tr><td>4</td><td>能找到搜索吗</td><td><span class="badge b-ok">Pass</span></td><td>—</td></tr>
+    <tr><td>5</td><td>系统是否显示了正在发生什么</td><td><span class="badge b-md">Fail</span></td><td>Major（扫描/导出无进度·M-05）</td></tr>
+    <tr><td>6</td><td>错误信息是否有用</td><td><span class="badge b-ok">Pass</span></td><td>—</td></tr>
+    <tr><td>7</td><td>用户能否撤销或回退</td><td><span class="badge b-md">Fail</span></td><td>Minor（星级/旗标即时落 XMP，无撤销）</td></tr>
+    <tr><td>8</td><td>脱离 hover 是否可用</td><td><span class="badge b-ok">Pass</span></td><td>—</td></tr>
+    <tr><td>9</td><td>交互元素是否都有标签</td><td><span class="badge b-ok">Pass</span></td><td>—</td></tr>
+    <tr><td>10</td><td>有没有让人"愣一下"的地方</td><td><span class="badge b-md">Fail</span></td><td>Minor（联动锁焦伪控件 L-01、独立缩放名不副实 M-01）</td></tr>
+  </tbody>
+</table>
+<p class="tbl-note">10 − (2 + 1 + 1) = <strong>6 / 10</strong>。区间 6–8 = 存在若干重大问题但主任务可完成。要回到 10/10，需完成 §7 的 WP1–WP6。</p>
+
+<h2>4. 问题清单（HIGH / MEDIUM）</h2>
+<p class="tbl-note">严重度沿用统一口径：HIGH = 阻碍任务 / 误导用户 / 数据风险 / 系统性失效；MEDIUM = 明显损害理解、效率或一致性；LOW 见 §5 附录。每行 = 一个根因，同源问题已合并。</p>
+<table>
+  <thead><tr><th>#</th><th>严重度</th><th>域</th><th>位置</th><th>现状</th><th>建议</th><th>原因</th></tr></thead>
+  <tbody>
+
+  <tr>
+    <td><span class="num">H-01</span></td><td><span class="badge b-hi">HIGH</span></td><td>Accessibility</td>
+    <td class="loc">useKeyboardShortcuts.ts:59-66, 198</td>
+    <td>全局快捷键只对 <code>INPUT/TEXTAREA/contentEditable</code> 提前返回。<code>&lt;select&gt;</code> 不在守卫内；聚焦按钮上按空格同样穿透。</td>
+    <td>守卫扩展为 <code>target.closest('input,textarea,select,[contenteditable],[role="listbox"],[role="dialog"]')</code>，并对聚焦在可交互控件上时跳过字母/数字键与空格</td>
+    <td>顶栏筛选/排序下拉、调色面板的预设与蒙版下拉获得焦点时，按 <code>X</code>/<code>P</code>/<code>1~5</code> 会**改当前照片的评级/旗标并立即写入 .xmp 侧边栏**；聚焦"导出"按钮时按空格会同时触发"设为基准"。非本意的磁盘写入 + 按钮平台契约被破坏。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">H-02</span></td><td><span class="badge b-hi">HIGH</span></td><td>UI / 状态</td>
+    <td class="loc">App.tsx:1015-1032 · TonalAdjuster.tsx:148, 401-422</td>
+    <td><code>TonalAdjuster</code> 的 <code>isSaving</code> 永远为 <code>false</code>（App 未透传），故"保存中…"是死分支；按钮在异步写入期间保持可点。</td>
+    <td>App 维护 <code>toneSaving</code> 状态并透传；保存期间禁用按钮并显示进度；成功后清错误、失败走既有 <code>saveError</code> 出口</td>
+    <td>「保存调色」是**一条命令写两个落点**（XMP + LUMEN 工程），耗时可到秒级。连点 = 重复写盘；且用户看不到"正在保存"，会以为没生效而再点一次。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">H-03</span></td><td><span class="badge b-hi">HIGH</span></td><td>Writing / 防错</td>
+    <td class="loc">MetadataEditorModal.tsx:43, 144-150</td>
+    <td>批量同步"目标范围"默认选中最广的 <code>all</code>（全部扫描照片），确认按钮文案为「确认并批量同步」。</td>
+    <td>默认改为 <code>current</code>（仅当前照片）；切到 <code>all</code> 时按钮改文案为「写入全部 N 张」并要求二次确认</td>
+    <td>在 1 万张的目录里打开这个弹窗，默认状态下一步就是**重写全部侧边栏的镜头字段**（且覆盖原有 lensModel/焦段/光圈，无撤销）。默认值必须是最小影响面。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">M-01</span></td><td><span class="badge b-md">MEDIUM</span></td><td>UI / 一致性</td>
+    <td class="loc">SplitCompareViewport.tsx:74-87, 356-362</td>
+    <td>切到「独立缩放」后，<code>zoomBy</code> 的 else 分支仍对左右<strong>同时</strong>赋同一个值（取左图的比例）；顶部读数恒为 <code>leftScale</code>。</td>
+    <td>非联动模式下 ± 只改当前活动窗格的 scale；读数显示活动窗格的值（或分别显示左右两个百分比）</td>
+    <td>控件文案写着"独立缩放"，行为却是联动 —— 用户以为自己在单独检查右侧候选图的对焦，实际左基准图跟着一起变，**判断依据是错的**。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">M-02</span></td><td><span class="badge b-md">MEDIUM</span></td><td>UI / 一致性</td>
+    <td class="loc">SplitCompareViewport.tsx:160-164 · PreviewViewport.tsx:141-160</td>
+    <td>单图视口走 <code>useLumenPreview</code>（RAW 真实解码）并叠加调色滤镜；对比视口直接 <code>toAssetUrl()</code> 且不套 <code>getToneFilterString</code>。</td>
+    <td>对比视口复用同一预览与调色管线（或明确在界面标注"对比视图为未调色原图"）</td>
+    <td>同一张照片在单图与对比两个视图里显影不同。用户在对比模式里挑片，看到的是**与实际输出不同的画面**。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">M-03</span></td><td><span class="badge b-md">MEDIUM</span></td><td>UI / 一致性</td>
+    <td class="loc">SplitCompareViewport.tsx:168-171</td>
+    <td>窗格空态是一行裸文案"未选择对比照片"，无图标、无下一步动作。</td>
+    <td>复用单图/前后视图已统一的空态结构（图标 + 标题 + 说明 + CTA「设为基准」/「返回单图」）</td>
+    <td>上一轮审计专门统一了另两个视口的空态（F-18），对比视图被漏掉 —— 同一条件（没有照片）在三个视图里有两种表现。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">M-04</span></td><td><span class="badge b-md">MEDIUM</span></td><td>Accessibility</td>
+    <td class="loc">App.tsx:1014 · TopBar.tsx:289-304</td>
+    <td>「调色」用 <code>E</code> 切换时，侧栏由 <code>ThumbnailGrid</code> 换成 <code>TonalAdjuster</code>（或反向），两侧都无焦点接管；原焦点元素被卸载后焦点退回 <code>body</code>。</td>
+    <td>切换后把焦点交给新面板的首个可交互元素（调色面板首个滑杆 / 网格容器），并给触发按钮补 <code>aria-controls</code> + <code>aria-expanded</code></td>
+    <td>键盘用户按下 <code>E</code> 之后，整个页面的 Tab 顺序从头开始，等于"迷路"；屏幕阅读器也没有被告知右栏内容已整体替换。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">M-05</span></td><td><span class="badge b-md">MEDIUM</span></td><td>UI / 反馈</td>
+    <td class="loc">TopBar.tsx:160-171 · BatchExportModal.tsx:135-147</td>
+    <td>扫描与批量导出期间，唯一反馈是按钮文案变成"扫描中…/导出中…"和一个旋转图标；无进度、无条数、无取消。</td>
+    <td>扫描回传分批进度（已扫描 N/M 组）并支持取消；导出用进度条 + 已复制文件数 + 取消；完成后给可读摘要（Toast 已有）</td>
+    <td>应用的头号卖点是"上万张秒级加载"。在这种规模下，用户面对一个转圈的按钮只能干等，也**无法判断是卡死还是正常工作**（Nielsen #1）。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">M-06</span></td><td><span class="badge b-md">MEDIUM</span></td><td>Writing / 防错</td>
+    <td class="loc">SettingsModal.tsx:51-85 · Modal.tsx:63-100</td>
+    <td>设置弹窗把编辑存在组件本地 state，Esc / X / 「取消」/ 遮罩外关闭都会<strong>静默丢弃</strong>全部未保存修改；同时引擎握手状态行展示的是"已保存配置"的探测结果，会与未保存的勾选状态互相矛盾。</td>
+    <td>增加脏检查：有改动时关闭需确认（或改为即改即存）；把状态行的口径标注为"当前已保存配置"</td>
+    <td>改完一堆路径与开关后误按 Esc，全部白改且**没有任何提示**；状态行还会显示与眼前勾选不一致的结论，用户会怀疑自己看错。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">M-07</span></td><td><span class="badge b-md">MEDIUM</span></td><td>UI / 状态真值</td>
+    <td class="loc">App.tsx:894-916, 1048 · BottomBar.tsx:99-106</td>
+    <td>宫格搜索只作用于宫格（<code>visibleGroups</code>）。搜索命中 0 张时：宫格显示"没有匹配的照片"，中心视口仍显示未参与搜索的 <code>filteredGroups[selectedIndex]</code>，底栏计数仍按未搜索集合显示"501 / 1200"。</td>
+    <td>统一"当前工作集"的口径：搜索生效时中心视口与底栏计数同步跟随（或明确标注"仅宫格内搜索"并冻结索引显示）</td>
+    <td>同一时刻屏幕上有三处"我在哪"的信号，给出两套互相矛盾的事实（宫格 0 条 vs 底栏 501/1200），用户无法判断哪个是真的。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">M-08</span></td><td><span class="badge b-md">MEDIUM</span></td><td>Writing</td>
+    <td class="loc">ShortcutHelpModal.tsx:54-58 · PreviewViewport.tsx:95-97, 221-227</td>
+    <td>帮助弹窗承诺"滚轮 · 以指针为中心缩放"；三个视口的实现都是 <code>setScale()</code> + <code>origin-center</code>，与指针位置无关。</td>
+    <td>二选一：实现以指针为中心的缩放（换算 <code>transform-origin</code> / 平移补偿），或把文案改为"以画面中心缩放"</td>
+    <td>图文不符。用户按文档的预期去放大眼角细节，画面却从中心放大 —— 文档失真比没有文档更伤信任（Krug #1）。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">M-09</span></td><td><span class="badge b-md">MEDIUM</span></td><td>Accessibility</td>
+    <td class="loc">useKeyboardShortcuts.ts:59-66 · TonalAdjuster.tsx:249-261</td>
+    <td>按住 <code>\</code> 查看原片在焦点位于 <code>INPUT</code> 时被守卫拦住；而调色面板几乎全是 <code>&lt;input type="range"&gt;</code>。</td>
+    <td>对 <code>\</code>（按住型、非破坏性）单独放行：在 range 上仍允许进入"看原片"状态</td>
+    <td>"按住看原片"最需要用的时刻就是**在拖调色滑杆、判断这组参数好不好**的时候，而恰恰此刻它失效。功能在关键时刻静默消失。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">M-10</span></td><td><span class="badge b-md">MEDIUM</span></td><td>UI / 状态真值</td>
+    <td class="loc">App.tsx:1014 · TopBar.tsx:292-300</td>
+    <td>侧栏渲染条件是 <code>showTonalPanel &amp;&amp; currentGroup</code>。当前筛选变空（<code>currentGroup</code> 为空）时侧栏回落到宫格，但 <code>showTonalPanel</code> 仍为 <code>true</code>。</td>
+    <td>渲染条件与按钮状态同源：无当前照片时一并复位 <code>showTonalPanel</code>，或把按钮切回未按下态</td>
+    <td>顶栏「调色」按钮保持白色高亮（声称面板已开），看到的却是宫格 —— 控件的状态在撒谎（Nielsen #1）。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">M-11</span></td><td><span class="badge b-md">MEDIUM</span></td><td>UI / 一致性</td>
+    <td class="loc">App.tsx:1005 · SplitCompareViewport.tsx:178-190</td>
+    <td>对比视图两个窗格视觉完全对称（都有 hover、<code>cursor-grab</code>、同样的边框），但点击左窗格是空实现 <code>() =&gt; {}</code>，点右窗格会改变选中项。</td>
+    <td>给左窗格同样的选中语义（选中基准图），或统一去掉窗格级的点击选中、只保留显式按钮</td>
+    <td>看起来一样的两块区域行为不同，用户会以为左图坏了。<strong>同形不同效</strong>是最难自查的一致性缺陷。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">M-12</span></td><td><span class="badge b-md">MEDIUM</span></td><td>Accessibility</td>
+    <td class="loc">ThumbnailGrid.tsx:340-349</td>
+    <td>"AI 局部蒙版"的去薄雾滑杆是无样式的原生 range（仅 <code>accent-white</code>），无数字读数；正上方的 6 个调色滑杆却用了 <code>.tone-slider</code>（4px 轨道 / 20px 命中区 / 自定义滑块）。</td>
+    <td>复用 <code>.tone-slider</code> 并补 <code>aria-valuetext</code> + 右侧数值读数</td>
+    <td>同一个面板里两种滑杆规格，后加的这个**命中区更小、无法读出当前强度**，用户只能盲拖 —— 上一轮刚修好的滑杆可用性（F-17）在新控件上回退了。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">M-13</span></td><td><span class="badge b-md">MEDIUM</span></td><td>Colors</td>
+    <td class="loc">ThumbnailGrid.tsx:489-497</td>
+    <td>"无预览"失败态用 <code>text-[10px] text-white/40</code>；实测对 <code>#0A0A0A</code> 对比度 <strong>3.77:1</strong>（复核修正，原报告 3.45:1 漏算背景混合项）。</td>
+    <td>提到 <code>text-white/70</code>（≈9.7:1）；图标类 <code>/40</code>（3.77:1，达 3:1 图形阈值）可保留</td>
+    <td>低于 WCAG AA 正文 4.5:1 门槛，且这是 10px 的极小字号 —— 恰恰在"照片加载失败"这种最需要看清的时刻最看不清。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">M-14</span></td><td><span class="badge b-md">MEDIUM</span></td><td>UI / 识别优于回忆</td>
+    <td class="loc">TopBar.tsx:197-242 · BatchExportModal.tsx:182-205</td>
+    <td>顶栏「筛选」「排序」下拉的选项没有任何数量提示；而导出弹窗的同类单选列表每一档都带 <code>(N)</code> 计数。</td>
+    <td>筛选下拉补上实时计数（"仅已保留 (Pick) (37)"）；一档为 0 时置灰</td>
+    <td>用户切筛选前无法预判会看到几张，只能切一次、看一眼、再切回来 —— 在两个下拉之间反复试探。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">M-15</span></td><td><span class="badge b-md">MEDIUM</span></td><td>UI / 防错</td>
+    <td class="loc">SettingsModal.tsx:178-187</td>
+    <td><code>lumen-cli.exe</code> 路径是纯手输输入框；同一弹窗里的 Photoshop 路径有「浏览」按钮，且两者都没有"测试连接"入口。</td>
+    <td>补「浏览」按钮（文件选择器）+「测试连接」按钮，就地反馈握手结果</td>
+    <td>同类字段两套规格；引擎路径写错后**只能靠保存再等 1.5 秒探测**才知道错，且探测失败文案只出现在状态行，容易被忽略。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">M-16</span></td><td><span class="badge b-md">MEDIUM</span></td><td>工程质量（测试有效性）</td>
+    <td class="loc">TonalAdjuster.test.tsx:73-90 · App.tsx:1015-1032 · src/test/setup.ts · package.json:10</td>
+    <td><strong>回归网"绿"但保护力不足</strong>：① <code>TonalAdjuster.test.tsx:73-90</code> 的「不会重复触发保存」是<strong>假护栏</strong>——只 <code>click</code> 一次、从未双击，且显式注入 <code>isSaving</code>，与 App 真实集成（不传该 prop）脱节；② 全项目<strong>零 <code>App.tsx</code> 集成测试</strong>；③ 快捷键盘守卫、批量元数据默认范围、扫描/导出取消等 <strong>12 条关键路径零覆盖</strong>。环境层面另有 <code>pnpm</code>→<code>npm</code> 迁移残留（<code>node_modules__pnpm_backup/</code>、<code>pnpm-lock.yaml</code>、<code>pnpm-workspace.yaml</code>）。</td>
+    <td>不动 <code>vitest.config.ts</code>（默认 <code>forks</code> 池实测全绿，改 pool 无据且改变模块求值语义）；改为：清理 pnpm 残留 + <code>^</code> 改精确版本 + CI 用 <code>npm ci</code>；把「假护栏」改为真并发断言（挂起 Promise + 双击），并补 12 条关键路径用例</td>
+    <td>现有 104 个用例<strong>能跑通</strong>，但其中至少 1 条给出的是虚假信心——H-02 的并发保存缺陷正因为"测试只点一次"而长期未被发现。真正风险是"关键路径无人看守"，而非"测试跑不起来"。</td>
+  </tr>
+
+  <tr>
+    <td><span class="num">M-17</span></td><td><span class="badge b-md">MEDIUM</span></td><td>工程质量 / 性能</td>
+    <td class="loc">App.tsx:827-833</td>
+    <td>每次 <code>selectedIndex</code> 变化都调用一次 <code>api.saveSession()</code>（Tauri IPC + SQLite 写入），无防抖。</td>
+    <td>加 500–800ms 防抖，或仅在翻页停止 / 窗口关闭时落盘</td>
+    <td>按 <code>D</code> 连续切片时每张一次 IPC + 一次磁盘事务；万张目录的快速浏览会持续压制 I/O，也是不必要的写放大。</td>
+  </tr>
+
+  </tbody>
+</table>
+
+<h2>5. 次级问题附录（LOW）</h2>
+<table>
+  <thead><tr><th>#</th><th>位置</th><th>问题</th><th>建议</th></tr></thead>
+  <tbody>
+    <tr><td class="num">L-01</td><td class="loc">BeforeAfterViewport.tsx:226-233</td><td>「联动锁焦」是一个不可交互的静态徽章，外观却与旁边的可切换按钮（调色面板）同构，看起来像开关。</td><td>改为纯文本状态说明，或做成真的可切换控件（前后两图独立平移）</td></tr>
+    <tr><td class="num">L-02</td><td class="loc">Toast.tsx:32-36, 89</td><td>错误 7 秒自动消失、最多同时 3 条、无历史记录；含"如何修复"的长文案（3 行）常来不及读完。</td><td>错误不自动消失（或 12s+）并提供可复制的详情；加轻量通知中心</td></tr>
+    <tr><td class="num">L-03</td><td class="loc">Toast.tsx:118-121</td><td>错误与成功共用 <code>role="status" / aria-live="polite"</code>，失败播报可能被推迟到当前朗读结束之后。</td><td>错误分支改用 <code>role="alert"</code>（assertive）</td></tr>
+    <tr><td class="num">L-04</td><td class="loc">PreviewViewport.tsx:375-381</td><td>缩放读数挂了 <code>aria-live="polite"</code>，连续滚轮缩放会把每一次百分比变化都播报出来。</td><td>改为不加 live 的可读标签，或仅在停止 500ms 后播报</td></tr>
+    <tr><td class="num">L-05</td><td class="loc">BottomBar.tsx:59-62</td><td>快捷键提示条在纯 <code>div</code> 上写了 <code>aria-label</code>（无 <code>role</code>，对辅助技术无效）。</td><td>加 <code>role="group"</code> 或改用 <code>aria-labelledby</code> 指向可见文本</td></tr>
+    <tr><td class="num">L-06</td><td class="loc">ThumbnailGrid.tsx:254-266</td><td>虚拟化 listbox 未提供 <code>aria-setsize/aria-posinset</code>；总量只出现在容器的 <code>aria-label</code> 里。</td><td>给每个 <code>role="option"</code> 补 setsize/posinset，让"第 N 条"语义完整</td></tr>
+    <tr><td class="num">L-07</td><td class="loc">ThumbnailGrid.tsx:461-476</td><td>容器用 <code>aria-activedescendant</code>，但单元格 <code>tabIndex={-1}</code> 可被点击聚焦 —— 点击后焦点落在单元上，与容器激活动项的模式混用。</td><td>单元格 <code>tabIndex={-1}</code> 改为不回焦（或点击后把焦点交还容器）</td></tr>
+    <tr><td class="num">L-08</td><td class="loc">TonalAdjuster.tsx:224-231</td><td>调色面板只能用 <code>E</code> 或点 X 关闭，Esc 无效（与所有弹窗的 Esc 约定不一致）。</td><td>面板内监听 Esc 关闭</td></tr>
+    <tr><td class="num">L-09</td><td class="loc">ThumbnailGrid.tsx:552-587</td><td>R / X / T / E 四个缩写徽章只靠宫格头部一次图例解释，滚动后图例已不在视野内。</td><td>hover 时在徽章内用 title 之外的可见 tooltip；或长期保留图例行</td></tr>
+    <tr><td class="num">L-10 → <b>H-04</b></td><td class="loc">BatchExportModal.tsx:73-86 · src-tauri/src/commands.rs:210-247</td><td><strong>复核后升为 HIGH</strong>：未校验"目标目录 = 源目录"，而 <code>dst = target_dir.join(src.file_name())</code> → 同目录导出时 <code>src == dst</code>。Rust stdlib 文档明言同源自拷贝"<strong>很可能被截断</strong>"（Unix = <code>O_TRUNC</code> 确定截断）。另发现 <code>.is_ok()</code> 吞掉 Err（静默失败）与无 <code>FAIL_IF_EXISTS</code>（静默覆盖）。</td><td>后端强制拒绝"目标 = 源"（<code>canonicalize</code> 归一化后比较）+ 错误累计 + 同名跳过</td></tr>
+    <tr><td class="num">L-11</td><td class="loc">App.tsx:452-504</td><td>星级/旗标即时写入 XMP，无任何撤销路径（<code>0/U</code> 只是"清零"而非"撤销上一步"）。</td><td>提供一次性的"撤销上一个标记"（Toast 内即撤销按钮）</td></tr>
+    <tr><td class="num">L-12<small>（复核新增）</small></td><td class="loc">useKeyboardShortcuts.ts:198-203 · App.tsx:882</td><td>空格被全局 handler 无条件 <code>preventDefault()</code> 并执行"设为基准"→ <strong>焦点在按钮/链接上时空格无法激活该元素</strong>。属 a11y 缺陷（<code>handleTogglePinRight</code> 只改内存、不落盘）。</td><td>switch 之前加 <code>if (e.key === ' ' &amp;&amp; isActivatable(el)) return;</code>（与 H-01/M-09 同批提交）</td></tr>
+  </tbody>
+</table>
+
+<h2>6. 已考虑但未列为问题</h2>
+<table>
+  <thead><tr><th>位置</th><th>候选问题</th><th>否决理由</th></tr></thead>
+  <tbody>
+    <tr><td class="loc">BottomBar.tsx:59-95（<code>hidden md:flex</code>）</td><td>窄窗口下快捷键提示条整体消失</td><td>窗口 <code>minWidth: 960</code>（<code>tauri.conf.json</code>）恒大于 md 断点 768px，该分支在真实运行中不可达。</td></tr>
+    <tr><td class="loc">TopBar.tsx:245-260 / ThumbnailGrid.tsx:148-163</td><td>同一动作有两个「搜索」入口（顶栏 + 宫格头部）</td><td>两处共享同一 <code>searchOpen</code> 状态与 <code>aria-pressed</code>，不会出现假状态；在 390px 窄侧栏里双入口反而降低了寻找成本。</td></tr>
+    <tr><td class="loc">Modal.tsx:106-111</td><td>遮罩不可点击关闭</td><td>代码注释已说明是刻意设计：避免一次误点丢弃填了一半的批量表单。属于合理的效率/防错取舍。</td></tr>
+    <tr><td class="loc">PreviewViewport.tsx:105-111</td><td><code>onWheel</code> 里的 <code>preventDefault()</code> 在 React 19 被动监听下是空操作</td><td><code>body</code> 为 <code>overflow-hidden</code>，页面本身无可滚动内容，无用户可见后果。</td></tr>
+    <tr><td class="loc">ThumbnailGrid.tsx:479-488（<code>alt=""</code>）</td><td>缩略图 <code>alt</code> 为空</td><td>有意为之：单元格 <code>role="option"</code> + <code>aria-label</code> 已完整描述"第 N/M 张、文件名、星级、旗标"，图像本身是装饰。</td></tr>
+    <tr><td class="loc">全项目</td><td>引入弹簧物理（Spring）替换 CSS 过渡以符合 Apple 可打断性</td><td>本应用的手势是"拖拽平移"，松手即停、无动量投射需求；缩放是 1.0x/2.5x 的离散切换。为无感知收益引入动画依赖不划算。</td></tr>
+    <tr><td class="loc">ThumbnailGrid.tsx:244-318</td><td>未提供文件大小 / 拍摄时间排序的列内切换</td><td>排序已由顶栏下拉承担，宫格内再放排序入口会与虚拟化+390px 宽度正面冲突。</td></tr>
+  </tbody>
+</table>
+
+<h2>7. 修复报价单</h2>
+<p>按工作包（Work Package）计价，每包内为同一技术根因的成组修复，含改动、自测与回归。<strong>单价假设 ¥1,200 / 人天</strong>（一线城市高级前端外包参考区间 ¥1,000–1,500；可按公式替换：金额 = 人天 × 你的日单价）。</p>
+<table>
+  <thead><tr><th>WP</th><th>工作包</th><th>覆盖问题</th><th>主要内容</th><th>人天</th><th>金额</th></tr></thead>
+  <tbody>
+    <tr><td class="num">WP0</td><td>数据安全止血（不可逆损坏防护）</td><td><b>H-04</b>（原 L-10）, N-16</td><td><strong>导出目标目录自检</strong>：<code>canonicalize</code> 归一化后比较，命中"目标 = 源"即整体拒绝并回中文错误；错误累计取代 <code>.is_ok()</code> 静默失败；同名默认跳过。<em>独立于 WP5 的进度/取消工作，可立即交付</em></td><td>0.75</td><td>¥900</td></tr>
+    <tr><td class="num">WP1</td><td>快捷键作用域与焦点守卫加固</td><td>H-01, M-09, L-12, N-05</td><td>守卫扩展到 <code>select</code>（<strong>不得</strong>加入 <code>role="listbox"</code>，否则废掉宫格 <code>a/d/←→/1-5/x/p</code> 主交互）；聚焦值/文本控件时屏蔽单键（含 <code>input[type=range]</code>）；空格让位给可激活元素；<code>\</code> 提前放行 + keyup/失焦兜底；组合键让路（消除 <code>Ctrl+X/Ctrl+P</code> 误触）</td><td>1.0</td><td>¥1,200</td></tr>
+    <tr><td class="num">WP2</td><td>调色写入可靠性</td><td>H-02, M-12</td><td>透传 <code>isSaving</code>、保存期禁用与防重复提交；<strong>后端 XMP 原子写</strong>（<code>fs::write</code> 截断竞态 + 移入 <code>spawn_blocking</code>）；蒙版滑杆独立成行并统一 <code>.tone-slider</code> + 数值读数</td><td>1.0</td><td>¥1,200</td></tr>
+    <tr><td class="num">WP3</td><td>批量元数据写入的安全默认值</td><td>H-03</td><td>默认范围改为"仅当前照片"；选"全部"时按钮改文案并二次确认；footer 与确认正文<strong>必写范围名与张数</strong>；不预填镜头上游</td><td>0.75</td><td>¥900</td></tr>
+    <tr><td class="num">WP4</td><td>三视口一致性</td><td>M-01, M-02, M-03, M-11, L-01, N-06/07/08</td><td>独立缩放真正独立 + 双读数；对比/前后视图接入 LUMEN 解码与调色管线（含 RAW-only 破图）；空态抽共享组件；移除窗格点击（消除拖拽改选中）；联动锁焦改为真实语义；统一"打分作用于谁"的语义</td><td>3.0</td><td>¥3,600</td></tr>
+    <tr><td class="num">WP5</td><td>长任务进度、取消与会话可靠性</td><td>M-05, M-17, N-11</td><td>后端 <code>emit</code> 进度事件 + <code>TaskControl</code>（<code>AtomicBool</code> 取消 + 两个 cancel 命令）；扫描/导出进度 UI 与取消；导出收尾策略（临时目录原子搬迁 或 清单文件）；会话写入防抖 + 关闭前 flush；扫描配对 <code>Vec::contains</code> → <code>HashSet</code></td><td>6.25</td><td>¥7,500</td></tr>
+    <tr><td class="num">WP6</td><td>焦点与状态真值一致性</td><td>M-04, M-06, M-07, M-10, N-01/02/03/04</td><td>面板互换焦点迁移 + <code>aria-controls/aria-expanded</code>（三处入口同改）；设置脏检查与关闭确认；搜索态下宫格表头/中心视口/底栏<strong>四处</strong>计数同源；<code>tonalPanelVisible</code> 单真值；同图守卫上移覆盖 pinned 分支；基准被过滤后的"静默替换"改为显式降级</td><td>7.5</td><td>¥9,000</td></tr>
+    <tr><td class="num">WP7</td><td>文案、识别成本与 a11y 收尾</td><td>M-08, M-13, M-14, M-15, L-01…L-09, L-11, N-12</td><td>缩放帮助文案对齐实现（或改真实现指针缩放）；筛选下拉计数；lumen 路径浏览 + <code>lumen_probe_cmd</code> 测试连接 + 状态可刷新；对比度修正；伪控件改真实语义；调色面板 Esc 关闭；Toast live region 分离与去重</td><td>4.75</td><td>¥5,700</td></tr>
+    <tr><td class="num">WP8</td><td>工程基座（测试有效性 + 环境治理）</td><td>M-16, N-13/14/15</td><td><strong>不动 pool</strong>（默认 <code>forks</code> 实测全绿，改 pool 无据）；清理 pnpm 残留 + <code>^</code> 改精确版本 + CI 用 <code>npm ci</code>；把「假护栏」改为真并发断言；补 12 条关键路径用例与首个 <code>App.tsx</code> 集成测试</td><td>3.5</td><td>¥4,200</td></tr>
+    <tr><td class="num">WP9</td><td>Tauri 实机回归与性能实测</td><td>全部 + N-09/10</td><td>真实 shell 下验证照片加载、XMP 写入、LUMEN 往返、自动调色取样、更新弹窗；扫描基线实测（决定是否上 rayon）；缩略图 inflight 去重与虚拟化行高修正；按同一份清单复检并出具修复确认</td><td>2.5</td><td>¥3,000</td></tr>
+    <tr><td></td><td><strong>合计（复核后修订）</strong></td><td>4 HIGH + 17 MEDIUM + 11 LOW</td><td>—</td><td><strong>31.0</strong></td><td><strong>¥37,200</strong></td></tr>
+  </tbody>
+</table>
+
+<h3>分档报价（复核后修订）</h3>
+<p class="lede">下列分档为人天报价的<strong>累积口径</strong>：③ 包含 ①②，④ 包含 ①②③。原始初版（¥10,800 / 9.0 人天）仅覆盖"最小机械修复"；六条并行调查轨道回到源码逐条复核后，工作量上调的主因有三：<strong>① 后端需要真实基础设施改造</strong>（进度/取消/原子写/导出自检，Rust 侧约 5.5 人天）；<strong>② 索引与状态真值问题比初判更深</strong>（同图守卫只覆盖一个分支、四处计数不同源）；<strong>③ 回归网需要补建</strong>（12 条关键路径零覆盖、1 条现有用例是假护栏）。</p>
+<div class="grid2">
+  <div class="tier">
+    <header><b>① 紧急止血</b><span>先把会写坏数据的洞堵上</span></header>
+    <div class="body">
+      <p class="price">¥4,200<small> / 3.5 人天</small></p>
+      <ul>
+        <li>WP0 导出"目标 = 源"防护（原 L-10，升至 HIGH）</li>
+        <li>WP1 H-01 + M-09 + L-12 快捷键守卫（同一提交）</li>
+        <li>WP2 H-02 调色写入：前端互斥 + 后端 XMP 原子写</li>
+        <li>WP3 H-03 批量元数据安全默认值 + 二次确认</li>
+      </ul>
+    </div>
+    <div class="tier-foot">交付后：不再有非本意的 XMP 落盘写入，也不可能出现"导出把原图截断为 0 字节"</div>
+  </div>
+  <div class="tier rec">
+    <header><b>② 标准修复 ★ 建议</b><span>一致性 + 反馈 + 状态真值</span></header>
+    <div class="body">
+      <p class="price">¥16,800<small> / 14.0 人天（含 ①）</small></p>
+      <ul>
+        <li>WP4 三视口一致性（含 LUMEN 解码与 RAW-only 破图）</li>
+        <li>WP6 焦点迁移 + 四处计数同源 + 同图守卫上移</li>
+        <li>M-12 蒙版滑杆统一 / M-14 筛选计数</li>
+        <li>L-07 焦点模型 / L-08 面板 Esc</li>
+        <li>M-17 会话写入防抖 + 关闭前 flush</li>
+      </ul>
+    </div>
+    <div class="tier-foot">交付后：Quick Diagnostic 回到 9–10/10</div>
+  </div>
+  <div class="tier">
+    <header><b>③ 完整交付</b><span>含长任务、性能与文案收尾</span></header>
+    <div class="body">
+      <p class="price">¥30,000<small> / 25.0 人天（含 ①②）</small></p>
+      <ul>
+        <li>M-05 扫描/导出进度 + 真取消（后端 <code>emit</code> + 原子收尾）</li>
+        <li>M-15 lumen 路径浏览 + 测试连接（新增后端探测命令）</li>
+        <li>M-08 指针中心缩放（三视口）</li>
+        <li>性能 P0/P1：扫描配对 <code>HashSet</code>、基线实测、LUMEN 网格节流</li>
+      </ul>
+    </div>
+    <div class="tier-foot">交付后：本清单全部功能类条目闭环</div>
+  </div>
+  <div class="tier">
+    <header><b>④ 工程加固（可选）</b><span>让"改完能证明改对了"</span></header>
+    <div class="body">
+      <p class="price">¥37,200<small> / 31.0 人天（含 ①②③）</small></p>
+      <ul>
+        <li>把 <code>TonalAdjuster.test.tsx</code> 的"假护栏"改为真并发断言</li>
+        <li>补 12 条关键路径用例 + 首个 <code>App.tsx</code> 集成测试</li>
+        <li>CI（ubuntu 主任务 + Windows 定时观测，规避上游 pool 竞态）</li>
+        <li>WP9 Tauri 实机回归 + 修复确认报告</li>
+      </ul>
+    </div>
+    <div class="tier-foot">交付后：每个 HIGH 修复都有"修复前应失败 / 修复后通过"的自动化证据</div>
+  </div>
+</div>
+
+<div class="callout warn">
+  <p><strong>未包含 / 计价边界：</strong>不包含产品决策项（<code>edited</code> 成品真值口径、钉左模式下"候选是否算选中"、回收站影响范围、独立缩放是否要做成真开关）——这些需先拍板再动工，否则返工；不包含新增设计稿；不包含"取消导出"的 all-or-nothing 收尾策略选型（临时目录方案需同卷，跨卷会退化）之外的重构。此外，本机<strong>无运行中的 WebView2</strong>，所有依赖真实浏览器行为项（<code>&lt;select&gt;</code> type-ahead、按钮空格激活、滚轮 passive 监听）均标注"未验证"，须在 WP9 实机阶段确认；若 WP9 发现新的 HIGH 级问题，将先出补充报价再动工。</p>
+</div>
+
+<h2>8. 验证记录与未验证项</h2>
+<h3>已执行并通过</h3>
+<table>
+  <thead><tr><th>检查</th><th>命令 / 方式</th><th>结果</th></tr></thead>
+  <tbody>
+    <tr><td>类型检查</td><td><code>npx tsc --noEmit</code></td><td><span class="badge b-ok">exit 0</span> 无错误</td></tr>
+    <tr><td>生产构建</td><td><code>npx vite build</code></td><td><span class="badge b-ok">exit 0</span> 1619 modules · CSS 26.72 kB · JS 383.37 kB</td></tr>
+    <tr><td>单元测试</td><td><code>npx vitest run</code>（<strong>默认 config，未指定 pool</strong>）</td><td><span class="badge b-ok">9 文件 / 104 用例全绿</span>，连续 3 次复跑 + 3 并发压测均通过（初版称"默认 pool 下 0 用例可执行"——<strong>已证伪并更正</strong>）</td></tr>
+    <tr><td>焦点可见性规则已进入产物</td><td><code>dist/assets/index-DwjLEdIh.css</code> 规则计数</td><td><code>focus-visible</code> 2 处 · <code>outline-offset</code> 6 处 · <code>.tone-slider</code> 7 处</td></tr>
+    <tr><td>减弱动效规则已进入产物</td><td>同上</td><td><code>prefers-reduced-motion</code> 1 处（含 pulse/spin 停用与 active:scale 展平）</td></tr>
+    <tr><td>对比度计算</td><td><code>text-white/40</code> on <code>#0A0A0A</code></td><td>3.77:1 → 正文不合格（M-13，全项目仅余 1 处正文级用例）；初版 3.45:1 有误，已在复核后更正</td></tr>
+    <tr><td>测试"启动失败"根因复核</td><td><code>npx vitest run</code> ×3（默认 pool）· <code>--pool=forks/threads/vmForks</code> 三路对照 · <code>npm ls</code> 去重核对 · 依赖树副本与软链检查</td><td><strong>初版结论不成立</strong>：三种 pool 全部全绿，"模块实例重复"为未证实推断。真实异常点是 <code>pnpm</code>→<code>npm</code> 迁移残留（<code>node_modules__pnpm_backup/</code> 等）叠加 vitest 4.1.x 在 Windows 上"安装后首次运行"的 pool 启动竞态（与上游 vitest-dev/vitest#10812 / #8861 特征吻合）。<strong>不做</strong> config 层 pool 固化</td></tr>
+    <tr><td>窗口约束</td><td><code>src-tauri/tauri.conf.json</code></td><td>1400×900 默认 · <code>minWidth 960</code> / <code>minHeight 640</code>（据此否决了 1 项响应式候选问题）</td></tr>
+  </tbody>
+</table>
+
+<h3>未验证（<span class="badge b-in">Not verified</span>）</h3>
+<div class="callout">
+  <p><strong>真实渲染截图未采集。</strong>本次尝试用 Chromium 自动化打开 <code>localhost:1420</code> 采集各界面态截图，浏览器守护进程在本环境启动后无响应（挂起 20 分钟以上），已终止并改用源码 + 构建产物 + 测试实跑三重证据。因此：所有<b>视觉与响应式判断均来自源码与配置推导</b>，未做像素级核对。</p>
+  <p>以下路径同样只在代码层复核，未在 Tauri shell 中实跑：真实照片加载与虚拟滚动帧率、XMP 实际写入与 Lightroom 往返、LUMEN RAW 握手 / 真实解码 / 预设与 AI 蒙版、自动调色的直方图取样、更新提示的确认弹窗、以及上表全部问题的"修复后"状态。这些统一由报价中的 <strong>WP9</strong> 承接。</p>
+  <p><strong>依赖真实浏览器/操作系统的行为（本机无运行中的 WebView2，全部未实测）：</strong>① <code>&lt;select&gt;</code> 聚焦时 <code>keydown.preventDefault()</code> 能否抑制 type-ahead —— 注意该点<strong>本不影响结论</strong>，因为伤害来自我们自己的 handler 在冒泡阶段同步执行；② 按钮聚焦时空格激活是否被 <code>preventDefault()</code> 抑制；③ React 19 被动 <code>wheel</code> 监听下三处 <code>preventDefault()</code> 是否为空操作（源码推导为空操作，需实机确认）；④ <code>fs::copy(p, p)</code> 在 <strong>Windows</strong> 上究竟"截断"还是"共享冲突失败"（Unix 侧 <code>O_TRUNC</code> 截断已由 Rust stdlib 文档确定）——两者都不可接受，故结论与修复方案不依赖该分支。</p>
+  <p><strong>性能数字（未实测）：</strong>LUMEN 网格缩略图"每张 ~0.3s"为外部假设，源码只能证明<b>硬串行</b>（单 <code>Mutex</code> + 单 sidecar），无法证明耗时；"上万张秒级加载"亦未实测（<code>rayon</code> 已声明但零引用、配对为 O(J×R)，很可能不成立）。</p>
+</div>
+
+<h2>9. 结论</h2>
+<div class="callout good">
+  <p><strong>Verdict：Needs changes</strong>（仅剩 MEDIUM 及以下为合格线；当前有 4 项 HIGH 未闭环，故不通过）。</p>
+  <p>较上一版审计（30 项全修、0/10 分），当前代码库在<strong>视觉光学校正、焦点可见性、动效降级、空态统一、Toast 替代 alert、模态焦点陷阱</strong>这些基础设施层面是扎实的，构建与类型检查干净，104 个用例在默认配置下全绿。本轮 4 项 HIGH 全部不是"界面不好看"，而是<strong>控件与真值不一致导致的误操作、误判与不可逆写入</strong>：快捷键守卫漏了值控件与已聚焦按钮、保存没有进行中状态、批量写入默认最大影响面、导出未拦住"目标 = 源"（可致原图被截断为 0 字节）。这些问题的共同点是"用户以为自己控制住了，实际没有" —— 对一个会直接改写磁盘侧边栏与原片的选片工具来说，这比任何视觉瑕疵都更值得优先处理。</p>
+  <p><strong>复核后记：</strong>本报告的结论已由六条并行调查轨道逐条回源码复核。除上表已更正的项外，复核还<b>推翻</b>了 3 条原判（M-16 测试启动失败不成立、L-09 图例不在滚动容器内故不成立、H-02"重复叠加"不成立）、并<b>上调</b>了 2 条定级（L-10 导出同路径 → HIGH；M-09 影响面从"拖滑杆时"扩到"所有单键快捷键 + <code>\</code> 会卡住"）。逐条结论、修复方案与风险评估见 <code>.plan/ux_fix_01…06_*.md</code>，统一编号映射与修复批次见 <code>.plan/ux_fix_00_master.md</code>。</p>
+</div>
+
+<footer class="doc">
+  审计方法：better-interface（六域统一编排）· ux-heuristics（Krug 四定律 + Nielsen 十启发式 + WCAG 2.1 AA）· apple-ui-principles（光学校正 / 流体交互 / 材质与排版）。<br />
+  证据约定：每条发现均给出 <code>path:line</code> 与当前实现；视觉类发现已标注为源码推导。本报告为只读审计，未修改任何源码。
+</footer>
+
+</div>
+</body>
+</html>
