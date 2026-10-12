@@ -81,6 +81,9 @@ function AppShell() {
   const lumenStatus = useLumenStatus(settings?.lumenEnabled ?? false);
   // 只有握手成功（版本 1.6.0 匹配）才出现 LUMEN RAW 专属入口
   const lumenAvailable = lumenStatus.available;
+  // 宫格引擎开关：仅在设置开启且引擎握手成功时才切到 lumen 渲染
+  const lumenGridThumbs =
+    (settings?.lumenGridThumbnails ?? false) && lumenAvailable;
 
   // Load initial settings and default paths on startup
   useEffect(() => {
@@ -625,6 +628,37 @@ function AppShell() {
     }
   }, [currentGroup, toneMap, toast]);
 
+  /**
+   * 设置里的"从 LUMEN RAW 同步评级"：拉 catalog 真值并写回侧边栏。
+   * 只写回 LUMEN 侧有值、宿主侧无改动的照片；两侧都动过的跳过并计数。
+   */
+  const handleSyncLumenRatings = useCallback(
+    async (folder: string): Promise<number> => {
+      const target =
+        folder || settings?.defaultRawFolder || currentGroup?.raw?.path || currentGroup?.jpg?.path || '';
+      if (!target) {
+        toast.error('没有可同步的路径，请先设置默认 RAW 目录。');
+        return 0;
+      }
+      // 取所在目录（同时兼容 / 与 \ 分隔符）
+      const lastSlash = Math.max(target.lastIndexOf('/'), target.lastIndexOf(String.fromCharCode(92)));
+      const folderPath = lastSlash > 0 ? target.slice(0, lastSlash) : '';
+      if (!folderPath) {
+        toast.error('无法确定所在目录，请先设置默认 RAW 目录。');
+        return 0;
+      }
+      const updated = await api.syncLumenRatings(folderPath);
+      if (updated.length > 0) {
+        toast.success(`已从 LUMEN RAW 同步 ${updated.length} 张的评级。`);
+        // 评级变了 → 星级排序与边框都要跟着变，重新扫描当前目录
+        if (jpgFolder) await handleScan();
+      }
+      return updated.length;
+    },
+    // `handleScan` 依赖 jpgFolder/rawFolder/sortOrder
+    [settings, currentGroup, toast, jpgFolder, handleScan],
+  );
+
   // Luminar AI Roundtrip Handler
   const handleOpenLuminar = useCallback(async () => {
     if (!currentGroup) return;
@@ -878,6 +912,7 @@ function AppShell() {
                 else setGridSearchFocusToken((t) => t + 1);
               }}
               totalLoaded={filteredGroups.length}
+              lumenThumbnails={lumenGridThumbs}
             />
           )}
         </div>
@@ -908,6 +943,8 @@ function AppShell() {
         onClose={() => setIsSettingsOpen(false)}
         onSettingsSaved={(s) => setSettings(s)}
         onError={(m) => toast.error(m)}
+        lumenStatus={lumenStatus}
+        onSyncRatings={lumenStatus?.available ? handleSyncLumenRatings : undefined}
       />
 
       {/* Manual Lens Metadata Editor Modal */}

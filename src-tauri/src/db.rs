@@ -17,6 +17,10 @@ pub(crate) fn settings_pairs(settings: &AppSettings) -> Vec<(&'static str, Strin
         ("sort_order", settings.sort_order.clone()),
         ("lumen_enabled", settings.lumen_enabled.to_string()),
         ("lumen_cli_path", settings.lumen_cli_path.clone()),
+        (
+            "lumen_grid_thumbnails",
+            settings.lumen_grid_thumbnails.to_string(),
+        ),
     ]
 }
 
@@ -36,6 +40,7 @@ pub(crate) fn apply_setting(settings: &mut AppSettings, key: &str, value: &str) 
         "sort_order" => settings.sort_order = value.to_string(),
         "lumen_enabled" => settings.lumen_enabled = value == "true",
         "lumen_cli_path" => settings.lumen_cli_path = value.to_string(),
+        "lumen_grid_thumbnails" => settings.lumen_grid_thumbnails = value == "true",
         _ => {}
     }
 }
@@ -275,15 +280,22 @@ mod tests {
 
     #[test]
     fn settings_pairs_contains_lumen_keys() {
-        let s = AppSettings::default();
+        let mut s = AppSettings::default();
         let pairs = settings_pairs(&s);
         let map: std::collections::HashMap<&str, String> = pairs.into_iter().collect();
         assert_eq!(map.get("lumen_enabled").map(String::as_str), Some("false"));
         assert_eq!(map.get("lumen_cli_path").map(String::as_str), Some(""));
+        // 宫格引擎开关：默认 false（EXIF 内嵌缩略图），必须与其它键一起落盘
+        assert_eq!(
+            map.get("lumen_grid_thumbnails").map(String::as_str),
+            Some("false")
+        );
+        apply_setting(&mut s, "lumen_grid_thumbnails", "true");
+        assert!(s.lumen_grid_thumbnails);
         // 既有 5 键不回归
         assert!(map.contains_key("photoshop_path"));
         assert!(map.contains_key("thumbnail_width"));
-        assert_eq!(map.len(), 7);
+        assert_eq!(map.len(), 8);
     }
 
     #[test]

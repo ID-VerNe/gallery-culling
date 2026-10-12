@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Settings, FolderOpen, Save } from 'lucide-react';
-import { AppSettings } from '../types';
+import { AppSettings, LumenStatus } from '../types';
 import { api } from '../services/api';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Modal } from './Modal';
@@ -10,6 +10,10 @@ interface SettingsModalProps {
   onClose: () => void;
   onSettingsSaved: (settings: AppSettings) => void;
   onError?: (message: string) => void;
+  /** LUMEN RAW 握手状态（App 层已有，透传避免重复探测） */
+  lumenStatus?: LumenStatus | null;
+  /** 把 LUMEN RAW 的评级拉回侧边栏（返回被更新的文件数） */
+  onSyncRatings?: (folder: string) => Promise<number>;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -17,9 +21,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   onSettingsSaved,
   onError,
+  lumenStatus,
+  onSyncRatings,
 }) => {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const handleSyncRatings = async () => {
+    if (!onSyncRatings) return;
+    setIsSyncing(true);
+    try {
+      const n = await onSyncRatings('');
+      onError?.(
+        n > 0
+          ? `已从 LUMEN RAW 同步 ${n} 张的评级到侧边栏。`
+          : 'LUMEN RAW 侧没有需要同步的评级变化。',
+      );
+    } catch (e) {
+      onError?.(`同步评级失败：${String(e)}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   useEffect(() => {
     if (isOpen) {
@@ -162,6 +186,59 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               开启后，RAW 预览会通过 LUMEN RAW 解码并应用显影曲线；引擎不可用时
               自动回退到相机内嵌预览，不影响选片。
             </p>
+
+            {/* 引擎握手状态（只读，来自 lumen_status_cmd 的缓存） */}
+            {settings.lumenEnabled && (
+              <p
+                className="text-[10px] leading-relaxed text-white/60"
+                role="status"
+                aria-live="polite"
+              >
+                {lumenStatus?.available
+                  ? `已连接 LUMEN RAW ${lumenStatus.foundVersion ?? ''}`.trim()
+                  : (lumenStatus?.detail ?? '正在探测引擎…')}
+              </p>
+            )}
+
+            <div className="flex flex-col gap-1.5 pt-1">
+              <label
+                htmlFor="settings-lumen-grid"
+                className="text-white/80 font-medium cursor-pointer flex items-center gap-2"
+              >
+                <input
+                  id="settings-lumen-grid"
+                  type="checkbox"
+                  checked={settings.lumenGridThumbnails}
+                  disabled={!settings.lumenEnabled}
+                  onChange={(e) =>
+                    setSettings({ ...settings, lumenGridThumbnails: e.target.checked })
+                  }
+                  className="focus-ring w-4 h-4 accent-white disabled:opacity-40"
+                />
+                宫格缩略图也用 LUMEN RAW 渲染
+              </label>
+              <p className="text-[10px] leading-relaxed text-white/60">
+                关闭时宫格用相机内嵌缩略图（近乎零成本）；开启后每张约 0.3 秒，
+                好处是宫格与大图显影一致。
+              </p>
+            </div>
+
+            {onSyncRatings && lumenStatus?.available && (
+              <div className="flex flex-col gap-1.5">
+                <button
+                  onClick={handleSyncRatings}
+                  disabled={isSyncing}
+                  className="focus-ring flex items-center justify-center gap-1.5 py-2 px-3 bg-white/5 hover:bg-white/10 active:scale-[0.98] text-white rounded-md text-xs transition-colors disabled:opacity-50"
+                  title="从 LUMEN RAW 拉取该文件夹的星级/旗标并写回 .xmp"
+                >
+                  {isSyncing ? '同步中…' : '从 LUMEN RAW 同步评级'}
+                </button>
+                <p className="text-[10px] leading-relaxed text-white/60">
+                  你在 LUMEN RAW 里改过的星级/旗标会写回侧边栏；本机改动不会被
+                  静默覆盖（两侧都改过时会跳过并提示）。
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Thumbnail Width */}

@@ -57,6 +57,8 @@ export interface AppSettings {
   lumenEnabled: boolean;
   /** lumen-cli.exe 路径（空 = 自动查找） */
   lumenCliPath: string;
+  /** 宫格缩略图是否走 LUMEN RAW 渲染（默认 false = EXIF 内嵌缩略图） */
+  lumenGridThumbnails: boolean;
 }
 
 /** lumen_preview_cmd 返回：previewPath = null 表示引擎不可用（前端静默降级） */
