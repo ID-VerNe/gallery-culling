@@ -487,7 +487,11 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
       aria-posinset={index + 1}
       aria-label={description}
       id={makeOptionId(group.id)}
-      tabIndex={-1}
+      // L-07：焦点模型收口为「容器 aria-activedescendant」一套。单元格**不再**
+      // 可聚焦（原先 tabIndex={-1} 会被 mousedown 抢焦点，导致焦点离开 listbox、
+      // activedescendant 契约失效）；同时在 mousedown 上 preventDefault，
+      // 阻止点击把焦点从容器移走 —— 点击后方向键仍能继续导航。
+      onMouseDown={(e) => e.preventDefault()}
       onClick={onSelect}
       className={`relative rounded-lg flex flex-col overflow-hidden cursor-pointer transition-[border-color,transform] border text-left bg-white/5 hover:bg-white/10 ${
         isPinned

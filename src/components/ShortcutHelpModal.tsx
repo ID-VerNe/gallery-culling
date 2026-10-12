@@ -29,6 +29,7 @@ const GROUPS: ShortcutGroup[] = [
       { keys: '0 / U', label: '清除星级与标记' },
       { keys: 'P', label: '标记保留 (Pick)' },
       { keys: 'X', label: '标记淘汰 (Reject)' },
+      { keys: 'Ctrl/⌘ + Z', label: '撤销上一处星级 / 标记改动' },
     ],
   },
   {

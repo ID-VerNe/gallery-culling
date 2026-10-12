@@ -15,6 +15,7 @@ import {
 import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
 import { api } from '../services/api';
 import { getToneFilterString } from '../utils/autoTone';
+import { zoomAtPoint } from '../utils/zoom';
 import { useLumenPreview } from '../hooks/useLumenPreview';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import type { ViewportEmptyState } from './PreviewViewport';
@@ -110,18 +111,28 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
     setAfterPos({ x: 0, y: 0 });
   }, []);
 
+  // 命中光标缩放（M-08）：两栏各自持有 rect，光标所在栏即锚点。
+  // 联动锁定时两栏写同一组 scale/pos（保持批次 B 的联动语义）。
   const handleWheel = (side: PaneSide, e: React.WheelEvent) => {
     e.preventDefault();
     setActivePane(side);
-    const delta = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const opts = { min: MIN_SCALE, max: MAX_SCALE, step: ZOOM_STEP };
+
     if (syncLock) {
-      const next = clampScale(beforeScale * delta);
-      setBeforeScale(next);
-      setAfterScale(next);
+      const next = zoomAtPoint(e, rect, beforeScale, beforePos, opts);
+      setBeforeScale(next.scale);
+      setAfterScale(next.scale);
+      setBeforePos(next.pos);
+      setAfterPos(next.pos);
     } else if (side === 'before') {
-      setBeforeScale((s) => clampScale(s * delta));
+      const next = zoomAtPoint(e, rect, beforeScale, beforePos, opts);
+      setBeforeScale(next.scale);
+      setBeforePos(next.pos);
     } else {
-      setAfterScale((s) => clampScale(s * delta));
+      const next = zoomAtPoint(e, rect, afterScale, afterPos, opts);
+      setAfterScale(next.scale);
+      setAfterPos(next.pos);
     }
   };
 

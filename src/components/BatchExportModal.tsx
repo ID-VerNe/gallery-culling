@@ -3,6 +3,8 @@ import { FolderOpen, Download, CheckCircle2, AlertTriangle } from 'lucide-react'
 import { ExportItem, PhotoGroupInfo } from '../types';
 import { api } from '../services/api';
 import { Modal } from './Modal';
+import { TaskProgressBar } from './TaskProgressBar';
+import { useTaskProgress } from '../hooks/useTaskProgress';
 
 interface BatchExportModalProps {
   isOpen: boolean;
@@ -55,6 +57,12 @@ const parentDirOf = (filePath: string): string => {
 const TARGET_IS_SOURCE_MESSAGE =
   '导出目标不能是源照片所在目录，请另选一个目标文件夹';
 
+/**
+ * 取消后的精确陈述。Q4 已拍板「临时目录 + 原子搬迁」= all-or-nothing：
+ * 取消时后端删掉临时目录，**目标目录零污染**。所以这里绝不能写"已复制 N 个"。
+ */
+const EXPORT_CANCELLED_MESSAGE = '已取消导出：目标目录未产生任何文件。';
+
 export const BatchExportModal: React.FC<BatchExportModalProps> = ({
   isOpen,
   onClose,
@@ -67,7 +75,9 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
   const [includeJpg, setIncludeJpg] = useState(true);
   const [exportFilter, setExportFilter] =
     useState<(typeof FILTERS)[number]['value']>('pick_or_rated');
-  const [isExporting, setIsExporting] = useState(false);
+  /** 导出任务：进度事件订阅 + 协作式取消（M-05）。`isRunning` 取代旧的 `isExporting`。 */
+  const exportTask = useTaskProgress('export');
+  const isExporting = exportTask.isRunning;
   /** 导出结果提示；`failed` 决定用警示态还是成功态呈现。 */
   const [exportResult, setExportResult] = useState<{
     message: string;
@@ -122,7 +132,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
       return;
     }
 
-    setIsExporting(true);
+    exportTask.start();
     setExportResult(null);
 
     const items: ExportItem[] = exportCandidates.map((g) => ({
@@ -138,6 +148,17 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
         includeRaw,
         includeJpg,
       );
+
+      // 取消优先判定：后端 all-or-nothing，取消即目标目录零污染。
+      // 决策：取消不算失败，用中性/成功态呈现，且不写"已复制 N 个"。
+      if (outcome.cancelled) {
+        setExportResult({
+          message: `${EXPORT_CANCELLED_MESSAGE}（目标：${targetFolder}）`,
+          failed: false,
+        });
+        return;
+      }
+
       // 如实呈现三个计数：成功 / 跳过（目标已存在同名文件）/ 失败。
       // 部分失败绝不能走「成功」呈现 —— 导出是本轮最高危的数据写入路径。
       const failedCount = outcome.failed.length;
@@ -169,9 +190,27 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
         onSuccess?.(`${summary}，目标：${targetFolder}`);
       }
     } catch (err) {
-      onError?.(`导出出错：${String(err)}`);
+      // 取消后后端若以 Err 返回，也按「已取消」呈现，而不是红色的失败。
+      // 用 ref getter 读最新值：这里读 `exportTask.cancelRequested` 会是陈旧闭包。
+      if (exportTask.isCancelRequested()) {
+        setExportResult({
+          message: `${EXPORT_CANCELLED_MESSAGE}（目标：${targetFolder}）`,
+          failed: false,
+        });
+      } else {
+        onError?.(`导出出错：${String(err)}`);
+      }
     } finally {
-      setIsExporting(false);
+      exportTask.finish();
+    }
+  };
+
+  /** 取消导出：置位后端取消标志。命令失败时用错误提示，不静默。 */
+  const handleCancelExport = async () => {
+    try {
+      await exportTask.cancel();
+    } catch (err) {
+      onError?.(`取消导出失败：${String(err)}`);
     }
   };
 
@@ -304,6 +343,18 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
           </label>
         </div>
       </fieldset>
+
+      {/* 导出进度 + 取消（M-05）。任务进行中才出现；由 useTaskProgress 驱动。 */}
+      <TaskProgressBar
+        isRunning={isExporting}
+        processed={exportTask.progress?.processed ?? 0}
+        total={exportTask.progress?.total ?? 0}
+        label="正在导出照片"
+        current={exportTask.progress?.current}
+        onCancel={handleCancelExport}
+        cancelRequested={exportTask.cancelRequested}
+        className="bg-background-base border border-white/10 rounded p-2.5"
+      />
 
       {/* Result Message：成功走绿色 status，部分失败走琥珀色 alert（必须立即知晓） */}
       {exportResult &&

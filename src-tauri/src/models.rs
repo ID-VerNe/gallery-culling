@@ -1,5 +1,11 @@
 use serde::{Deserialize, Serialize};
 
+/// 任务被用户取消时的哨兵错误文案。
+///
+/// `scan_folders_cmd` / `batch_export_cmd` 被取消时返回的 `Err` 字符串**精确等于**
+/// 此常量（前端据此把「取消」与真实失败区分开，而不是显示一条错误 toast）。
+pub const TASK_CANCELLED: &str = "任务已取消";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PhotoFileInfo {

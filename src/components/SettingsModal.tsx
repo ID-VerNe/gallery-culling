@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Settings, FolderOpen, Save } from 'lucide-react';
+import { Settings, FolderOpen, Save, Zap } from 'lucide-react';
 import { AppSettings, LumenCapabilities, LumenStatus } from '../types';
 import { api } from '../services/api';
+import { probeLumen, pickLumenCliPath } from '../services/lumenApi';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Modal } from './Modal';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -43,6 +44,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const loadedRef = useRef<AppSettings | null>(null);
   /** 「放弃未保存的更改？」确认弹窗。 */
   const [confirmOpen, setConfirmOpen] = useState(false);
+  /** 「测试连接」的结果（null = 尚未测试）。ok 决定配色，text 是给用户看的一行结论。 */
+  const [probe, setProbe] = useState<{ ok: boolean; text: string } | null>(null);
+  const [isProbing, setIsProbing] = useState(false);
 
   const handleSyncRatings = async () => {
     if (!onSyncRatings) return;
@@ -103,6 +107,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     });
     if (typeof selected === 'string') {
       setSettings({ ...settings, photoshopPath: selected });
+    }
+  };
+
+  /** M-15：与 Photoshop 路径同款的「浏览」——手打长路径易错（空格/中文用户名）。 */
+  const handleBrowseLumen = async () => {
+    if (!settings) return;
+    const selected = await pickLumenCliPath();
+    if (selected) {
+      setSettings({ ...settings, lumenCliPath: selected });
+      // 路径已变，旧的探测结论不再可信 —— 清掉，避免用户拿旧结论决策。
+      setProbe(null);
+    }
+  };
+
+  /**
+   * M-15：「测试连接」探测的是**输入框里尚未保存的路径**（这正是新增
+   * `probe_lumen_cmd` 的价值）。成功/失败都写成一行可读结论，绝不静默。
+   */
+  const handleTestLumen = async () => {
+    if (!settings) return;
+    setIsProbing(true);
+    setProbe(null);
+    try {
+      const r = await probeLumen(settings.lumenCliPath);
+      if (r.available) {
+        setProbe({
+          ok: true,
+          text: `连接成功：LUMEN RAW ${r.version ?? ''}`.trim(),
+        });
+      } else {
+        setProbe({ ok: false, text: r.error ?? '未能连接 LUMEN RAW（请检查 lumen-cli 路径）' });
+      }
+    } catch (e) {
+      setProbe({ ok: false, text: `测试失败：${String(e)}` });
+    } finally {
+      setIsProbing(false);
     }
   };
 
@@ -229,20 +269,59 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             >
               lumen-cli.exe 路径
             </label>
-            <input
-              id="settings-lumen-path"
-              type="text"
-              value={settings.lumenCliPath}
-              onChange={(e) =>
-                setSettings({ ...settings, lumenCliPath: e.target.value })
-              }
-              placeholder="留空 = 自动查找已安装的 LUMEN RAW"
-              className="focus-ring w-full bg-background-base border border-border-default rounded-md px-3 py-1.5 text-white outline-none font-mono text-[11px] focus:border-white/40"
-            />
+            <div className="flex items-center gap-2">
+              <input
+                id="settings-lumen-path"
+                type="text"
+                value={settings.lumenCliPath}
+                onChange={(e) => {
+                  setSettings({ ...settings, lumenCliPath: e.target.value });
+                  // 路径一改，上一次的探测结论就失效了。
+                  setProbe(null);
+                }}
+                placeholder="留空 = 自动查找已安装的 LUMEN RAW"
+                className="focus-ring flex-1 min-w-0 bg-background-base border border-border-default rounded-md px-3 py-1.5 text-white outline-none font-mono text-[11px] focus:border-white/40"
+              />
+              <button
+                onClick={handleBrowseLumen}
+                className="focus-ring px-3 py-1.5 bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white rounded-md flex items-center gap-1 transition-colors shrink-0"
+                title="选择 lumen-cli 路径"
+                aria-label="选择 lumen-cli 路径"
+              >
+                <FolderOpen className="w-3.5 h-3.5" aria-hidden="true" />
+              </button>
+            </div>
             <p className="text-[10px] leading-relaxed text-white/60">
               开启后，RAW 预览会通过 LUMEN RAW 解码并应用显影曲线；引擎不可用时
               自动回退到相机内嵌预览，不影响选片。
             </p>
+
+            {/* M-15：「测试连接」用输入框里的路径实测（未保存也生效）。 */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleTestLumen}
+                disabled={isProbing}
+                className="focus-ring flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white rounded-md text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title="用当前输入框里的路径探测引擎是否可用"
+                aria-label="测试 LUMEN RAW 连接"
+              >
+                <Zap className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>{isProbing ? '测试中…' : '测试连接'}</span>
+              </button>
+            </div>
+            {probe && (
+              <p
+                role="status"
+                aria-live="polite"
+                className={`text-[10px] leading-relaxed rounded-md border px-2 py-1.5 ${
+                  probe.ok
+                    ? 'text-emerald-200/90 border-emerald-200/25'
+                    : 'text-rose-200/90 border-rose-200/25'
+                }`}
+              >
+                {probe.text}
+              </p>
+            )}
 
             {/* 引擎握手状态（只读，来自 lumen_status_cmd 的缓存）。
                 门控用「已保存 || 本地勾选」：本地新勾上时也要出现，但要标注

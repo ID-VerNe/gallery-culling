@@ -72,6 +72,81 @@ vi.mock('@tauri-apps/api', () => ({
 }));
 
 /* -------------------------------------------------------------------------- */
+/* event: Tauri 事件总线（进度事件订阅，M-05）                                   */
+/* -------------------------------------------------------------------------- */
+
+export interface MockEvent<T = unknown> {
+  event: string;
+  id: number;
+  payload: T;
+}
+
+type EventHandler = (event: MockEvent) => void;
+
+/** 事件名 -> 已注册的监听器集合。 */
+const eventListeners = new Map<string, Set<EventHandler>>();
+let nextEventId = 1;
+
+/**
+ * 从测试里派发一个 Tauri 事件（`listen()` 订阅后即可收到）。
+ *
+ * 与真实后端一致：`listen` 是异步的，handler 在微任务之后才注册。测试若在
+ * `render` 后立刻派发，需要先 `await` 一个 tick 或包在 `waitFor` 里。
+ */
+export function emitMockEvent<T = unknown>(name: string, payload: T): void {
+  const handlers = eventListeners.get(name);
+  if (!handlers) return;
+  const event: MockEvent<T> = { event: name, id: nextEventId++, payload };
+  handlers.forEach((h) => h(event as MockEvent));
+}
+
+/** 清空已注册的事件监听器（套件之间隔离）。 */
+export function resetMockEvents(): void {
+  eventListeners.clear();
+  nextEventId = 1;
+}
+
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(async (name: string, handler: EventHandler) => {
+    if (!eventListeners.has(name)) eventListeners.set(name, new Set());
+    eventListeners.get(name)!.add(handler);
+    return () => {
+      eventListeners.get(name)?.delete(handler);
+    };
+  }),
+}));
+
+/* -------------------------------------------------------------------------- */
+/* window: Tauri 窗口钩子（关闭前 flush，M-17）                                  */
+/* -------------------------------------------------------------------------- */
+
+type CloseRequestedHandler = (event: { preventDefault: () => void }) => void;
+let closeRequestedHandler: CloseRequestedHandler | null = null;
+
+/** 触发一次「窗口关闭请求」，供 M-17 的关闭前 flush 用例使用。 */
+export function emitCloseRequested(): void {
+  closeRequestedHandler?.({ preventDefault: () => {} });
+}
+
+/** 清空窗口钩子状态（套件之间隔离）。 */
+export function resetMockWindow(): void {
+  closeRequestedHandler = null;
+}
+
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => ({
+    label: 'main',
+    onCloseRequested: vi.fn(async (handler: CloseRequestedHandler) => {
+      closeRequestedHandler = handler;
+      return () => {
+        if (closeRequestedHandler === handler) closeRequestedHandler = null;
+      };
+    }),
+    destroy: vi.fn(async () => undefined),
+  }),
+}));
+
+/* -------------------------------------------------------------------------- */
 /* 对外的 mock 控制面（测试文件从这里 import）                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -128,6 +203,8 @@ export function resetInvokeMocks(): void {
   commandErrors.clear();
   invokeHandler = null;
   invokeSpy.mockClear();
+  resetMockEvents();
+  resetMockWindow();
 }
 
 /* -------------------------------------------------------------------------- */

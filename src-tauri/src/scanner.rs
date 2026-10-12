@@ -1,10 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::models::{
     ExifData, FolderScanResult, PhotoFileInfo, PhotoGroupInfo, PhotoGroupStatus, ToneAdjustments,
+    TASK_CANCELLED,
 };
 use crate::xmp::{check_sidecar_exists, flag_from_xmp, get_xmp_path, read_xmp_full, XmpMetadata};
 
@@ -190,11 +192,40 @@ pub fn read_exif_metadata(file_path: &Path) -> Option<ExifData> {
     Some(data)
 }
 
-/// Scan a directory and collect file info
-fn scan_directory(dir_path: &Path, allowed_exts: &[&str]) -> HashMap<String, PhotoFileInfo> {
+/// 求 JPG / RAW 词干并集。
+///
+/// 旧实现用 `Vec::contains` 逐个查重 → **O(J×R)**（1 万 JPG × 1 万 RAW ≈ 10⁸ 次
+/// 字符串比较，是"万张秒级加载"的正面威胁）。改用 HashSet 后降为 O(J+R)。
+///
+/// 并集**顺序不影响结果**：分组最终顺序由末尾的排序阶段统一决定，且所有排序
+/// 比较器在键相等时都会用 `base_name` 兜底（词干唯一 → 全序严格 → 与输入顺序无关）。
+fn union_stems(
+    jpg_files: &HashMap<String, PhotoFileInfo>,
+    raw_files: &HashMap<String, PhotoFileInfo>,
+) -> Vec<String> {
+    let mut seen: HashSet<&str> = jpg_files.keys().map(|s| s.as_str()).collect();
+    for k in raw_files.keys() {
+        seen.insert(k.as_str());
+    }
+    seen.into_iter().map(|s| s.to_string()).collect()
+}
+
+/// Scan a directory and collect file info.
+///
+/// `cancel` 是协作式取消标志：枚举循环内每个 entry 前检查一次，置位即提前收工
+/// （返回部分结果；上层会在枚举后立即检查标志并短路为取消）。
+fn scan_directory(
+    dir_path: &Path,
+    allowed_exts: &[&str],
+    cancel: &AtomicBool,
+) -> HashMap<String, PhotoFileInfo> {
     let mut map = HashMap::new();
     if let Ok(entries) = fs::read_dir(dir_path) {
         for entry in entries.flatten() {
+            // 取消检查点：枚举阶段（每处理一个 entry）
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
             let path = entry.path();
             if !path.is_file() {
                 continue;
@@ -232,11 +263,21 @@ fn scan_directory(dir_path: &Path, allowed_exts: &[&str]) -> HashMap<String, Pho
     map
 }
 
-/// Scan JPG and optional RAW folder and assemble pairs
+/// Scan JPG and optional RAW folder and assemble pairs.
+///
+/// - `cancel`：协作式取消标志。检查点位于：枚举循环内、逐组主循环每次迭代开头、
+///   排序之前。**绝不在 `sort_by` 比较器内检查**——比较器会被调用 O(n log n) 次
+///   且必须满足全序，在里面读 atomic 会导致排序不稳定/逻辑错乱。
+/// - `report`：进度回调 `(phase, processed, total)`。phase ∈
+///   `"read"`（逐组读 EXIF/XMP/精修探测）、`"sort"`（进入排序）。是否节流由调用方决定。
+///
+/// 取消时返回 `Err(TASK_CANCELLED)`，前端据该文案区分「取消」与「失败」。
 pub fn scan_folders(
     jpg_folder: &str,
     raw_folder: Option<&str>,
     sort_order: &str,
+    cancel: &AtomicBool,
+    mut report: impl FnMut(&str, usize, usize),
 ) -> Result<FolderScanResult, String> {
     let jpg_path = Path::new(jpg_folder);
     if !jpg_path.is_dir() {
@@ -254,16 +295,22 @@ pub fn scan_folders(
         }
     });
 
-    let jpg_files = scan_directory(jpg_path, JPG_EXTENSIONS);
+    let jpg_files = scan_directory(jpg_path, JPG_EXTENSIONS, cancel);
+    if cancel.load(Ordering::Relaxed) {
+        return Err(TASK_CANCELLED.to_string());
+    }
     let raw_files = if let Some(p) = raw_path_buf {
         if p.is_dir() {
-            scan_directory(p, RAW_EXTENSIONS)
+            scan_directory(p, RAW_EXTENSIONS, cancel)
         } else {
             HashMap::new()
         }
     } else {
         HashMap::new()
     };
+    if cancel.load(Ordering::Relaxed) {
+        return Err(TASK_CANCELLED.to_string());
+    }
 
     fn merge_xmp_metadata_into_exif(exif: &mut Option<ExifData>, xmp_meta: &XmpMetadata) {
         if let Some(e) = exif.as_mut() {
@@ -293,7 +340,13 @@ pub fn scan_folders(
 
     if is_viewer_mode || raw_files.is_empty() {
         // Viewer mode: only JPG files
+        let viewer_total = jpg_files.len();
+        report("read", 0, viewer_total);
         for (stem_lower, jpg_info) in jpg_files {
+            // 取消检查点：逐组主循环每次迭代开头（此处是 EXIF/XMP 重 IO 所在）
+            if cancel.load(Ordering::Relaxed) {
+                return Err(TASK_CANCELLED.to_string());
+            }
             let path_obj = Path::new(&jpg_info.path);
             let has_xmp = check_sidecar_exists(path_obj);
             let xmp_meta = if has_xmp {
@@ -338,17 +391,19 @@ pub fn scan_folders(
                 exif,
                 thumbnail_path: None,
             });
+            report("read", groups.len(), viewer_total);
         }
     } else {
         // Pairing mode: match JPG and RAW by stem
-        let mut all_stems: Vec<String> = jpg_files.keys().cloned().collect();
-        for k in raw_files.keys() {
-            if !all_stems.contains(k) {
-                all_stems.push(k.clone());
-            }
-        }
+        let all_stems = union_stems(&jpg_files, &raw_files);
+        let pair_total = all_stems.len();
+        report("read", 0, pair_total);
 
         for stem_lower in all_stems {
+            // 取消检查点：逐组主循环每次迭代开头（EXIF/XMP 重 IO 所在）
+            if cancel.load(Ordering::Relaxed) {
+                return Err(TASK_CANCELLED.to_string());
+            }
             let jpg_opt = jpg_files.get(&stem_lower).cloned();
             let raw_opt = raw_files.get(&stem_lower).cloned();
 
@@ -444,10 +499,16 @@ pub fn scan_folders(
                 exif,
                 thumbnail_path: None,
             });
+            report("read", groups.len(), pair_total);
         }
     }
 
     // Sort groups
+    report("sort", groups.len(), groups.len());
+    // 排序前的取消检查点（排序不产生 IO，此点仅避免"已经取消还白排"）
+    if cancel.load(Ordering::Relaxed) {
+        return Err(TASK_CANCELLED.to_string());
+    }
     match sort_order {
         "filename" => {
             groups.sort_by(|a, b| a.base_name.to_lowercase().cmp(&b.base_name.to_lowercase()));
@@ -509,7 +570,194 @@ mod tests {
     #[test]
     fn test_scan_empty_directory() {
         let temp_dir = std::env::temp_dir();
-        let res = scan_folders(temp_dir.to_str().unwrap(), None, "filename");
+        let no_cancel = AtomicBool::new(false);
+        let res = scan_folders(
+            temp_dir.to_str().unwrap(),
+            None,
+            "filename",
+            &no_cancel,
+            |_, _, _| {},
+        );
         assert!(res.is_ok());
+    }
+
+    /// 造一个唯一临时子目录（进程 id + 纳秒时间戳）。
+    fn unique_dir(tag: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "gallery_scan_test_{}_{}_{}",
+            tag,
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn info(name: &str) -> PhotoFileInfo {
+        PhotoFileInfo {
+            name: name.to_string(),
+            extension: name.rsplit('.').next().unwrap_or("").to_string(),
+            path: format!("/tmp/{}", name),
+            size: 0,
+            mtime: 0,
+        }
+    }
+
+    /// N-11 回归护栏：新的 HashSet 并集必须与旧的 `Vec::contains` 逐项等价。
+    /// 修复前若把 `union_stems` 回退成 Vec::contains 版，本用例仍会通过（两者等价），
+    /// 它守护的是"重写配对逻辑时不得改变行为"，而不是性能本身。
+    #[test]
+    fn union_stems_matches_naive_vec_contains() {
+        let jpg_keys = ["img_0001", "img_0002", "img_0004", "img_0005"];
+        let raw_keys = ["img_0001", "img_0003", "img_0005", "img_0006"];
+
+        let mut jpg_files: HashMap<String, PhotoFileInfo> = HashMap::new();
+        for k in jpg_keys {
+            jpg_files.insert(k.to_string(), info(&format!("{}.jpg", k)));
+        }
+        let mut raw_files: HashMap<String, PhotoFileInfo> = HashMap::new();
+        for k in raw_keys {
+            raw_files.insert(k.to_string(), info(&format!("{}.cr3", k)));
+        }
+
+        // 旧实现（逐项等价参照）
+        let mut naive: Vec<String> = jpg_files.keys().cloned().collect();
+        for k in raw_files.keys() {
+            if !naive.contains(k) {
+                naive.push(k.clone());
+            }
+        }
+
+        let mut got = union_stems(&jpg_files, &raw_files);
+        let mut want = naive;
+        got.sort();
+        want.sort();
+        assert_eq!(got, want, "HashSet 并集必须与 Vec::contains 并集等价");
+
+        // 且并集恰好覆盖两侧全部词干、无重复
+        assert_eq!(got.len(), 6, "并集应为 6 个唯一词干");
+        assert_eq!(got.iter().collect::<HashSet<_>>().len(), got.len(), "不得有重复");
+    }
+
+    /// 扫描主循环的取消检查点：预置取消标志 → 返回 Err(哨兵)，且不产出结果。
+    #[test]
+    fn scan_returns_cancelled_sentinel_when_flag_set() {
+        let dir = unique_dir("cancel_read");
+        fs::write(dir.join("IMG_0001.jpg"), b"jpeg").unwrap();
+        fs::write(dir.join("IMG_0002.jpg"), b"jpeg").unwrap();
+
+        let cancel = AtomicBool::new(true); // 一开始就置位
+        let res = scan_folders(
+            dir.to_str().unwrap(),
+            None,
+            "filename",
+            &cancel,
+            |_, _, _| {},
+        );
+
+        assert!(res.is_err(), "取消时必须返回 Err 以便前端区分取消与失败");
+        assert_eq!(res.unwrap_err(), TASK_CANCELLED, "取消哨兵文案须精确匹配");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 未取消时正常返回，进度回调被调用且末次 processed == total。
+    #[test]
+    fn scan_reports_progress_and_completes() {
+        let dir = unique_dir("progress_ok");
+        fs::write(dir.join("IMG_0010.jpg"), b"jpeg").unwrap();
+        fs::write(dir.join("IMG_0011.jpg"), b"jpeg").unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let mut last = (String::new(), 0usize, 0usize);
+        let res = scan_folders(
+            dir.to_str().unwrap(),
+            None,
+            "filename",
+            &cancel,
+            |phase, processed, total| {
+                last = (phase.to_string(), processed, total);
+            },
+        )
+        .expect("未取消应成功");
+
+        assert_eq!(res.total_count, 2);
+        assert_eq!(last.1, 2, "末次 processed 应等于总数");
+        assert_eq!(last.2, 2, "末次 total 应等于总数");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// N-11 基线测量①：1 万 × 1 万词干的并集，`Vec::contains`（旧）对比 `HashSet`（新）。
+    /// 默认不跑（`cargo test --lib -- --ignored --nocapture` 才执行）。
+    #[test]
+    #[ignore = "基准测量：需要跑 --ignored 明确触发"]
+    fn bench_union_10k_vec_contains_vs_hashset() {
+        use std::time::Instant;
+        const N: usize = 10_000;
+
+        let jpg_keys: Vec<String> = (0..N).map(|i| format!("img_{:06}", i)).collect();
+        let raw_keys: Vec<String> = (0..N).map(|i| format!("img_{:06}", i + N / 2)).collect();
+
+        let t0 = Instant::now();
+        let mut naive: Vec<String> = jpg_keys.clone();
+        for k in &raw_keys {
+            if !naive.contains(k) {
+                naive.push(k.clone());
+            }
+        }
+        let legacy = t0.elapsed();
+
+        let mut jpg_files: HashMap<String, PhotoFileInfo> = HashMap::new();
+        for k in &jpg_keys {
+            jpg_files.insert(k.clone(), info(k));
+        }
+        let mut raw_files: HashMap<String, PhotoFileInfo> = HashMap::new();
+        for k in &raw_keys {
+            raw_files.insert(k.clone(), info(k));
+        }
+        let t1 = Instant::now();
+        let fast = union_stems(&jpg_files, &raw_files);
+        let new = t1.elapsed();
+
+        assert_eq!(fast.len(), naive.len());
+        println!(
+            "[bench_union] Vec::contains = {:?} | HashSet = {:?} | 旧/新 = {:.1}x",
+            legacy,
+            new,
+            legacy.as_secs_f64() / new.as_secs_f64().max(1e-9)
+        );
+    }
+
+    /// N-11 基线测量②：合成 N 张假 JPG 的**串行**扫描耗时（用于判定是否值得上 rayon）。
+    /// 默认不跑。
+    #[test]
+    #[ignore = "基准测量：需要跑 --ignored 明确触发"]
+    fn bench_scan_baseline_serial() {
+        use std::time::Instant;
+        const N: usize = 1500;
+        let dir = unique_dir("bench_scan");
+        for i in 0..N {
+            fs::write(dir.join(format!("IMG_{:05}.jpg", i)), b"FAKEJPEG").unwrap();
+        }
+
+        let cancel = AtomicBool::new(false);
+        let t0 = Instant::now();
+        let res = scan_folders(dir.to_str().unwrap(), None, "time_filename", &cancel, |_, _, _| {})
+            .expect("扫描应成功");
+        let elapsed = t0.elapsed();
+        println!(
+            "[bench_scan] N={} groups={} serial={:?} ({:.3} ms/张)",
+            N,
+            res.total_count,
+            elapsed,
+            elapsed.as_secs_f64() * 1000.0 / N as f64
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

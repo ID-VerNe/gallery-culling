@@ -185,6 +185,49 @@ export interface ExportOutcome {
   exported: number;
   skipped: number;
   failed: ExportFailure[];
+  /**
+   * 本次导出是否被用户取消（M-05）。
+   *
+   * 可选字段：后端契约在批次 C **增量**加入，前端必须能在后端尚未落地时照常
+   * 编译与运行，故用可选 + 默认 `false` 处理（`outcome.cancelled === true` 才算取消）。
+   * Q4 已拍板「临时目录 + 原子搬迁」= all-or-nothing：取消即目标目录零污染。
+   */
+  cancelled?: boolean;
+}
+
+/**
+ * `scan-progress` 事件的负载（M-05）。
+ * 与 Rust 侧 `emit("scan-progress", ...)` 对齐。扫描阶段实际只有：
+ * 枚举 → 逐组(EXIF + XMP + 精修探测) → 排序。
+ */
+export interface ScanProgressPayload {
+  /** 当前阶段标识，如 "enumerate" | "exif" | "xmp" | "sort" */
+  phase: string;
+  processed: number;
+  total: number;
+}
+
+/**
+ * `export-progress` 事件的负载（M-05）。
+ * `current` 是正在复制的文件名/路径，用于让用户看到"卡在哪一张"。
+ */
+export interface ExportProgressPayload {
+  processed: number;
+  total: number;
+  current: string;
+}
+
+/** 任务类型：扫描或批量导出。用于选择取消命令与进度事件名。 */
+export type TaskKind = 'scan' | 'export';
+
+/** 归一化后的进度（两种事件负载的统一形状，供 hook 与进度条消费）。 */
+export interface TaskProgress {
+  processed: number;
+  total: number;
+  /** 扫描阶段（仅 scan-progress 提供） */
+  phase?: string;
+  /** 当前处理项（仅 export-progress 提供） */
+  current?: string;
 }
 
 export interface FolderScanResult {

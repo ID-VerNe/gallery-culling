@@ -16,6 +16,7 @@ import {
 import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
 import { api } from '../services/api';
 import { getToneFilterString } from '../utils/autoTone';
+import { zoomAtPoint } from '../utils/zoom';
 import { useLumenPreview, type UseLumenPreviewResult } from '../hooks/useLumenPreview';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
@@ -115,19 +116,29 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
     [syncZoom, leftScale, focusedPane],
   );
 
+  // 命中光标缩放（M-08）：每栏各自持有 rect，光标只可能在其中一栏。
+  // 联动模式下以**悬停栏**为锚点算一次，再把同一组 scale/pos 写给两栏；
+  // 独立模式下只动被悬停的那一栏（批次 B 的独立缩放语义不变）。
   const handleWheel = (isLeft: boolean, e: React.WheelEvent) => {
     e.preventDefault();
     setFocusedPane(isLeft ? 'left' : 'right');
-    const delta = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const opts = { min: MIN_SCALE, max: MAX_SCALE, step: ZOOM_STEP };
 
     if (syncZoom) {
-      const newScale = Math.min(Math.max(leftScale * delta, MIN_SCALE), MAX_SCALE);
-      setLeftScale(newScale);
-      setRightScale(newScale);
+      const next = zoomAtPoint(e, rect, leftScale, leftPos, opts);
+      setLeftScale(next.scale);
+      setRightScale(next.scale);
+      setLeftPos(next.pos);
+      setRightPos(next.pos);
     } else if (isLeft) {
-      setLeftScale((s) => Math.min(Math.max(s * delta, MIN_SCALE), MAX_SCALE));
+      const next = zoomAtPoint(e, rect, leftScale, leftPos, opts);
+      setLeftScale(next.scale);
+      setLeftPos(next.pos);
     } else {
-      setRightScale((s) => Math.min(Math.max(s * delta, MIN_SCALE), MAX_SCALE));
+      const next = zoomAtPoint(e, rect, rightScale, rightPos, opts);
+      setRightScale(next.scale);
+      setRightPos(next.pos);
     }
   };
 

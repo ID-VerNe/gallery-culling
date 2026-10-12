@@ -6,10 +6,15 @@
  * - `failed.length === 0` → 绿色 + CheckCircle2 + role="status"，Toast 走 onSuccess。
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BatchExportModal } from './BatchExportModal';
-import { mockInvokeCommand } from '../test/setup';
+import {
+  emitMockEvent,
+  invokeCount,
+  mockInvokeCommand,
+  setInvokeHandler,
+} from '../test/setup';
 import type { PhotoGroupInfo } from '../types';
 
 const group: PhotoGroupInfo = {
@@ -99,5 +104,86 @@ describe('BatchExportModal —— 结果呈现', () => {
     expect(status.className).not.toContain('amber');
     const iconClass = status.querySelector('svg')?.getAttribute('class') ?? '';
     expect(iconClass).toContain('lucide-circle-check');
+  });
+});
+
+describe('BatchExportModal —— 导出进度与取消（M-05）', () => {
+  it('导出进行中：按钮禁用显示「导出中…」，并展示 aria-live 进度', async () => {
+    // 永久挂起的导出：让"进行中"状态稳定，便于断言进度 UI。
+    setInvokeHandler((cmd) => {
+      if (cmd === 'batch_export_cmd') return new Promise(() => {});
+      return null;
+    });
+    const { user } = setup();
+
+    await user.type(screen.getByLabelText('目标导出目录'), 'D:/out');
+    await user.click(screen.getByRole('button', { name: '开始导出' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '导出中…' })).toBeDisabled();
+    });
+
+    // 进度条在进行中即出现（尚无非确定性进度则显示"已处理 0 项"）
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+
+    act(() => {
+      emitMockEvent('export-progress', {
+        processed: 5,
+        total: 20,
+        current: 'IMG_0005.NEF',
+      });
+    });
+
+    // 确定性进度 + aria-live 区域承载"已处理 N / M"
+    await waitFor(() => {
+      expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '5');
+    });
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuemax', '20');
+    expect(document.querySelector('[aria-live="polite"]')).toHaveTextContent('5 / 20');
+    expect(screen.getByText('IMG_0005.NEF')).toBeInTheDocument();
+  });
+
+  it('取消后不再发起新的导出 invoke（导出永挂起）', async () => {
+    setInvokeHandler((cmd) => {
+      if (cmd === 'batch_export_cmd') return new Promise(() => {});
+      if (cmd === 'cancel_export_cmd') return null;
+      return null;
+    });
+    const { user } = setup();
+
+    await user.type(screen.getByLabelText('目标导出目录'), 'D:/out');
+    await user.click(screen.getByRole('button', { name: '开始导出' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '导出中…' })).toBeDisabled();
+    });
+    expect(invokeCount('batch_export_cmd')).toBe(1);
+
+    await user.click(screen.getByRole('button', { name: '取消' }));
+    await waitFor(() => expect(invokeCount('cancel_export_cmd')).toBe(1));
+
+    // 关键负向断言：取消之后不得再有任何新的 batch_export_cmd（不重复发起）
+    expect(invokeCount('batch_export_cmd')).toBe(1);
+    // 已请求取消 → 按钮切到「取消中…」并禁用，防止重复下发
+    expect(screen.getByRole('button', { name: '取消中…' })).toBeDisabled();
+  });
+
+  it('后端返回 cancelled：精确陈述「目标目录未产生任何文件」', async () => {
+    mockInvokeCommand('batch_export_cmd', {
+      exported: 0,
+      skipped: 0,
+      failed: [],
+      cancelled: true,
+    });
+    const { user, onError, onSuccess } = setup();
+
+    await runExport(user);
+
+    const status = await screen.findByRole('status');
+    expect(status).toHaveTextContent('已取消导出：目标目录未产生任何文件');
+    // 取消 ≠ 失败，也绝不写"已导出 N 个"这类会被误读为已落盘的措辞
+    expect(status).not.toHaveTextContent('已导出');
+    expect(onError).not.toHaveBeenCalled();
+    expect(onSuccess).not.toHaveBeenCalled();
   });
 });

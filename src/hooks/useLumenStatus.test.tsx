@@ -147,3 +147,66 @@ describe('useLumenStatus', () => {
     expect(result.current).toEqual(LUMEN_UNAVAILABLE);
   });
 });
+
+/**
+ * N-12：状态永不刷新的根因是 effect 只依赖 `enabled`。这里把「路径变化」
+ * 与「主动 refresh」两条重探路径都钉死 —— 回退依赖到 `[enabled]` 时，
+ * 前两条用例会立刻变红。
+ */
+const OK_STATUS = {
+  available: true,
+  enabled: true,
+  pinnedVersion: '0.5.2',
+  foundVersion: '0.5.2',
+  detail: 'ok',
+};
+
+describe('useLumenStatus —— 重探（N-12）', () => {
+  it('cliPath 变化会重新探测引擎', async () => {
+    mockInvokeCommand('lumen_status_cmd', OK_STATUS);
+
+    const { rerender } = renderHook(
+      ({ path }: { path: string }) => useLumenStatus(true, path),
+      { initialProps: { path: 'C:/a/lumen-cli.exe' } },
+    );
+
+    await advance(HANDSHAKE_DELAY);
+    expect(invokeCount('lumen_status_cmd')).toBe(1);
+
+    rerender({ path: 'C:/b/lumen-cli.exe' });
+    await advance(HANDSHAKE_DELAY);
+    expect(invokeCount('lumen_status_cmd')).toBe(2);
+  });
+
+  it('refreshToken 自增会无条件重探（保存设置后主动刷新）', async () => {
+    mockInvokeCommand('lumen_status_cmd', OK_STATUS);
+
+    const { rerender } = renderHook(
+      ({ token }: { token: number }) => useLumenStatus(true, 'C:/x/lumen-cli.exe', token),
+      { initialProps: { token: 0 } },
+    );
+
+    await advance(HANDSHAKE_DELAY);
+    expect(invokeCount('lumen_status_cmd')).toBe(1);
+
+    rerender({ token: 1 });
+    await advance(HANDSHAKE_DELAY);
+    expect(invokeCount('lumen_status_cmd')).toBe(2);
+  });
+
+  it('路径与开关都不变时不产生多余请求', async () => {
+    mockInvokeCommand('lumen_status_cmd', OK_STATUS);
+
+    const { rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) => useLumenStatus(enabled, 'C:/x/lumen-cli.exe'),
+      { initialProps: { enabled: true } },
+    );
+
+    await advance(HANDSHAKE_DELAY);
+    expect(invokeCount('lumen_status_cmd')).toBe(1);
+
+    rerender({ enabled: true });
+    await advance(HANDSHAKE_DELAY);
+    expect(invokeCount('lumen_status_cmd')).toBe(1);
+  });
+});

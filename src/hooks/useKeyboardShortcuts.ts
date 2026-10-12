@@ -18,6 +18,13 @@ interface KeyboardShortcutsProps {
   onHoldOriginalEnd?: () => void;
   onFocusSearch?: () => void;
   onOpenShortcutHelp?: () => void;
+  /**
+   * 单步撤销（L-11），绑定 `Ctrl/Cmd+Z`。
+   *
+   * 位置很关键：本分支排在**通用守卫之后**，所以焦点在输入框/文本域内时
+   * `Ctrl+Z` 仍是原生「撤销输入」，不会被照片撤销抢走。
+   */
+  onUndo?: () => void;
 }
 
 export function useKeyboardShortcuts({
@@ -38,6 +45,7 @@ export function useKeyboardShortcuts({
   onHoldOriginalEnd,
   onFocusSearch,
   onOpenShortcutHelp,
+  onUndo,
 }: KeyboardShortcutsProps) {
   /** `\` 是否处于按住态 —— 供 blur / visibilitychange 复位兜底判断，避免误复位。 */
   const holdActiveRef = useRef(false);
@@ -127,6 +135,21 @@ export function useKeyboardShortcuts({
       // 5 空格让位给可激活元素（不 preventDefault，保证原生按钮/链接能被空格激活）。
       //   宫格 `[role="listbox"]` 不在 isActivatable 内，故其空格仍 = 设为基准。
       if (e.key === ' ' && isActivatable(el)) return;
+
+      // 5.5 单步撤销：Ctrl/Cmd+Z（L-11）。刻意放在通用守卫**之后**——焦点在
+      //     输入框/文本域里时，Ctrl+Z 必须留给原生「撤销输入」。
+      //     也不与步骤 6 的组合键让路冲突：这里先返回，不会落到那句 return。
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        !e.altKey &&
+        (e.key === 'z' || e.key === 'Z')
+      ) {
+        if (onUndo) {
+          e.preventDefault();
+          onUndo();
+        }
+        return;
+      }
 
       // 6 组合键让路（Ctrl+X/Ctrl+P 等不再误触评级/旗标并写盘）；Ctrl/Cmd+F 显式豁免。
       if ((e.ctrlKey || e.metaKey || e.altKey) && e.key !== 'f') return;
@@ -345,5 +368,6 @@ export function useKeyboardShortcuts({
     onHoldOriginalEnd,
     onFocusSearch,
     onOpenShortcutHelp,
+    onUndo,
   ]);
 }

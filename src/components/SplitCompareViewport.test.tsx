@@ -5,7 +5,7 @@
  *  - 有 JPG 的照片零 lumen 请求（防止「顺手把解码成本翻倍」）。
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { SplitCompareViewport } from './SplitCompareViewport';
 import { invokeCount, mockInvokeCommand } from '../test/setup';
@@ -123,5 +123,48 @@ describe('SplitCompareViewport —— LUMEN 与调色口径（M-02）', () => {
 
     expect(container.querySelectorAll('img')).toHaveLength(2);
     expect(invokeCount('lumen_preview_cmd')).toBe(0);
+  });
+});
+
+/**
+ * M-08：滚轮必须「以指针为中心缩放」。jsdom 的 getBoundingClientRect 桩把每栏
+ * 都报成 0,0,1200,800（中心 O=(600,400)），故光标放 (1200,800) 时
+ * d=(600,400)、k=1.25 ⇒ pos′=(−150,−100)。修复前 translate 恒为 0，本组用例失败。
+ */
+describe('SplitCompareViewport —— 命中光标缩放（M-08）', () => {
+  it('联动模式下滚轮以悬停栏为锚点，两栏同步且带命中平移量', () => {
+    const { container } = renderSplit({
+      leftGroup: withJpg('left'),
+      rightGroup: withJpg('right'),
+    });
+    const imgs = container.querySelectorAll('img');
+    const rightPane = imgs[1].parentElement as HTMLElement;
+
+    fireEvent.wheel(rightPane, { clientX: 1200, clientY: 800, deltaY: -100 });
+
+    for (const img of imgs) {
+      expect(img.style.transform).toContain('translate(-150px, -100px)');
+      expect(img.style.transform).toContain('scale(1.25)');
+    }
+  });
+
+  it('独立缩放时只作用于被悬停的那一栏', () => {
+    const { container } = renderSplit({
+      leftGroup: withJpg('left'),
+      rightGroup: withJpg('right'),
+    });
+    const imgs = container.querySelectorAll('img');
+    const rightPane = imgs[1].parentElement as HTMLElement;
+
+    // 关闭联动（真开关）
+    fireEvent.click(screen.getByLabelText('切换双图联动同步缩放'));
+
+    fireEvent.wheel(rightPane, { clientX: 1200, clientY: 800, deltaY: -100 });
+
+    expect(imgs[1].style.transform).toContain('translate(-150px, -100px)');
+    expect(imgs[1].style.transform).toContain('scale(1.25)');
+    // 左栏纹丝不动
+    expect(imgs[0].style.transform).toContain('translate(0px, 0px)');
+    expect(imgs[0].style.transform).toContain('scale(1)');
   });
 });

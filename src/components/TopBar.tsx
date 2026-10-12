@@ -13,6 +13,7 @@ import {
   Search,
 } from 'lucide-react';
 import { FilterMode, SortOrder, ViewMode } from '../types';
+import { FILTER_OPTIONS } from '../utils/filterMatch';
 
 interface TopBarProps {
   jpgFolder: string;
@@ -25,6 +26,11 @@ interface TopBarProps {
   isLoading: boolean;
   filterMode: FilterMode;
   onFilterChange: (val: FilterMode) => void;
+  /**
+   * 各筛选档的计数（M-14）。缺省时**优雅降级**：只显示档位文案，不显示 `(N)`，
+   * 既不显示 0 也不崩溃 —— 让 TopBar 在宿主尚未接线时也可独立编译/测试。
+   */
+  filterCounts?: Record<FilterMode, number>;
   sortOrder: SortOrder;
   onSortChange: (val: SortOrder) => void;
   viewMode: ViewMode;
@@ -59,6 +65,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   isLoading,
   filterMode,
   onFilterChange,
+  filterCounts,
   sortOrder,
   onSortChange,
   viewMode,
@@ -213,24 +220,16 @@ export const TopBar: React.FC<TopBarProps> = ({
             aria-label="照片筛选过滤"
             className="focus-ring bg-transparent border-none outline-none text-white cursor-pointer text-xs max-w-[8.5rem]"
           >
-            <option value="all" className="bg-background-base">
-              全部照片
-            </option>
-            <option value="pick" className="bg-background-base">
-              仅已保留 (Pick)
-            </option>
-            <option value="reject" className="bg-background-base">
-              已淘汰 (Reject)
-            </option>
-            <option value="unmarked" className="bg-background-base">
-              未标记
-            </option>
-            <option value="star3" className="bg-background-base">
-              ★3 星以上
-            </option>
-            <option value="star5" className="bg-background-base">
-              ★5 星精选
-            </option>
+            {FILTER_OPTIONS.map(({ mode, label }) => {
+              // 计数缺省时不显示 `(N)`（优雅降级）；有计数时即使是 0 也显示，
+              // 因为「这一档有 0 张」本身就是用户决策要的信息。
+              const count = filterCounts?.[mode];
+              return (
+                <option key={mode} value={mode} className="bg-background-base">
+                  {count === undefined ? label : `${label} (${count})`}
+                </option>
+              );
+            })}
           </select>
         </div>
 

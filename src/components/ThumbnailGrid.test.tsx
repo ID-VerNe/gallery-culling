@@ -5,8 +5,8 @@
  * 抛错，两条路都必须静默回落到相机内嵌缩略图。断言用 invoke 的**命令名**来区分
  * 走了哪条路。
  */
-import { describe, expect, it } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ThumbnailGrid } from './ThumbnailGrid';
 import { invokeCount, lastInvokeArgs, mockInvokeCommand, mockInvokeError } from '../test/setup';
 import type { PhotoGroupInfo } from '../types';
@@ -248,5 +248,48 @@ describe('ThumbnailGrid —— 无障碍与选择', () => {
   it('空列表显示空态而不是空白', () => {
     renderGrid([], false);
     expect(screen.getByText('当前筛选下没有照片')).toBeInTheDocument();
+  });
+
+  it('L-06：每个 option 带 aria-setsize / aria-posinset（虚拟化列表也能报出总数与位置）', async () => {
+    mockInvokeCommand('get_thumbnail_cmd', 'thumb.jpg');
+    renderGrid([group('a'), group('b'), group('c')], false);
+
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(3));
+    const cells = screen.getAllByRole('option');
+    cells.forEach((cell, i) => {
+      expect(cell).toHaveAttribute('aria-setsize', '3');
+      expect(cell).toHaveAttribute('aria-posinset', String(i + 1));
+    });
+  });
+
+  it('L-07：单元格不可聚焦，点击不抢容器焦点，且选中回调照常', async () => {
+    mockInvokeCommand('get_thumbnail_cmd', 'thumb.jpg');
+    const onSelect = vi.fn();
+    render(
+      <ThumbnailGrid
+        groups={[group('a'), group('b')]}
+        selectedIndex={0}
+        onSelect={onSelect}
+      />,
+    );
+
+    const list = await screen.findByRole('listbox');
+    const cells = screen.getAllByRole('option');
+
+    // 焦点主始终是 listbox 容器
+    list.focus();
+    expect(document.activeElement).toBe(list);
+
+    // mousedown 上 preventDefault 生效（fireEvent 返回 false = 已取消默认动作）
+    expect(fireEvent.mouseDown(cells[1])).toBe(false);
+
+    // 单元格自身不再可聚焦（有 tabIndex={-1} 时这行会失败）
+    cells[1].focus();
+    expect(document.activeElement).not.toBe(cells[1]);
+    expect(cells[1].hasAttribute('tabindex')).toBe(false);
+
+    // 点击仍触发选中
+    fireEvent.click(cells[1]);
+    expect(onSelect).toHaveBeenCalledWith(1);
   });
 });

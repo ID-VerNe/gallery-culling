@@ -15,6 +15,7 @@ import {
 import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
 import { api } from '../services/api';
 import { getToneFilterString } from '../utils/autoTone';
+import { zoomAtPoint } from '../utils/zoom';
 import { useLumenPreview } from '../hooks/useLumenPreview';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
@@ -101,13 +102,21 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
     setPosition({ x: 0, y: 0 });
   }, []);
 
-  // Handle Wheel Zoom
+  // Handle Wheel Zoom —— 命中光标（M-08）：改 scale 的同时按光标反算 pos，
+  // 光标下的图像点保持在指针下。与快捷键说明「滚轮 · 以指针为中心缩放」一致。
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
       e.preventDefault();
-      zoomBy(e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP);
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      const next = zoomAtPoint(e, rect, scale, position, {
+        min: MIN_SCALE,
+        max: MAX_SCALE,
+        step: ZOOM_STEP,
+      });
+      setScale(next.scale);
+      setPosition(next.pos);
     },
-    [zoomBy],
+    [scale, position],
   );
 
   // Handle Pan Dragging

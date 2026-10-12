@@ -1,7 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tauri::State;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tauri::{Emitter, State};
 
 use crate::db::Database;
 use crate::lumen::{self, LumenError, LumenStatus, PreviewVariant, PINNED_LUMEN_VERSION};
@@ -19,18 +22,147 @@ pub struct AppState {
     pub db: Database,
     /// LUMEN RAW 常驻运行时（A 通道）：spawn 一次、握手、复用
     pub lumen: lumen::LumenRuntime,
+    /// 扫描取消标志（协作式轮询）。置位后扫描在下一个安全点尽早返回。
+    pub scan_cancel: Arc<AtomicBool>,
+    /// 导出取消标志（协作式轮询）。置位后导出丢弃临时目录，目标目录零污染。
+    pub export_cancel: Arc<AtomicBool>,
+}
+
+/// `scan-progress` 事件负载。字段名即前端读取的键（都是单词，保持小写）。
+#[derive(Clone, serde::Serialize)]
+pub struct ScanProgress {
+    /// 阶段："enumerate" | "read" | "sort" | "done"
+    pub phase: String,
+    /// 当前阶段已处理数
+    pub processed: usize,
+    /// 当前阶段总数（枚举阶段未知时为 0）
+    pub total: usize,
+}
+
+/// `export-progress` 事件负载。
+#[derive(Clone, serde::Serialize)]
+pub struct ExportProgress {
+    pub processed: usize,
+    pub total: usize,
+    /// 当前项名称（`ExportItem.base_name`），供 UI 显示"正在导出 xxx"
+    pub current: String,
+}
+
+/// 进度节流器。
+///
+/// 万张规模下每张都 `emit` 会淹掉 IPC（前端主线程忙于解码事件），因此只在
+/// **阶段切换 / 首个 / 末个 / 累计 ≥32 项 / 距上次 ≥80ms** 时放行一次。
+struct ProgressThrottle {
+    last_emit: std::time::Instant,
+    last_count: usize,
+    last_phase: String,
+}
+
+impl ProgressThrottle {
+    fn new() -> Self {
+        Self {
+            last_emit: std::time::Instant::now(),
+            last_count: 0,
+            last_phase: String::new(),
+        }
+    }
+
+    fn should_emit(&mut self, phase: &str, processed: usize, total: usize) -> bool {
+        let phase_changed = phase != self.last_phase.as_str();
+        let due = self.last_emit.elapsed() >= Duration::from_millis(80)
+            || processed.saturating_sub(self.last_count) >= 32
+            || processed == 0
+            || (total > 0 && processed >= total);
+        if phase_changed || due {
+            self.last_emit = std::time::Instant::now();
+            self.last_count = processed;
+            self.last_phase = phase.to_string();
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// 当前 Unix 秒（清单文件用）。
+fn now_epoch_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// 请求取消正在进行的扫描（幂等：没有进行中的任务时调用也安全）。
+#[tauri::command]
+pub fn cancel_scan_cmd(state: State<'_, AppState>) -> Result<(), String> {
+    state.scan_cancel.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+/// 请求取消正在进行的导出（幂等）。取消后目标目录不会残留半成品。
+#[tauri::command]
+pub fn cancel_export_cmd(state: State<'_, AppState>) -> Result<(), String> {
+    state.export_cancel.store(true, Ordering::SeqCst);
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn scan_folders_cmd(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
     jpg_folder: String,
     raw_folder: Option<String>,
     sort_order: Option<String>,
 ) -> Result<FolderScanResult, String> {
     let sort = sort_order.unwrap_or_else(|| "time_filename".to_string());
-    tokio::task::spawn_blocking(move || scan_folders(&jpg_folder, raw_folder.as_deref(), &sort))
-        .await
-        .map_err(|e| format!("扫描任务异常: {}", e))?
+    let cancel = state.scan_cancel.clone();
+    cancel.store(false, Ordering::SeqCst); // 复位上一轮遗留的取消标志
+
+    // 首帧进度：让 UI 立刻切到"扫描中"并显示阶段，而不是干等到枚举结束
+    let _ = app.emit(
+        "scan-progress",
+        ScanProgress {
+            phase: "enumerate".to_string(),
+            processed: 0,
+            total: 0,
+        },
+    );
+
+    let app_for_progress = app.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let mut throttle = ProgressThrottle::new();
+        scan_folders(
+            &jpg_folder,
+            raw_folder.as_deref(),
+            &sort,
+            &cancel,
+            |phase, processed, total| {
+                if throttle.should_emit(phase, processed, total) {
+                    let _ = app_for_progress.emit(
+                        "scan-progress",
+                        ScanProgress {
+                            phase: phase.to_string(),
+                            processed,
+                            total,
+                        },
+                    );
+                }
+            },
+        )
+    })
+    .await
+    .map_err(|e| format!("扫描任务异常: {}", e))??;
+
+    // 收尾进度：UI 据此把进度条推到 100%
+    let _ = app.emit(
+        "scan-progress",
+        ScanProgress {
+            phase: "done".to_string(),
+            processed: result.total_count,
+            total: result.total_count,
+        },
+    );
+    Ok(result)
 }
 
 #[tauri::command]
@@ -209,47 +341,216 @@ pub struct ExportOutcome {
     pub skipped: usize,
     /// 失败明细（原来被 `.is_ok()` 静默吞掉的错误）
     pub failed: Vec<ExportFailure>,
+    /// 是否因用户取消而提前结束（字段名固定为 `cancelled`，勿改成 `canceled`）。
+    /// 策略 3 下取消 = 目标目录零新增文件（临时目录被整体删除）。
+    pub cancelled: bool,
+}
+
+/// 导出清单里的一项（记录每个源文件的最终处置）。
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportManifestItem {
+    pub src: String,
+    pub dst: String,
+    /// "copied" | "skipped" | "failed" | "cancelled"
+    ///
+    /// 说明：方案文档把取值限定为 `copied|overwritten|skipped|failed`。本项目
+    /// **从不覆盖**目标同名文件（一律 skipped），且取消会把已暂存但未搬迁的项
+    /// 如实标为 `cancelled`（否则清单会谎称它们被复制了）。故在不新增"被覆盖"
+    /// 取值的前提下，实际出现的是这四种。
+    pub result: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// 写在 `target/.gallery-export.json` 的导出清单（key 为 camelCase，照 §2 形状）。
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportManifest<'a> {
+    version: u32,
+    started_at: u64,
+    finished_at: u64,
+    /// "completed" | "cancelled" | "failed"
+    status: &'a str,
+    include_jpg: bool,
+    include_raw: bool,
+    items: &'a [ExportManifestItem],
+}
+
+/// 清单文件名（与临时目录前缀同为点开头，避免被当作正常照片）。
+const EXPORT_MANIFEST_NAME: &str = ".gallery-export.json";
+/// 临时目录前缀：`target/.gallery-export-tmp-<uuid>/`。
+const EXPORT_TMP_PREFIX: &str = ".gallery-export-tmp-";
+
+/// 暂存到临时目录、等待原子搬迁的一个文件。
+struct StagedFile {
+    tmp: PathBuf,
+    dst: PathBuf,
+    /// 对应 `manifest` 中那一项的下标，搬迁失败/取消时回写结果。
+    manifest_idx: usize,
+}
+
+/// 导出累积器：把"写临时目录"与"原子搬迁"两个阶段的账分开记。
+#[derive(Default)]
+struct ExportStaging {
+    outcome: ExportOutcome,
+    manifest: Vec<ExportManifestItem>,
+    staged: Vec<StagedFile>,
+}
+
+impl ExportStaging {
+    /// 把一个源文件预备进临时目录（**不碰目标名**）。
+    ///
+    /// - 源不存在 → 跳过（沿用既有"只复制存在文件"语义）；
+    /// - 目标已存在同名文件 → 计入 `skipped`，**不覆盖**（保护用户已有文件）；
+    /// - `fs::copy` 失败 → 计入 `failed`。
+    fn stage(&mut self, src: &Path, tmp_dir: &Path, target_dir: &Path) {
+        if !src.exists() {
+            return;
+        }
+        let Some(name) = src.file_name() else {
+            return;
+        };
+        let dst = target_dir.join(name);
+        let src_str = src.to_string_lossy().to_string();
+        let dst_str = dst.to_string_lossy().to_string();
+        if dst.exists() {
+            self.outcome.skipped += 1;
+            self.manifest.push(ExportManifestItem {
+                src: src_str,
+                dst: dst_str,
+                result: "skipped".to_string(),
+                error: None,
+            });
+            return;
+        }
+        let tmp = tmp_dir.join(name);
+        match fs::copy(src, &tmp) {
+            Ok(_) => {
+                let manifest_idx = self.manifest.len();
+                self.staged.push(StagedFile {
+                    tmp,
+                    dst,
+                    manifest_idx,
+                });
+                self.manifest.push(ExportManifestItem {
+                    src: src_str,
+                    dst: dst_str,
+                    result: "copied".to_string(),
+                    error: None,
+                });
+            }
+            Err(e) => {
+                self.outcome.failed.push(ExportFailure {
+                    path: src_str.clone(),
+                    reason: e.to_string(),
+                });
+                self.manifest.push(ExportManifestItem {
+                    src: src_str,
+                    dst: dst_str,
+                    result: "failed".to_string(),
+                    error: Some(e.to_string()),
+                });
+            }
+        }
+    }
+
+    /// 提交阶段：把临时目录里暂存的文件**逐个原子搬迁**到目标名（同卷 rename）。
+    fn commit(&mut self) {
+        let staged = std::mem::take(&mut self.staged);
+        for f in staged {
+            match fs::rename(&f.tmp, &f.dst) {
+                Ok(_) => self.outcome.exported += 1,
+                Err(e) => {
+                    self.outcome.failed.push(ExportFailure {
+                        path: f.dst.to_string_lossy().to_string(),
+                        reason: e.to_string(),
+                    });
+                    self.manifest[f.manifest_idx].result = "failed".to_string();
+                    self.manifest[f.manifest_idx].error = Some(e.to_string());
+                }
+            }
+        }
+    }
+
+    /// 取消收尾：把已暂存但未搬迁的项如实标为 `cancelled`。
+    /// 文件本体随临时目录一起删除，**绝不逐个删除目标目录里的文件**
+    /// （那会毁掉目标目录里本来就有、被同名覆盖过的用户文件）。
+    fn mark_cancelled(&mut self) {
+        let staged = std::mem::take(&mut self.staged);
+        for f in staged {
+            self.manifest[f.manifest_idx].result = "cancelled".to_string();
+            self.manifest[f.manifest_idx].error =
+                Some("导出已取消，未搬迁到目标目录".to_string());
+        }
+    }
+}
+
+/// 写导出清单（best-effort：清单写失败不影响导出结果，只打日志）。
+fn write_export_manifest(
+    target_dir: &Path,
+    started_at: u64,
+    status: &str,
+    include_jpg: bool,
+    include_raw: bool,
+    items: &[ExportManifestItem],
+) {
+    let manifest = ExportManifest {
+        version: 1,
+        started_at,
+        finished_at: now_epoch_secs(),
+        status,
+        include_jpg,
+        include_raw,
+        items,
+    };
+    match serde_json::to_vec_pretty(&manifest) {
+        Ok(bytes) => {
+            if let Err(e) = fs::write(target_dir.join(EXPORT_MANIFEST_NAME), bytes) {
+                eprintln!("写入导出清单失败（已忽略）: {}", e);
+            }
+        }
+        Err(e) => eprintln!("序列化导出清单失败（已忽略）: {}", e),
+    }
 }
 
 #[tauri::command]
 pub async fn batch_export_cmd(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
     items: Vec<ExportItem>,
     target_folder: String,
     include_raw: bool,
     include_jpg: bool,
 ) -> Result<ExportOutcome, String> {
+    let cancel = state.export_cancel.clone();
+    cancel.store(false, Ordering::SeqCst); // 复位上一轮遗留的取消标志
+    let app_for_progress = app.clone();
+
     tokio::task::spawn_blocking(move || {
-        export_items(items, Path::new(&target_folder), include_raw, include_jpg)
+        let mut throttle = ProgressThrottle::new();
+        export_items(
+            items,
+            Path::new(&target_folder),
+            include_raw,
+            include_jpg,
+            &cancel,
+            |processed, total, current| {
+                if throttle.should_emit("export", processed, total) {
+                    let _ = app_for_progress.emit(
+                        "export-progress",
+                        ExportProgress {
+                            processed,
+                            total,
+                            current: current.to_string(),
+                        },
+                    );
+                }
+            },
+        )
     })
     .await
     .map_err(|e| format!("批量导出任务异常: {}", e))?
-}
-
-/// 复制单个文件到目标目录（与 `#[tauri::command]` 解耦，便于单测）。
-///
-/// - 源不存在 → 跳过（沿用既有「只复制存在文件」语义）；
-/// - 目标已存在同名文件 → 计入 `skipped`，**不覆盖**（避免静默覆盖用户文件）；
-/// - `fs::copy` 失败 → 计入 `failed`；
-/// - 成功 → `exported += 1`。
-fn copy_one_to_dir(src: &Path, target_dir: &Path, outcome: &mut ExportOutcome) {
-    if !src.exists() {
-        return;
-    }
-    let Some(file_name) = src.file_name() else {
-        return;
-    };
-    let dst = target_dir.join(file_name);
-    if dst.exists() {
-        outcome.skipped += 1;
-        return;
-    }
-    match fs::copy(src, &dst) {
-        Ok(_) => outcome.exported += 1,
-        Err(e) => outcome.failed.push(ExportFailure {
-            path: src.to_string_lossy().to_string(),
-            reason: e.to_string(),
-        }),
-    }
 }
 
 /// 批量导出的**纯实现**（不含 tauri 命令属性，可直接被单测调用）。
@@ -259,11 +560,20 @@ fn copy_one_to_dir(src: &Path, target_dir: &Path, outcome: &mut ExportOutcome) {
 /// `fs::copy(src, dst)` 的 `src == dst` 会让 Rust 标准库**截断源文件**
 /// （Unix 走 O_TRUNC 确定清零；Windows 走 CopyFileEx 可能截断或失败），
 /// 即用户原始 RAW/JPG 被不可逆破坏。
+///
+/// **收尾策略（策略 3：临时目录 + 原子搬迁）**：全部文件先写进
+/// `target/.gallery-export-tmp-<uuid>/`，全部成功后再逐个 `rename` 到 `target/`。
+/// 取消时直接删除临时目录 —— 目标目录零污染，且绝不误删目标目录里本已存在的
+/// 同名用户文件（这正是"取消后删除已复制文件"方案的致命缺陷）。
+///
+/// `cancel` 为协作式取消标志；`on_progress` 形如 `(processed, total, current)`。
 pub fn export_items(
     items: Vec<ExportItem>,
     target_folder: &Path,
     include_raw: bool,
     include_jpg: bool,
+    cancel: &AtomicBool,
+    mut on_progress: impl FnMut(usize, usize, &str),
 ) -> Result<ExportOutcome, String> {
     fs::create_dir_all(target_folder)
         .map_err(|e| format!("创建目标导出目录失败: {}", e))?;
@@ -287,32 +597,98 @@ pub fn export_items(
         }
     }
 
-    let mut outcome = ExportOutcome::default();
-    for item in items {
-        // Copy JPG if requested
+    let started_at = now_epoch_secs();
+
+    // 临时目录建在目标目录**内部** → 保证与最终目标同卷，`rename` 才是原子的
+    // （跨卷 rename 会退化为 copy，失去原子性）。
+    let tmp_dir = target_folder.join(format!("{}{}", EXPORT_TMP_PREFIX, uuid::Uuid::new_v4()));
+    fs::create_dir_all(&tmp_dir).map_err(|e| format!("创建导出临时目录失败: {}", e))?;
+
+    let total = items.len();
+    let mut staging = ExportStaging::default();
+    let mut cancelled = false;
+
+    'outer: for (idx, item) in items.iter().enumerate() {
+        // 检查点①：每项迭代开头
+        if cancel.load(Ordering::SeqCst) {
+            cancelled = true;
+            break;
+        }
+        on_progress(idx, total, item.base_name.as_str());
+
         if include_jpg {
             if let Some(jpg_path_str) = &item.jpg_path {
-                copy_one_to_dir(Path::new(jpg_path_str), target_folder, &mut outcome);
+                staging.stage(Path::new(jpg_path_str), &tmp_dir, target_folder);
+                // 检查点②：JPG 复制后
+                if cancel.load(Ordering::SeqCst) {
+                    cancelled = true;
+                    break 'outer;
+                }
             }
         }
 
-        // Copy RAW if requested
         if include_raw {
             if let Some(raw_path_str) = &item.raw_path {
                 let src = Path::new(raw_path_str);
                 if src.exists() {
-                    copy_one_to_dir(src, target_folder, &mut outcome);
+                    staging.stage(src, &tmp_dir, target_folder);
+                    // 检查点③：RAW 复制后
+                    if cancel.load(Ordering::SeqCst) {
+                        cancelled = true;
+                        break 'outer;
+                    }
                     // Also copy matching .xmp if exists
                     let xmp_src = src.with_extension("xmp");
                     if xmp_src.exists() {
-                        copy_one_to_dir(&xmp_src, target_folder, &mut outcome);
+                        staging.stage(&xmp_src, &tmp_dir, target_folder);
+                        // 检查点④：XMP 复制后
+                        if cancel.load(Ordering::SeqCst) {
+                            cancelled = true;
+                            break 'outer;
+                        }
                     }
                 }
             }
         }
     }
 
-    Ok(outcome)
+    if cancelled {
+        // 取消：删临时目录，目标目录保持原样（零污染）
+        let _ = fs::remove_dir_all(&tmp_dir);
+        staging.mark_cancelled();
+        staging.outcome.cancelled = true;
+        write_export_manifest(
+            target_folder,
+            started_at,
+            "cancelled",
+            include_jpg,
+            include_raw,
+            &staging.manifest,
+        );
+        on_progress(total, total, "");
+        return Ok(staging.outcome);
+    }
+
+    // 提交阶段：逐个原子搬迁。到这里视为已提交，不再响应取消 —— rename 是极快的
+    // 元数据操作，中途停下反而制造半成品；要么全搬，要么（取消时）一个不搬。
+    staging.commit();
+    let _ = fs::remove_dir_all(&tmp_dir);
+
+    let status = if staging.outcome.failed.is_empty() {
+        "completed"
+    } else {
+        "failed"
+    };
+    write_export_manifest(
+        target_folder,
+        started_at,
+        status,
+        include_jpg,
+        include_raw,
+        &staging.manifest,
+    );
+    on_progress(total, total, "");
+    Ok(staging.outcome)
 }
 
 #[tauri::command]
@@ -417,6 +793,78 @@ pub async fn lumen_status_cmd(state: State<'_, AppState>) -> Result<LumenStatus,
         .map_err(|e| format!("LUMEN 版本查询任务异常: {}", e))?;
 
     Ok(lumen::lumen_status_from(true, Some(exe), version))
+}
+
+/// `probe_lumen_cmd` 的返回：直接回答"这个路径能不能用"。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LumenProbeResult {
+    /// 是否探测到一个可用的 lumen-cli（找到文件且能读到版本号）
+    pub available: bool,
+    pub version: Option<String>,
+    /// 不可用时的原因（中文），供设置面板直接展示
+    pub error: Option<String>,
+}
+
+/// 探测指定（或自动查找的）lumen-cli 是否可用。
+///
+/// 与 `lumen_status_cmd` 的关键区别：**本命令不读已保存的设置**，而是直接使用
+/// 调用方传入的 `cli_path`。设置面板的「测试连接」必须能校验**输入框里尚未保存**
+/// 的路径——现有 `lumen_status_cmd` 只认已落库的路径，读不到未保存值（这正是
+/// M-15/N-12"改路径后引擎状态永不刷新"的根因）。
+///
+/// `cli_path` 为 `None`/空/全空白时，退化为现有的自动查找逻辑（打包资源 → PATH）。
+/// 本实现**只调用 `lumen.rs` 的既有公开能力**，不改动该文件。
+#[tauri::command]
+pub async fn probe_lumen_cmd(cli_path: Option<String>) -> Result<LumenProbeResult, String> {
+    probe_lumen_impl(cli_path).await
+}
+
+/// `probe_lumen_cmd` 的实现（与命令属性解耦，便于单测直接调用）。
+async fn probe_lumen_impl(cli_path: Option<String>) -> Result<LumenProbeResult, String> {
+    let unavailable = |msg: String| LumenProbeResult {
+        available: false,
+        version: None,
+        error: Some(msg),
+    };
+
+    let trimmed = cli_path.unwrap_or_default();
+    let trimmed = trimmed.trim().to_string();
+
+    let exe = if trimmed.is_empty() {
+        // 未指定 → 走自动查找（与 lumen_status_cmd 一致）
+        match lumen::find_lumen_cli("") {
+            Some(e) => e,
+            None => {
+                return Ok(unavailable(
+                    "未找到 lumen-cli，请安装或在设置中指定路径".to_string(),
+                ))
+            }
+        }
+    } else {
+        let p = PathBuf::from(&trimmed);
+        if !p.is_file() {
+            return Ok(unavailable(format!("路径不存在或不是文件: {}", trimmed)));
+        }
+        p
+    };
+
+    let exe_for_version = exe.clone();
+    let version = tokio::task::spawn_blocking(move || lumen::query_version(&exe_for_version))
+        .await
+        .map_err(|e| format!("LUMEN 版本查询任务异常: {}", e))?;
+
+    match version {
+        Some(v) => Ok(LumenProbeResult {
+            available: true,
+            version: Some(v),
+            error: None,
+        }),
+        // 找到文件但拿不到版本号（不是合法的 lumen-cli，或执行失败）
+        None => Ok(unavailable(format!(
+            "找到文件但无法读取版本（可能不是有效的 lumen-cli 或无法执行）: {}",
+            exe.to_string_lossy()
+        ))),
+    }
 }
 
 /// 经 LUMEN RAW sidecar 渲染 RAW 预览（命中磁盘缓存直接返回）。
@@ -983,6 +1431,17 @@ mod tests {
         }
     }
 
+    /// 列出目录里的文件名（排序，便于断言）。
+    fn dir_entries(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        v.sort();
+        v
+    }
+
     /// 目标目录 == 源目录时必须整体拒绝，且**源文件字节数/内容不变**。
     /// 修复前：`fs::copy(src, src)` 会把源文件截断（清空）。
     #[test]
@@ -994,7 +1453,8 @@ mod tests {
         let before = fs::metadata(&jpg).unwrap().len();
 
         let items = vec![item_with_jpg(&jpg)];
-        let res = export_items(items, &dir, false, true);
+        let no_cancel = AtomicBool::new(false);
+        let res = export_items(items, &dir, false, true, &no_cancel, |_, _, _| {});
 
         assert!(res.is_err(), "目标==源目录时必须整体拒绝");
         assert_eq!(
@@ -1024,15 +1484,25 @@ mod tests {
         fs::write(&dst_jpg, b"EXISTING-DIFFERENT").unwrap();
 
         let items = vec![item_with_jpg(&src_jpg)];
-        let outcome = export_items(items, &dst_dir, false, true).expect("不应报错");
+        let no_cancel = AtomicBool::new(false);
+        let outcome =
+            export_items(items, &dst_dir, false, true, &no_cancel, |_, _, _| {}).expect("不应报错");
 
         assert_eq!(outcome.exported, 0, "不应复制");
         assert_eq!(outcome.skipped, 1, "同名文件应计入 skipped");
         assert!(outcome.failed.is_empty(), "不应有失败");
+        assert!(!outcome.cancelled, "未取消");
         assert_eq!(
             fs::read(&dst_jpg).unwrap(),
             b"EXISTING-DIFFERENT",
             "已存在的同名文件不得被覆盖"
+        );
+        // 临时目录必须已被清理
+        assert!(
+            !dir_entries(&dst_dir)
+                .iter()
+                .any(|n| n.starts_with(EXPORT_TMP_PREFIX)),
+            "提交后不得残留临时目录"
         );
 
         let _ = fs::remove_dir_all(&src_dir);
@@ -1050,7 +1520,9 @@ mod tests {
         fs::create_dir_all(&bogus).unwrap();
 
         let items = vec![item_with_jpg(&bogus)];
-        let outcome = export_items(items, &dst_dir, false, true).expect("整体不应报错");
+        let no_cancel = AtomicBool::new(false);
+        let outcome =
+            export_items(items, &dst_dir, false, true, &no_cancel, |_, _, _| {}).expect("整体不应报错");
 
         assert_eq!(outcome.exported, 0);
         assert!(!outcome.failed.is_empty(), "复制失败应计入 failed");
@@ -1058,5 +1530,163 @@ mod tests {
 
         let _ = fs::remove_dir_all(&src_dir);
         let _ = fs::remove_dir_all(&dst_dir);
+    }
+
+    /// 成功导出：清单文件内容正确（version/status/includeJpg/items）。
+    #[test]
+    fn export_writes_manifest_on_success() {
+        let src_dir = unique_dir("manifest_src");
+        let dst_dir = unique_dir("manifest_dst");
+        let jpg = src_dir.join("IMG_0007.jpg");
+        fs::write(&jpg, b"CONTENT-7").unwrap();
+
+        let items = vec![item_with_jpg(&jpg)];
+        let no_cancel = AtomicBool::new(false);
+        let outcome =
+            export_items(items, &dst_dir, false, true, &no_cancel, |_, _, _| {}).expect("不应报错");
+
+        assert_eq!(outcome.exported, 1);
+        assert!(!outcome.cancelled);
+
+        let manifest_path = dst_dir.join(EXPORT_MANIFEST_NAME);
+        assert!(manifest_path.is_file(), "清单文件必须存在");
+        let json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        assert_eq!(json["version"], 1);
+        assert_eq!(json["status"], "completed");
+        assert_eq!(json["includeJpg"], true);
+        assert_eq!(json["includeRaw"], false);
+        assert!(json["startedAt"].is_number());
+        assert!(json["finishedAt"].is_number());
+        let items_json = json["items"].as_array().unwrap();
+        assert_eq!(items_json.len(), 1);
+        assert_eq!(items_json[0]["result"], "copied");
+        assert_eq!(items_json[0]["src"], jpg.to_string_lossy().to_string());
+
+        // 真正的目标文件也落地了
+        assert_eq!(fs::read(dst_dir.join("IMG_0007.jpg")).unwrap(), b"CONTENT-7");
+
+        let _ = fs::remove_dir_all(&src_dir);
+        let _ = fs::remove_dir_all(&dst_dir);
+    }
+
+    /// 策略 3 核心用例①：取消后**目标目录不产生任何新增文件**（临时目录被整体删除）。
+    #[test]
+    fn export_cancel_leaves_target_clean() {
+        let src_dir = unique_dir("cancel_clean_src");
+        let dst_dir = unique_dir("cancel_clean_dst");
+        let jpg = src_dir.join("IMG_0008.jpg");
+        fs::write(&jpg, b"CONTENT-8").unwrap();
+
+        let items = vec![item_with_jpg(&jpg)];
+        // 在第 0 项迭代开头之后立刻置位取消（通过进度回调实现）
+        let cancel = AtomicBool::new(false);
+        let cancel_ref = &cancel;
+        let outcome = export_items(items, &dst_dir, false, true, &cancel, |idx, _, _| {
+            if idx == 0 {
+                cancel_ref.store(true, Ordering::SeqCst);
+            }
+        })
+        .expect("取消不是错误，应 Ok");
+
+        assert!(outcome.cancelled, "应标记为已取消");
+        assert_eq!(outcome.exported, 0, "取消时不得搬迁任何文件");
+        // 目标目录里除清单外不得有导出产物，且不得残留临时目录
+        assert!(
+            !dst_dir.join("IMG_0008.jpg").exists(),
+            "取消后目标目录不得出现导出文件"
+        );
+        let entries = dir_entries(&dst_dir);
+        assert!(
+            !entries.iter().any(|n| n.starts_with(EXPORT_TMP_PREFIX)),
+            "取消后必须删除临时目录，实际残留: {:?}",
+            entries
+        );
+        assert!(
+            !entries.iter().any(|n| n == "IMG_0008.jpg"),
+            "目标目录不得新增源文件，实际: {:?}",
+            entries
+        );
+        // 清单应记录 cancelled
+        let json: serde_json::Value =
+            serde_json::from_slice(&fs::read(dst_dir.join(EXPORT_MANIFEST_NAME)).unwrap()).unwrap();
+        assert_eq!(json["status"], "cancelled");
+
+        let _ = fs::remove_dir_all(&src_dir);
+        let _ = fs::remove_dir_all(&dst_dir);
+    }
+
+    /// 策略 3 核心用例②（§2 点名）：目标目录预置一个与源同名但内容不同的文件，
+    /// 取消后该文件**必须原封不动**（这正是"删除已复制文件"方案的致命失败点）。
+    #[test]
+    fn export_cancel_preserves_preexisting_named_file() {
+        let src_dir = unique_dir("cancel_preserve_src");
+        let dst_dir = unique_dir("cancel_preserve_dst");
+
+        let first = src_dir.join("IMG_0100.jpg");
+        fs::write(&first, b"NEW-A").unwrap();
+        let second = src_dir.join("IMG_0101.jpg");
+        fs::write(&second, b"NEW-B").unwrap();
+
+        // 目标目录里预先就有一个与第二张同名的、内容不同的文件
+        let preexisting = dst_dir.join("IMG_0101.jpg");
+        fs::write(&preexisting, b"USER-ORIGINAL").unwrap();
+
+        let items = vec![item_with_jpg(&first), item_with_jpg(&second)];
+        // 处理完第 0 项后取消（此时 IMG_0100 已暂存到临时目录、等待被丢弃）
+        let cancel = AtomicBool::new(false);
+        let cancel_ref = &cancel;
+        let outcome = export_items(items, &dst_dir, false, true, &cancel, |idx, _, _| {
+            if idx == 0 {
+                cancel_ref.store(true, Ordering::SeqCst);
+            }
+        })
+        .expect("取消不是错误");
+
+        assert!(outcome.cancelled);
+        assert_eq!(outcome.exported, 0);
+        // 关键断言：目标目录里原有的同名文件必须还在，内容不变
+        assert!(preexisting.exists(), "取消不得删除目标目录已有的同名文件");
+        assert_eq!(
+            fs::read(&preexisting).unwrap(),
+            b"USER-ORIGINAL",
+            "取消不得覆盖/删除目标目录已有的同名文件"
+        );
+        // 第一个文件（已暂存）不得出现在目标目录
+        assert!(
+            !dst_dir.join("IMG_0100.jpg").exists(),
+            "暂存文件应随临时目录一起丢弃"
+        );
+        assert!(
+            !dir_entries(&dst_dir)
+                .iter()
+                .any(|n| n.starts_with(EXPORT_TMP_PREFIX)),
+            "取消后不得残留临时目录"
+        );
+
+        let _ = fs::remove_dir_all(&src_dir);
+        let _ = fs::remove_dir_all(&dst_dir);
+    }
+
+    /// `probe_lumen_cmd` 对不存在的路径：`available=false` 且带 `error`。
+    /// 直接调用实现体（async），无需 tauri 运行时。
+    #[test]
+    fn probe_lumen_reports_error_for_missing_path() {
+        let dir = unique_dir("probe_missing");
+        let missing = dir.join("no-such-lumen-cli.exe");
+        let res = tauri::async_runtime::block_on(probe_lumen_impl(Some(
+            missing.to_string_lossy().to_string(),
+        )))
+        .expect("命令本身不应 Err（不可用走 Ok + available=false）");
+
+        assert!(!res.available, "不存在的路径必须 available=false");
+        assert!(res.version.is_none());
+        let err = res.error.expect("必须带 error 说明原因");
+        assert!(
+            err.contains("路径不存在"),
+            "必须命中「路径不存在」分支（而非其他降级理由），实际: {}",
+            err
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -14,11 +14,17 @@ import { MetadataEditorModal } from './components/MetadataEditorModal';
 import { ShortcutHelpModal } from './components/ShortcutHelpModal';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { ToastProvider, useToast } from './components/Toast';
+import { TaskProgressBar } from './components/TaskProgressBar';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { useSessionDebounce } from './hooks/useSessionDebounce';
+import { useTaskProgress } from './hooks/useTaskProgress';
+import { isTaskCancelled } from './services/taskApi';
+import { useRatingUndo } from './hooks/useRatingUndo';
 import { useLumenStatus } from './hooks/useLumenStatus';
 import type { ViewportEmptyState } from './components/PreviewViewport';
 import {
   AppSettings,
+  CullFlag,
   LumenCapabilities,
   FilterMode,
   PhotoFileInfo,
@@ -30,9 +36,34 @@ import {
 import { api } from './services/api';
 import { computeAutoTone, DEFAULT_TONE } from './utils/autoTone';
 import { deriveCompareGroups } from './utils/compareGroups';
+import { countByFilter, matchesFilter } from './utils/filterMatch';
 
 function AppShell() {
   const toast = useToast();
+
+  /** L-11 撤销提示里用到的旗标文案（与宫格/底栏的叫法保持一致）。 */
+  const FLAG_LABELS: Record<CullFlag, string> = {
+    pick: '保留',
+    reject: '淘汰',
+    none: '未标记',
+  };
+
+  // 扫描的进度与取消（M-05）。解构出**稳定引用**的成员：`start/finish/
+  // isCancelRequested` 都不随进度变化，因此 `handleScan` 的 identity 不会
+  // 因为进度事件每几十毫秒刷新一次而抖动（否则会连带触发 [sortOrder] 那个
+  // effect 反复重新扫描）。
+  const scanTask = useTaskProgress('scan');
+  const { start: scanStart, finish: scanFinish } = scanTask;
+
+  // L-11：星级/旗标的单步撤销。`1..5/p/x/0` 按下即写 .xmp 且原先无路可退，
+  // 一次误触只能手改侧边栏或回 Lightroom。这里保留一步回退（Ctrl/Cmd+Z，
+  // 或底栏的「撤销」按钮）。
+  const {
+    canUndo,
+    remember: rememberRating,
+    take: takeRatingSnapshot,
+    clear: clearRatingUndo,
+  } = useRatingUndo();
 
   const [jpgFolder, setJpgFolder] = useState('');
   const [rawFolder, setRawFolder] = useState('');
@@ -87,7 +118,15 @@ function AppShell() {
 
   // LUMEN RAW engine handshake (P0). Zero requests while disabled — the hook
   // itself owns the 1.5s delay and the silent degradation.
-  const lumenStatus = useLumenStatus(settings?.lumenEnabled ?? false);
+  // N-12：主动重探令牌。`useLumenStatus` 依赖 `enabled`/`cliPath`，但用户可能在
+  // 弹窗里改了路径又撤销，或引擎在运行中才装好——保存设置后自增这个令牌，让
+  // 引擎状态**当场刷新**，而不是停留在启动时的陈旧快照。
+  const [lumenRefreshToken, setLumenRefreshToken] = useState(0);
+  const lumenStatus = useLumenStatus(
+    settings?.lumenEnabled ?? false,
+    settings?.lumenCliPath ?? '',
+    lumenRefreshToken,
+  );
   // 只有握手成功（版本 1.6.0 匹配）才出现 LUMEN RAW 专属入口
   const lumenAvailable = lumenStatus.available;
   // sidecar 真实能力（命令表/预设/AI）。只在握手成功时探测一次。
@@ -153,25 +192,15 @@ function AppShell() {
   }, [toast]);
 
   // Filtered list of groups — the app's current working set.
-  const filteredGroups = useMemo(() => {
-    return groups.filter((g) => {
-      switch (filterMode) {
-        case 'pick':
-          return g.flag === 'pick';
-        case 'reject':
-          return g.flag === 'reject';
-        case 'unmarked':
-          return g.flag === 'none' && g.rating === 0;
-        case 'star3':
-          return g.rating >= 3;
-        case 'star5':
-          return g.rating === 5;
-        case 'all':
-        default:
-          return true;
-      }
-    });
-  }, [groups, filterMode]);
+  const filteredGroups = useMemo(
+    () => groups.filter((g) => matchesFilter(g, filterMode)),
+    [groups, filterMode],
+  );
+
+  // M-14：每档计数。与 `filteredGroups` **共用同一个谓词**（`matchesFilter`），
+  // 所以下拉里的 `(N)` 与实际切档后的张数不可能漂移——这正是把它们抽成
+  // `utils/filterMatch` 的唯一原因。O(n) 单遍，万张规模亚毫秒级。
+  const filterCounts = useMemo(() => countByFilter(groups), [groups]);
 
   // Search narrowing applied inside the filtered set. `filteredIndices` maps a
   // position in the visible list back to its index in `filteredGroups`, so
@@ -304,6 +333,9 @@ function AppShell() {
   const handleScan = useCallback(async () => {
     if (!jpgFolder.trim()) return;
     setIsLoading(true);
+    scanStart();
+    // 重新扫描后旧快照指向的照片可能已不在列表里，撤销会写到一个不该碰的文件上。
+    clearRatingUndo();
 
     try {
       const res = await api.scanFolders(jpgFolder, rawFolder, sortOrder);
@@ -351,14 +383,31 @@ function AppShell() {
         }排序。`,
       );
     } catch (err) {
-      console.error('Scan failed:', err);
-      toast.error(
-        `扫描失败：${String(err)}\n请确认文件夹路径存在且有读取权限，然后重试。`,
-      );
+      // 取消不是失败：后端以哨兵文案 `任务已取消` 返回，必须按「已取消」呈现，
+      // 否则用户主动取消会被读成"扫描坏了"。按哨兵而非「点过取消按钮」判断，
+      // 这样与取消同时发生的真实错误仍会如实报成失败。
+      if (isTaskCancelled(err)) {
+        toast.info('已取消扫描：照片列表未更新。');
+      } else {
+        console.error('Scan failed:', err);
+        toast.error(
+          `扫描失败：${String(err)}\n请确认文件夹路径存在且有读取权限，然后重试。`,
+        );
+      }
     } finally {
+      scanFinish();
       setIsLoading(false);
     }
-  }, [jpgFolder, rawFolder, sortOrder, settings, toast]);
+  }, [
+    jpgFolder,
+    rawFolder,
+    sortOrder,
+    settings,
+    toast,
+    scanStart,
+    scanFinish,
+    clearRatingUndo,
+  ]);
 
   // Re-scan when the sort order changes.
   //
@@ -455,6 +504,15 @@ function AppShell() {
       const targetPath = targetGroup.raw?.path || targetGroup.jpg?.path;
       if (!targetPath) return;
 
+      // L-11：快照必须在乐观更新**之前**取，否则拿到的已是新值。
+      // 同照片连续改动会被 hook 合并，撤销回到这轮操作的起点。
+      rememberRating({
+        id: targetGroup.id,
+        path: targetPath,
+        rating: targetGroup.rating,
+        flag: targetGroup.flag,
+      });
+
       // Update in local state
       setGroups((prev) =>
         prev.map((g) => (g.id === targetGroup.id ? { ...g, rating } : g)),
@@ -467,7 +525,7 @@ function AppShell() {
         reportRatingFlagError(err);
       }
     },
-    [currentGroup, reportRatingFlagError],
+    [currentGroup, reportRatingFlagError, rememberRating],
   );
 
   const handleFlag = useCallback(
@@ -479,6 +537,13 @@ function AppShell() {
       const targetPath = targetGroup.raw?.path || targetGroup.jpg?.path;
       if (!targetPath) return;
 
+      rememberRating({
+        id: targetGroup.id,
+        path: targetPath,
+        rating: targetGroup.rating,
+        flag: targetGroup.flag,
+      });
+
       setGroups((prev) =>
         prev.map((g) => (g.id === targetGroup.id ? { ...g, flag } : g)),
       );
@@ -489,8 +554,46 @@ function AppShell() {
         reportRatingFlagError(err);
       }
     },
-    [currentGroup, reportRatingFlagError],
+    [currentGroup, reportRatingFlagError, rememberRating],
   );
+
+  /**
+   * L-11 撤销：回填本地状态 + 用**同一套错误语义**重写 XMP。
+   *
+   * 注意「上次写盘失败」的情形：此时 UI = 新值、磁盘 = 旧值。撤销把 UI 恢复成
+   * 快照（= 当时的旧值）并照常发起写入 —— 内容与磁盘现值相同，收敛一致，
+   * 只是多一次无害写入。刻意**不**因上次失败而跳过，也刻意不引入第二种错误
+   * 文案（仍走 `reportRatingFlagError`，保持"界面有效、未同步 XMP"的既有承诺）。
+   */
+  const handleUndo = useCallback(async () => {
+    const snapshot = takeRatingSnapshot();
+    if (!snapshot) {
+      toast.info('没有可撤销的操作。');
+      return;
+    }
+
+    setGroups((prev) =>
+      prev.map((g) =>
+        g.id === snapshot.id
+          ? { ...g, rating: snapshot.rating, flag: snapshot.flag }
+          : g,
+      ),
+    );
+
+    try {
+      await api.updateRatingFlag(
+        snapshot.path,
+        snapshot.rating,
+        snapshot.flag,
+        true,
+      );
+      toast.success(
+        `已撤销上一处改动：星级恢复为 ${snapshot.rating} 星，标记恢复为 ${FLAG_LABELS[snapshot.flag]}。`,
+      );
+    } catch (err) {
+      reportRatingFlagError(err);
+    }
+  }, [takeRatingSnapshot, toast, reportRatingFlagError]);
 
   // Open in Photoshop / External app
   const handleOpenExternal = useCallback(async () => {
@@ -818,14 +921,34 @@ function AppShell() {
     }
   }, [currentGroup, toast]);
 
-  // Save session when index changes
+  // Save session when index changes — debounced (M-17).
+  //
+  // 原先 `selectedIndex` 每变一次就一次 IPC + 一次 SQLite 写：连按方向键约
+  // 10 张/秒 = 每秒 10 次磁盘写，而只有最后一次索引有价值。防抖窗口与四个
+  // flush 点（目录切换 / 卸载 / 页面隐藏 / Tauri 关闭请求）都在 hook 内部。
+  useSessionDebounce({
+    jpgFolder,
+    rawFolder,
+    lastIndex: selectedIndex,
+    sortOrder,
+  });
+
+  // L-08：调色面板此前没有任何「按 Esc 关闭」的出口——8 个触发入口都只负责
+  // 打开，用户被关进一个只能靠鼠标或原快捷键原路退出的面板。
+  //
+  // 只在**没有其它弹窗**时生效：各弹窗自己的 Esc 处理优先，否则会出现
+  // 「一次 Esc 关两层」（弹窗和面板同时消失）。判断谓词与键盘守卫的
+  // `isDialogOpen` 保持一致，避免两处对"什么算弹窗"有不同答案。
   useEffect(() => {
-    if (jpgFolder && selectedIndex >= 0) {
-      api
-        .saveSession(jpgFolder, rawFolder, selectedIndex, sortOrder)
-        .catch((err) => console.error('Failed to save session:', err));
-    }
-  }, [selectedIndex, jpgFolder, rawFolder, sortOrder]);
+    if (!tonalPanelVisible) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      setShowTonalPanel(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tonalPanelVisible]);
 
   // Metadata batch updated handler
   const handleMetadataUpdated = useCallback(
@@ -882,6 +1005,7 @@ function AppShell() {
     onHoldOriginalEnd: handleHoldOriginalEnd,
     onFocusSearch: handleFocusSearch,
     onOpenShortcutHelp: () => setIsShortcutHelpOpen(true),
+    onUndo: () => void handleUndo(),
   });
 
   // Empty-state copy. "No folder loaded" and "filter matched nothing" are
@@ -921,9 +1045,10 @@ function AppShell() {
         onBrowseJpg={handleBrowseJpg}
         onBrowseRaw={handleBrowseRaw}
         onScan={handleScan}
-        isLoading={isLoading}
+        isLoading={isLoading || scanTask.isRunning}
         filterMode={filterMode}
         onFilterChange={setFilterMode}
+        filterCounts={filterCounts}
         sortOrder={sortOrder}
         onSortChange={setSortOrder}
         viewMode={viewMode}
@@ -945,6 +1070,17 @@ function AppShell() {
             return next;
           });
         }}
+      />
+
+      {/* Scan progress (M-05) — 空闲时不渲染，不留空白条 */}
+      <TaskProgressBar
+        className="px-4 py-2 border-b border-white/10 bg-background-header shrink-0"
+        isRunning={scanTask.isRunning}
+        processed={scanTask.progress?.processed ?? 0}
+        total={scanTask.progress?.total ?? 0}
+        label="正在扫描照片"
+        onCancel={() => void scanTask.cancel()}
+        cancelRequested={scanTask.cancelRequested}
       />
 
       {/* Main Content Area */}
@@ -1057,6 +1193,8 @@ function AppShell() {
         onOpenShortcutHelp={() => setIsShortcutHelpOpen(true)}
         searchActive={gridSearch.trim().length > 0}
         searchResultCount={visibleGroups.length}
+        onUndo={() => void handleUndo()}
+        canUndo={canUndo}
       />
 
       {/* Batch Export Modal */}
@@ -1072,7 +1210,11 @@ function AppShell() {
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
-        onSettingsSaved={(s) => setSettings(s)}
+        onSettingsSaved={(s) => {
+          setSettings(s);
+          // N-12：保存后强制重探引擎状态（SettingsModal 自己会 onClose）。
+          setLumenRefreshToken((t) => t + 1);
+        }}
         onError={(m) => toast.error(m)}
         lumenStatus={lumenStatus}
         capabilities={lumenCaps}

@@ -6,6 +6,7 @@ import {
   Keyboard,
   Search,
   Sliders,
+  Undo2,
 } from 'lucide-react';
 
 interface BottomBarProps {
@@ -23,6 +24,13 @@ interface BottomBarProps {
   searchActive?: boolean;
   /** 宫格搜索的命中数（用于「宫格筛选 X/Y」口径）。 */
   searchResultCount?: number;
+  /**
+   * 单步撤销（L-11）。`1..5/p/x/0` 按下即写 `.xmp`，键盘有 `Ctrl/Cmd+Z`，
+   * 这里给鼠标用户同一个入口 —— 否则"能退一步"只对键盘用户成立。
+   */
+  onUndo?: () => void;
+  /** 是否有可撤销的改动（驱动按钮可用态）。 */
+  canUndo?: boolean;
 }
 
 export const BottomBar: React.FC<BottomBarProps> = ({
@@ -34,6 +42,8 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   onOpenShortcutHelp,
   searchActive = false,
   searchResultCount = 0,
+  onUndo,
+  canUndo = false,
 }) => {
   const humanIndex = totalCount > 0 ? currentIndex + 1 : 0;
   const counterText = searchActive
@@ -144,6 +154,17 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         >
           <Sliders className="w-3 h-3" aria-hidden="true" />
           <span className="pb-[1px]">镜头信息</span>
+        </button>
+
+        <button
+          onClick={onUndo}
+          disabled={!canUndo}
+          className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white disabled:bg-white/5 disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-colors"
+          title={canUndo ? '撤销上一处星级/标记改动 (Ctrl+Z)' : '没有可撤销的改动'}
+          aria-label="撤销上一处星级或标记改动"
+        >
+          <Undo2 className="w-3 h-3" aria-hidden="true" />
+          <span className="pb-[1px]">撤销</span>
         </button>
 
         <button

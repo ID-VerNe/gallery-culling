@@ -17,8 +17,17 @@ export const LUMEN_UNAVAILABLE: LumenStatus = {
  * - 延迟 1500ms 再握手：不阻塞首屏，且给 sidecar 冷启动留出时间；
  * - 调用方传 `enabled=false` 时**完全不发请求**（settings.lumenEnabled 关闭时零 invoke）；
  * - 请求失败不抛错，静默降级为不可用（UI 走旧的内嵌 JPEG 路径）。
+ *
+ * N-12：早期 effect 只依赖 `enabled`，导致**改路径 / 保存设置后引擎状态永不刷新**，
+ * 弹窗里显示的是启动时的陈旧快照。现在依赖覆盖 `enabled` 与 `cliPath`（设置保存后
+ * `settings` 换了新对象，路径变化即重新探测），并可用 `refreshToken` 主动触发重探
+ * （宿主在「保存设置」后自增即可，见 App 接入片段）。
  */
-export const useLumenStatus = (enabled: boolean): LumenStatus => {
+export const useLumenStatus = (
+  enabled: boolean,
+  cliPath: string = '',
+  refreshToken: number = 0,
+): LumenStatus => {
   const [status, setStatus] = useState<LumenStatus>(LUMEN_UNAVAILABLE);
 
   useEffect(() => {
@@ -47,7 +56,10 @@ export const useLumenStatus = (enabled: boolean): LumenStatus => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [enabled]);
+    // cliPath 入依赖：路径变化（含保存设置后的新对象）必须重探；
+    // refreshToken 入依赖：给宿主一个「无条件重探」的显式开关（N-12）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, cliPath, refreshToken]);
 
   return status;
 };
