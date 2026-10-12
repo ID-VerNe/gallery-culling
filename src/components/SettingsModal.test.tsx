@@ -20,6 +20,7 @@ const baseSettings: AppSettings = {
   lumenEnabled: false,
   lumenCliPath: '',
   lumenGridThumbnails: false,
+  lumenExpectAi: false,
 };
 
 const okStatus: LumenStatus = {

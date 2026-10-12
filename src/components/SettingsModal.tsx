@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Settings, FolderOpen, Save } from 'lucide-react';
-import { AppSettings, LumenStatus } from '../types';
+import { AppSettings, LumenCapabilities, LumenStatus } from '../types';
 import { api } from '../services/api';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Modal } from './Modal';
@@ -12,6 +12,8 @@ interface SettingsModalProps {
   onError?: (message: string) => void;
   /** LUMEN RAW 握手状态（App 层已有，透传避免重复探测） */
   lumenStatus?: LumenStatus | null;
+  /** sidecar 能力（含 aiMasks —— 按磁盘事实判定） */
+  capabilities?: LumenCapabilities | null;
   /** 把 LUMEN RAW 的评级拉回侧边栏（返回被更新的文件数） */
   onSyncRatings?: (folder: string) => Promise<number>;
 }
@@ -22,6 +24,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSettingsSaved,
   onError,
   lumenStatus,
+  capabilities,
   onSyncRatings,
 }) => {
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -221,6 +224,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 关闭时宫格用相机内嵌缩略图（近乎零成本）；开启后每张约 0.3 秒，
                 好处是宫格与大图显影一致。
               </p>
+            </div>
+
+            {/* AI（GPU 版）入口：勾选后若指向的是 CPU 版，明确警告而不是等点下去 */}
+            <div className="flex flex-col gap-1.5 pt-1">
+              <label
+                htmlFor="settings-lumen-expect-ai"
+                className="text-white/80 font-medium cursor-pointer flex items-center gap-2"
+              >
+                <input
+                  id="settings-lumen-expect-ai"
+                  type="checkbox"
+                  checked={settings.lumenExpectAi}
+                  disabled={!settings.lumenEnabled}
+                  onChange={(e) =>
+                    setSettings({ ...settings, lumenExpectAi: e.target.checked })
+                  }
+                  className="focus-ring w-4 h-4 accent-white disabled:opacity-40"
+                />
+                我指向的是 GPU / AI 版（启用 AI 蒙版）
+              </label>
+              <p className="text-[10px] leading-relaxed text-white/60">
+                AI 蒙版需要带 onnxruntime 与模型的构建（体积约 487MB）。
+                勾选后若当前路径是 CPU 版，这里会直接提示，不会让你在保存调色时才发现。
+              </p>
+              {settings.lumenExpectAi && capabilities && !capabilities.aiMasks && (
+                <p
+                  role="status"
+                  className="text-[10px] leading-relaxed text-amber-200/80 rounded-md border border-amber-200/25 px-2 py-1.5"
+                >
+                  你勾选了 GPU 版，但当前路径探测不到 AI 模型与 onnxruntime —— AI 蒙版
+                  在这张照片上不可用。请把 lumen-cli 路径改到 GPU 版，或取消勾选。
+                </p>
+              )}
             </div>
 
             {onSyncRatings && lumenStatus?.available && (

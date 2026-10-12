@@ -21,6 +21,7 @@ pub(crate) fn settings_pairs(settings: &AppSettings) -> Vec<(&'static str, Strin
             "lumen_grid_thumbnails",
             settings.lumen_grid_thumbnails.to_string(),
         ),
+        ("lumen_expect_ai", settings.lumen_expect_ai.to_string()),
     ]
 }
 
@@ -41,6 +42,7 @@ pub(crate) fn apply_setting(settings: &mut AppSettings, key: &str, value: &str) 
         "lumen_enabled" => settings.lumen_enabled = value == "true",
         "lumen_cli_path" => settings.lumen_cli_path = value.to_string(),
         "lumen_grid_thumbnails" => settings.lumen_grid_thumbnails = value == "true",
+        "lumen_expect_ai" => settings.lumen_expect_ai = value == "true",
         _ => {}
     }
 }
@@ -295,7 +297,7 @@ mod tests {
         // 既有 5 键不回归
         assert!(map.contains_key("photoshop_path"));
         assert!(map.contains_key("thumbnail_width"));
-        assert_eq!(map.len(), 8);
+        assert_eq!(map.len(), 9);
     }
 
     #[test]

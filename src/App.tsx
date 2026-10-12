@@ -1078,6 +1078,7 @@ function AppShell() {
         onSettingsSaved={(s) => setSettings(s)}
         onError={(m) => toast.error(m)}
         lumenStatus={lumenStatus}
+        capabilities={lumenCaps}
         onSyncRatings={lumenStatus?.available ? handleSyncLumenRatings : undefined}
       />
 
