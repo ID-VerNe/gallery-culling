@@ -6,8 +6,9 @@ use tauri::State;
 use crate::db::Database;
 use crate::lumen::{self, LumenError, LumenStatus, PreviewVariant, PINNED_LUMEN_VERSION};
 use crate::models::{
-    AppSettings, ExportItem, FolderScanResult, LumenPreviewResult, LumenRatingConflict,
-    LumenRatingSync, LumenRecipe, ToneAdjustments, ToneState, ToneWriteReport,
+    AppSettings, ExportItem, FolderScanResult, LumenMaskResult, LumenPreviewResult,
+    LumenRatingConflict, LumenRatingSync, LumenRecipe, MaskAdjustments, ToneAdjustments, ToneState,
+    ToneWriteReport,
 };
 use crate::scanner::scan_folders;
 use crate::thumbnail::{get_cache_dir, get_or_create_thumbnail};
@@ -812,4 +813,66 @@ fn read_xmp_tone(path: &std::path::Path) -> ToneAdjustments {
             contrast: m.contrast.unwrap_or(0.0),
         })
         .unwrap_or_default()
+}
+
+/// 应用 AI 蒙版（仅 GPU flavor）。引擎不含模型时**明确报错**，不假装成功。
+#[tauri::command]
+pub async fn lumen_apply_mask_cmd(
+    state: State<'_, AppState>,
+    file_path: String,
+    region: String,
+    adjustments: MaskAdjustments,
+) -> Result<LumenMaskResult, String> {
+    let settings = state.db.load_settings()?;
+    if !settings.lumen_enabled {
+        return Err("未启用 LUMEN RAW 引擎".to_string());
+    }
+    let exe = lumen::find_lumen_cli(&settings.lumen_cli_path)
+        .ok_or_else(|| "未找到 lumen-cli".to_string())?;
+    if !lumen::detect_ai_flavor(&exe) {
+        return Err(
+            "当前 LUMEN RAW 是 CPU 版，不含 AI 蒙版模型。请改用 GPU 版路径（设置里指定）。"
+                .to_string(),
+        );
+    }
+    let runtime = state.lumen.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let t0 = std::time::Instant::now();
+        let applied = runtime
+            .apply_mask(&exe, &file_path, &region, &adjustments)
+            .map_err(|e| e.to_string())?;
+        let masks = runtime.list_masks(&exe, &file_path);
+        let applied_list = applied
+            .get("applied")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        Ok(LumenMaskResult {
+            applied: applied_list,
+            masks,
+            elapsed_ms: t0.elapsed().as_millis() as u64,
+        })
+    })
+    .await
+    .map_err(|e| format!("AI 蒙版任务异常: {}", e))?
+}
+
+/// 列出工程里现有的 AI 蒙版（跨进程可读，因为 .lumen 落盘了）。
+#[tauri::command]
+pub async fn lumen_list_masks_cmd(
+    state: State<'_, AppState>,
+    file_path: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    let settings = state.db.load_settings()?;
+    if !settings.lumen_enabled {
+        return Ok(Vec::new());
+    }
+    let exe = match lumen::find_lumen_cli(&settings.lumen_cli_path) {
+        Some(e) => e,
+        None => return Ok(Vec::new()),
+    };
+    let runtime = state.lumen.clone();
+    tokio::task::spawn_blocking(move || runtime.list_masks(&exe, &file_path))
+        .await
+        .map_err(|e| format!("读取蒙版任务异常: {}", e))
 }

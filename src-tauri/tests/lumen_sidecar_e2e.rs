@@ -435,14 +435,20 @@ fn e2e_recipe_apply_then_render_changes_pixels() {
 
 #[test]
 #[ignore = "需要已构建的 lumen-cli sidecar"]
-fn e2e_capabilities_match_real_cpu_build() {
-    use gallery_culling_lib::lumen::LumenRuntime;
+fn e2e_capabilities_match_installed_build() {
+    // 这条契约必须在 **CPU 版和 GPU 版上都成立**：能力报告与磁盘事实一致。
+    // 之前它硬编码了"CPU 版不该报 AI"，于是换成 GPU 构建就红 —— 而真正的断言
+    // 是"报告 == 磁盘探测"，两者在任一构建上都该为真。
+    use gallery_culling_lib::lumen::{detect_ai_flavor, LumenRuntime};
     let exe = require_sidecar();
-    let rt = LumenRuntime::new();
-    let caps = rt.capabilities(&exe).expect("能力探测应成功");
+    let is_ai = detect_ai_flavor(&exe);
+    let caps = LumenRuntime::new()
+        .capabilities(&exe)
+        .expect("能力探测应成功");
 
     println!(
-        "E2E caps: {} 条命令, {} 个预设, aiMasks={} aiEnhance={} v{}",
+        "E2E caps: 构建={} 命令={} 预设={} aiMasks={} aiEnhance={} v{}",
+        if is_ai { "GPU/AI" } else { "CPU" },
         caps.commands.len(),
         caps.presets.len(),
         caps.ai_masks,
@@ -450,7 +456,7 @@ fn e2e_capabilities_match_real_cpu_build() {
         caps.version
     );
 
-    // 契约冻结过的命令表必须仍然齐全（27 条）
+    // 契约冻结过的命令表必须仍然齐全（27 条，AI 版不改变命令表）
     assert_eq!(caps.commands.len(), 27, "命令表漂移: {:?}", caps.commands);
     for required in [
         "render.preview",
@@ -460,6 +466,7 @@ fn e2e_capabilities_match_real_cpu_build() {
         "library.rate",
         "library.flag",
         "photo.export",
+        "project.save",
     ] {
         assert!(
             caps.commands.iter().any(|c| c == required),
@@ -467,10 +474,10 @@ fn e2e_capabilities_match_real_cpu_build() {
             required
         );
     }
-    assert!(!caps.presets.is_empty(), "CPU 版也应有内置预设");
-    // CPU-only 包**没有** AI 命令 —— 探测结果必须如实报告不可用
-    assert!(!caps.ai_masks, "CPU-only 包不该报告 AI 蒙版可用");
-    assert!(!caps.ai_enhance, "CPU-only 包不该报告 AI 增强可用");
+    assert!(!caps.presets.is_empty(), "两版都应有内置预设");
+    // 关键：报告必须跟着磁盘走，而不是跟着"版本号长什么样"猜
+    assert_eq!(caps.ai_masks, is_ai, "AI 蒙版可用性应等于磁盘探测结果");
+    assert_eq!(caps.ai_enhance, is_ai, "AI 增强可用性应等于磁盘探测结果");
 }
 
 #[test]
@@ -707,4 +714,106 @@ fn e2e_tone_two_sinks_agree_after_unified_write() {
     let _ = rt.save_project(&exe, &photo);
     let _ = std::fs::remove_file(&project);
     let _ = std::fs::remove_file(get_xmp_path(&sample));
+}
+
+#[test]
+#[ignore = "需要已构建的 lumen-cli sidecar"]
+fn e2e_capabilities_ai_detection_matches_disk() {
+    // AI 判据必须跟随**磁盘事实**，因为 AI 版与 CPU 版命令表逐字节相同。
+    use gallery_culling_lib::lumen::{detect_ai_flavor, LumenRuntime};
+    let exe = require_sidecar();
+    let is_ai = detect_ai_flavor(&exe);
+    let caps = LumenRuntime::new()
+        .capabilities(&exe)
+        .expect("能力探测应成功");
+    println!(
+        "E2E 探测: exe={} 磁盘AI={} → 报告 aiMasks={} aiEnhance={} 命令={}",
+        exe.display(),
+        is_ai,
+        caps.ai_masks,
+        caps.ai_enhance,
+        caps.commands.len()
+    );
+    // 报告值必须与磁盘事实一致（这是这次修复的全部意义）
+    assert_eq!(
+        caps.ai_masks, is_ai,
+        "AI 可用性必须与磁盘上的模型/运行时一致"
+    );
+    assert_eq!(caps.ai_enhance, is_ai);
+    // AI 版不应该凭空多出命令（实测两张构建都是 27 条）
+    assert_eq!(caps.commands.len(), 27, "命令表不应因 AI 而变化");
+}
+
+#[test]
+#[ignore = "需要 GPU 版 lumen-cli sidecar（LUMEN_CLI 指向含模型的构建）+ LUMEN_SAMPLE"]
+fn e2e_ai_mask_detects_sky_and_persists() {
+    use gallery_culling_lib::lumen::LumenRuntime;
+    use gallery_culling_lib::models::MaskAdjustments;
+    let exe = require_sidecar();
+    if !gallery_culling_lib::lumen::detect_ai_flavor(&exe) {
+        eprintln!("跳过：LUMEN_CLI 指向的是 CPU 版（AI 蒙版需要 GPU 版）");
+        return;
+    }
+    let sample = sample_photo().expect("需要 LUMEN_SAMPLE");
+    let photo = sample.to_string_lossy().to_string();
+    let rt = LumenRuntime::new();
+
+    let adj = MaskAdjustments {
+        dehaze: 60.0,
+        ..Default::default()
+    };
+    let applied = rt
+        .apply_mask(&exe, &photo, "天空", &adj)
+        .expect("AI 蒙版应成功（4s 左右）");
+
+    // lumen 回显：蒙版名用自然语言，但 region 落英文 id
+    let applied_text = applied["applied"].to_string();
+    println!("E2E AI 蒙版 applied={}", applied_text);
+    assert!(
+        applied_text.contains("蒙版"),
+        "应回显新增蒙版: {}",
+        applied_text
+    );
+
+    // 蒙版必须落盘（跨进程可读）
+    let masks = rt.list_masks(&exe, &photo);
+    println!(
+        "E2E 蒙版列表: {}",
+        serde_json::to_string(&masks).unwrap_or_default()
+    );
+    assert_eq!(masks.len(), 1, "应有 1 个蒙版，实际 {:?}", masks);
+    assert_eq!(masks[0]["kind"], "sky", "region 应归一为 sky");
+    assert_eq!(masks[0]["adjustments"]["dehaze"], serde_json::json!(60.0));
+    assert_eq!(masks[0]["enabled"], serde_json::json!(true));
+
+    // 清理：删掉工程文件，别污染样张
+    let _ = std::fs::remove_file(sample.with_extension("lumen"));
+}
+
+#[test]
+#[ignore = "需要 lumen-cli sidecar（CPU 版即可）"]
+fn e2e_ai_mask_rejected_on_cpu_build() {
+    // CPU 版必须**明确报错**，不能静默成功（用户会以为蒙版已套上）
+    use gallery_culling_lib::lumen::LumenRuntime;
+    use gallery_culling_lib::models::MaskAdjustments;
+    let exe = require_sidecar();
+    if gallery_culling_lib::lumen::detect_ai_flavor(&exe) {
+        eprintln!("跳过：当前 exe 是 GPU 版");
+        return;
+    }
+    let sample = sample_photo().expect("需要 LUMEN_SAMPLE");
+    let err = LumenRuntime::new()
+        .apply_mask(
+            &exe,
+            &sample.to_string_lossy(),
+            "sky",
+            &MaskAdjustments::default(),
+        )
+        .expect_err("CPU 版必须报错");
+    println!("E2E CPU 版拒绝蒙版: {}", err);
+    assert!(
+        err.to_string().contains("GPU"),
+        "错误信息应指向 GPU 版，实际: {}",
+        err
+    );
 }

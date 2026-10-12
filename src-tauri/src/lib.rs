@@ -48,6 +48,8 @@ pub fn run() {
             lumen_apply_preset_cmd,
             apply_tone_cmd,
             get_tone_state_cmd,
+            lumen_apply_mask_cmd,
+            lumen_list_masks_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

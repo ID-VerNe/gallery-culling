@@ -76,6 +76,35 @@ export interface LumenRecipe {
   monochrome: boolean;
 }
 
+/** AI 蒙版内的局部调色（lumen masks[].adjustments 子集） */
+export interface MaskAdjustments {
+  exposure: number;
+  highlights: number;
+  shadows: number;
+  dehaze: number;
+  clarity: number;
+  saturation: number;
+  temperature: number;
+}
+
+/** 工程里的一个 AI 蒙版（读回结构，随 lumen 版本可能变宽） */
+export interface LumenMask {
+  index?: number;
+  name?: string;
+  kind?: string;
+  enabled?: boolean;
+  adjustments?: Record<string, number>;
+}
+
+/** 应用 AI 蒙版的结果 */
+export interface LumenMaskResult {
+  /** lumen 回显的变更描述 */
+  applied: unknown;
+  masks: LumenMask[];
+  /** 实测耗时（蒙版检测约 4s，UI 需要进度反馈） */
+  elapsedMs: number;
+}
+
 /** 统一调色写入的结果：一条命令、两个落点各自成功与否 */
 export interface ToneWriteReport {
   /** XMP 侧边栏是否写成功（互操作底线） */

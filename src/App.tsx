@@ -51,6 +51,10 @@ function AppShell() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   /** XMP 与 LUMEN RAW 工程两侧调色是否不一致（统一管线的分歧标记） */
   const [toneDivergent, setToneDivergent] = useState(false);
+  /** 工程里现有的 AI 蒙版 */
+  const [lumenMasks, setLumenMasks] = useState<
+    Array<{ index?: number; name?: string; kind?: string }>
+  >([]);
 
   // Grid search (progressive disclosure; owned here so the TopBar toggle and
   // the grid can share it across the tonal-panel swap).
@@ -693,6 +697,47 @@ function AppShell() {
     [currentGroup, handleToneChange, toast],
   );
 
+  /** 套用 AI 蒙版（GPU 版实测约 4s，toast 承担进度反馈）。 */
+  const handleApplyLumenMask = useCallback(
+    async (region: string, dehaze: number) => {
+      if (!currentGroup) return;
+      const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
+      if (!targetPath) return;
+      const result = await api.applyLumenMask(targetPath, region, {
+        exposure: 0,
+        highlights: 0,
+        shadows: 0,
+        dehaze,
+        clarity: 0,
+        saturation: 0,
+        temperature: 0,
+      });
+      setLumenMasks(result.masks);
+      toast.success(
+        `已套用「${region}」蒙版（${(result.elapsedMs / 1000).toFixed(1)}s）。`,
+      );
+    },
+    [currentGroup, toast],
+  );
+
+  /** 读回工程里现有的 AI 蒙版（面板打开时）。 */
+  useEffect(() => {
+    if (!showTonalPanel || !currentGroup) {
+      setLumenMasks([]);
+      return;
+    }
+    const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
+    if (!targetPath || !lumenCaps?.aiMasks) return;
+    let active = true;
+    api
+      .listLumenMasks(targetPath)
+      .then((m) => active && setLumenMasks(m))
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [showTonalPanel, currentGroup?.id, lumenCaps?.aiMasks]);
+
   /**
    * 设置里的"从 LUMEN RAW 同步评级"：拉 catalog 真值并写回侧边栏。
    * 冲突由后端判定并回报（两侧都改过的不覆盖）。
@@ -974,6 +1019,12 @@ function AppShell() {
               onAuto={handleAutoTone}
               onSave={handleSaveTone}
               divergent={toneDivergent}
+              masks={lumenMasks}
+              onApplyMask={
+                lumenCaps?.aiMasks && lumenAvailable
+                  ? handleApplyLumenMask
+                  : undefined
+              }
               lumenPresets={lumenCaps?.presets ?? []}
               aiAvailable={lumenCaps?.aiMasks ?? false}
               onApplyPreset={lumenAvailable ? handleApplyLumenPreset : undefined}

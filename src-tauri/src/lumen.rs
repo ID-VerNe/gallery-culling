@@ -526,6 +526,72 @@ fn tool_to_command_id(tool: &str) -> &'static str {
     }
 }
 
+/// AI 蒙版区域。值与 lumen 的 `masks[].region` 同名（也接受中文别名）。
+pub const MASK_REGIONS: [&str; 8] = [
+    "sky",
+    "subject",
+    "person",
+    "background",
+    "foreground",
+    "top",
+    "bottom",
+    "edges",
+];
+
+/// 中文/英文区域名 → lumen region id。
+///
+/// 宿主 UI 用中文展示，但 .lumen 工程与命令载荷必须落英文 id（读回时才认得出）。
+pub fn normalize_mask_region(input: &str) -> Option<&'static str> {
+    let lowered = input.trim().to_ascii_lowercase();
+    Some(match lowered.as_str() {
+        "sky" | "天空" => "sky",
+        "subject" | "主体" => "subject",
+        "person" | "人像" | "人物" => "person",
+        "background" | "背景" => "background",
+        "foreground" | "前景" => "foreground",
+        "top" | "顶部" => "top",
+        "bottom" | "底部" => "bottom",
+        "edges" | "边缘" => "edges",
+        _ => return None,
+    })
+}
+
+/// 构造 `edit.apply` 的 masks 载荷。
+///
+/// 形状来自真实 sidecar 的命令 schema 与实跑结果：`masks` 是
+/// `[{region, adjustments}]`（新蒙版，region 由 AI 本地检测），一次最多 4 个。
+/// 实跑确认 region 也接受中文自然语言（返回名如"天空（自然语言）"），但写英文 id 最稳。
+pub fn mask_changes(
+    region: &str,
+    adjustments: &crate::models::MaskAdjustments,
+) -> Result<Value, LumenError> {
+    let region = normalize_mask_region(region)
+        .ok_or_else(|| LumenError::Command(format!("未知的 AI 蒙版区域: {}", region)))?;
+    Ok(serde_json::json!({
+        "masks": [{
+            "region": region,
+            "adjustments": {
+                "exposure": json_f32(adjustments.exposure),
+                "highlights": json_f32(adjustments.highlights),
+                "shadows": json_f32(adjustments.shadows),
+                "dehaze": json_f32(adjustments.dehaze),
+                "clarity": json_f32(adjustments.clarity),
+                "saturation": json_f32(adjustments.saturation),
+                "temperature": json_f32(adjustments.temperature.clamp(-100.0, 100.0)),
+            },
+        }]
+    }))
+}
+
+/// 读回工程里的蒙版列表（`.lumen` 跨进程可读）。
+pub fn project_masks(state: &Value) -> Vec<Value> {
+    state
+        .get("masks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
 /// 宿主 ToneAdjustments → lumen recipe changes（**最终值**语义）。
 ///
 /// 六个滑杆全部直通，包括 temperature。Step 9 当时排除了 temperature，理由是
@@ -731,18 +797,30 @@ pub struct LumenCapabilities {
     pub version: String,
 }
 
-/// AI 相关命令的判据：出现任一即认为装了 GPU/AI flavor。
-const AI_COMMAND_MARKERS: [&str; 6] = [
-    "mask.",
-    "photo.enhance",
-    "ai.",
-    "enhance.",
-    "super_resolution",
-    "segment",
+/// AI 蒙版模型的文件名（存在即视为装了 AI flavor）。
+///
+/// **不能用命令表判断**：实测 GPU flavor 的 `commands` 与 CPU 版**逐字节相同**
+///（都是 27 条，都没有任何 `mask.*` / `photo.enhance`）。AI 是挂在既有
+/// `edit.apply` 的 `changes.masks[].region` 上的，`commands.describe()` 只是遍历
+/// import 时无条件填充的模块级 REGISTRY，而 onnxruntime 是懒加载的。所以判据必须
+/// 落到磁盘：PyInstaller 把 onnxruntime 放在 `_internal/onnxruntime/capi/`，模型放在
+/// `_internal/assets/models/`。
+const AI_MODELS: [&str; 4] = [
+    "skyseg.onnx",
+    "person-deeplab.onnx",
+    "ffdnet-color.onnx",
+    "u2netp.onnx",
 ];
 
-/// 从 `commands.list` 的原始 JSON 解析能力。
-pub fn parse_capabilities(commands_json: &Value, version: &str) -> LumenCapabilities {
+/// 从 `commands.list` 的原始 JSON 解析**命令**能力。
+///
+/// AI 能力不在这里判定（见 `AI_MODELS` 的说明）：AI 版与 CPU 版的命令表完全相同。
+/// `ai_present` 由调用方按磁盘事实传入。
+pub fn parse_capabilities(
+    commands_json: &Value,
+    version: &str,
+    ai_present: bool,
+) -> LumenCapabilities {
     let commands: Vec<String> = commands_json
         .get("commands")
         .and_then(Value::as_array)
@@ -753,16 +831,37 @@ pub fn parse_capabilities(commands_json: &Value, version: &str) -> LumenCapabili
                 .collect()
         })
         .unwrap_or_default();
-    let has_ai = commands
-        .iter()
-        .any(|c| AI_COMMAND_MARKERS.iter().any(|m| c.starts_with(m)));
     LumenCapabilities {
-        ai_masks: commands.iter().any(|c| c.starts_with("mask.")),
-        ai_enhance: has_ai,
+        // 蒙版（sky/person/subject…）与去噪/超分共用同一批模型，一起判定
+        ai_masks: ai_present,
+        ai_enhance: ai_present,
         presets: Vec::new(), // 由调用方补（需要额外一次 edit.presets 调用）
         version: version.to_string(),
         commands,
     }
+}
+
+/// 按磁盘事实探测 AI flavor：onnxruntime 运行时 + 至少一个 AI 模型都在才算。
+///
+/// 纯路径检查，不 spawn 进程 —— 探测失败只能说明"不是 AI 版"，不能拖慢/搞崩启动。
+pub fn detect_ai_flavor(exe: &Path) -> bool {
+    let Some(dir) = exe.parent() else {
+        return false;
+    };
+    let has_runtime = dir
+        .join("_internal")
+        .join("onnxruntime")
+        .join("capi")
+        .join("onnxruntime.dll")
+        .is_file();
+    has_runtime
+        && AI_MODELS.iter().any(|m| {
+            dir.join("_internal")
+                .join("assets")
+                .join("models")
+                .join(m)
+                .is_file()
+        })
 }
 
 impl Clone for LumenRuntime {
@@ -921,6 +1020,40 @@ impl LumenRuntime {
             || d(xmp.temperature, lumen.temperature)
             || d(xmp.tint, lumen.tint)
             || d(xmp.contrast, lumen.contrast)
+    }
+
+    /// 应用 AI 蒙版（`edit.apply` 的 `masks` 段）+ 落盘工程。
+    ///
+    /// 需要 GPU flavor（模型 + onnxruntime，见 `detect_ai_flavor`）。蒙版检测
+    /// 实测约 4s（DirectML 上单次前向反而比 CPU 慢：dispatch 开销占主导）。
+    pub fn apply_mask(
+        &self,
+        exe: &Path,
+        photo: &str,
+        region: &str,
+        adjustments: &crate::models::MaskAdjustments,
+    ) -> Result<Value, LumenError> {
+        if !detect_ai_flavor(exe) {
+            return Err(LumenError::Command(
+                "当前 LUMEN RAW 为 CPU 版，不含 AI 蒙版模型（需 GPU 版）".to_string(),
+            ));
+        }
+        let changes = mask_changes(region, adjustments)?;
+        let applied = self.apply_recipe(exe, photo, &changes)?;
+        // 落盘：不 save_project 蒙版下次就没了
+        self.save_project(exe, photo)?;
+        Ok(applied)
+    }
+
+    /// 读回落盘工程里的蒙版列表（跨进程可读）。
+    pub fn list_masks(&self, exe: &Path, photo: &str) -> Vec<Value> {
+        run_lumen(
+            exe,
+            "edit.get",
+            &serde_json::json!({ "path": photo, "full": true }),
+        )
+        .map(|v| project_masks(v.get("state").unwrap_or(&Value::Null)))
+        .unwrap_or_default()
     }
 
     /// A 通道是否活着（调色等 session 态操作的前提）。
@@ -1083,7 +1216,7 @@ impl LumenRuntime {
         }
         let version = query_version(exe).unwrap_or_default();
         let listing = run_lumen(exe, "commands.list", &serde_json::json!({}))?;
-        let mut caps = parse_capabilities(&listing, &version);
+        let mut caps = parse_capabilities(&listing, &version, detect_ai_flavor(exe));
         // 预设清单失败不算能力缺失（老版本可能没有该命令）
         if caps.commands.iter().any(|c| c == "edit.presets") {
             if let Ok(p) = run_lumen(exe, "edit.presets", &serde_json::json!({})) {
@@ -2612,6 +2745,53 @@ ope\lumen-cli-xyz.exe"
     }
 
     // ---- Step 9: recipe 互通 ----
+    // ---- AI 蒙版 ----
+    #[test]
+    fn mask_region_normalizes_chinese_and_english() {
+        for (input, expect) in [
+            ("sky", "sky"),
+            ("天空", "sky"),
+            ("  Sky ", "sky"),
+            ("人像", "person"),
+            ("人物", "person"),
+            ("主体", "subject"),
+            ("边缘", "edges"),
+        ] {
+            assert_eq!(normalize_mask_region(input), Some(expect), "输入 {}", input);
+        }
+        assert_eq!(normalize_mask_region("月面"), None, "未知区域应拒绝");
+        assert_eq!(normalize_mask_region(""), None);
+    }
+
+    #[test]
+    fn mask_changes_payload_matches_lumen_schema() {
+        let adj = crate::models::MaskAdjustments {
+            dehaze: 60.0,
+            ..Default::default()
+        };
+        let changes = mask_changes("天空", &adj).expect("天空应被接受");
+        let masks = changes["masks"].as_array().expect("masks 应是数组");
+        assert_eq!(masks.len(), 1);
+        assert_eq!(masks[0]["region"], "sky", "中文要归一成英文 id");
+        assert_eq!(masks[0]["adjustments"]["dehaze"], serde_json::json!(60.0));
+        // 未设置的字段必须是 0 而不是缺失（lumen 按最终值覆盖）
+        let a = &masks[0]["adjustments"];
+        for k in ["exposure", "clarity", "saturation", "temperature"] {
+            assert_eq!(a[k], serde_json::json!(0.0), "{} 应为 0", k);
+        }
+        // temperature 夹紧
+        let hot = crate::models::MaskAdjustments {
+            temperature: 9999.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            mask_changes("sky", &hot).unwrap()["masks"][0]["adjustments"]["temperature"],
+            serde_json::json!(100.0)
+        );
+        // 未知区域必须报错而不是静默通过
+        assert!(mask_changes("月球背面", &adj).is_err());
+    }
+
     #[test]
     fn tone_to_recipe_includes_temperature_after_unit_alignment() {
         let tone = crate::models::ToneAdjustments {
@@ -2858,49 +3038,71 @@ ope\lumen-cli-xyz.exe",
 
     // ---- Step 11: 能力探测 ----
     #[test]
-    fn capabilities_detect_ai_absence_in_cpu_build() {
-        // 真实 CPU-only sidecar 的命令表（节选）：无任何 AI 命令
+    fn capabilities_ignore_command_table_for_ai() {
+        // 回归：曾用命令表判 AI（找 mask.* / photo.enhance）。实测 GPU flavor 的
+        // 命令表与 CPU 版**逐字节相同**（27 条、无任何 AI 命令），那个判据永远为
+        // false —— 即便装了 487MB 的 AI 版也会告诉用户"AI 不可用"。
         let listing = serde_json::json!({
             "commands": [
-                {"id": "app.status"},
-                {"id": "edit.apply"},
-                {"id": "edit.presets"},
-                {"id": "edit.preset"},
-                {"id": "render.preview"},
-                {"id": "library.rate"},
-                {"id": "photo.export"},
+                {"id": "app.status"}, {"id": "edit.apply"}, {"id": "edit.presets"},
+                {"id": "render.preview"}, {"id": "library.rate"}, {"id": "photo.export"},
             ]
         });
-        let caps = parse_capabilities(&listing, "1.6.0");
-        assert_eq!(caps.commands.len(), 7);
-        assert!(!caps.ai_masks, "CPU-only 包没有 mask.*");
-        assert!(!caps.ai_enhance, "CPU-only 包没有任何 AI 命令");
-        assert_eq!(caps.version, "1.6.0");
+        let cpu = parse_capabilities(&listing, "1.6.0", false);
+        assert_eq!(cpu.commands.len(), 6);
+        assert!(!cpu.ai_masks && !cpu.ai_enhance, "CPU 版不该报 AI 可用");
+
+        // 同一份命令表 + 磁盘探测为真 → 必须报可用
+        let ai = parse_capabilities(&listing, "1.6.0", true);
+        assert!(ai.ai_masks, "装了模型就必须报 AI 蒙版可用");
+        assert!(ai.ai_enhance);
+        assert_eq!(
+            ai.commands, cpu.commands,
+            "AI 不改变命令表（这正是不能用命令表判 AI 的原因）"
+        );
     }
 
     #[test]
-    fn capabilities_detect_ai_in_gpu_build() {
-        let listing = serde_json::json!({
-            "commands": [
-                {"id": "edit.apply"},
-                {"id": "mask.list"},
-                {"id": "photo.enhance"},
-                {"id": "render.preview"},
-            ]
-        });
-        let caps = parse_capabilities(&listing, "1.6.0-gpu");
-        assert!(caps.ai_masks, "有 mask.* 就该判定 AI 蒙版可用");
-        assert!(caps.ai_enhance, "有 photo.enhance 就该判定 AI 增强可用");
+    fn capabilities_gpu_build_detected_from_disk() {
+        // 真实 AI 构建的目录布局（_internal/onnxruntime + _internal/assets/models）
+        let dir = std::env::temp_dir().join(format!("lumen_ai_probe_{}", std::process::id()));
+        let capi = dir.join("_internal").join("onnxruntime").join("capi");
+        let models = dir.join("_internal").join("assets").join("models");
+        std::fs::create_dir_all(&capi).unwrap();
+        std::fs::create_dir_all(&models).unwrap();
+        let exe = dir.join("lumen-cli.exe");
+        std::fs::write(&exe, b"stub").unwrap();
+
+        // 只有运行时没有模型 → 不算 AI 版（避免半残安装被误判）
+        std::fs::write(capi.join("onnxruntime.dll"), b"stub").unwrap();
+        assert!(!detect_ai_flavor(&exe), "缺模型时不该判 AI 可用");
+
+        std::fs::write(models.join("skyseg.onnx"), b"stub").unwrap();
+        assert!(detect_ai_flavor(&exe), "运行时 + 模型齐全应判 AI 可用");
+
+        // 没有任何 _internal 的目录 → CPU 版布局
+        let cpu_dir = std::env::temp_dir().join(format!("lumen_cpu_probe_{}", std::process::id()));
+        std::fs::create_dir_all(&cpu_dir).unwrap();
+        let cpu_exe = cpu_dir.join("lumen-cli.exe");
+        std::fs::write(&cpu_exe, b"stub").unwrap();
+        assert!(!detect_ai_flavor(&cpu_exe), "CPU 布局不该判 AI 可用");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cpu_dir);
     }
 
     #[test]
     fn capabilities_tolerate_empty_listing() {
         // 命令表拿不到时不能 panic，也不能谎报 AI 可用
-        let caps = parse_capabilities(&serde_json::json!({}), "");
+        let caps = parse_capabilities(&serde_json::json!({}), "", false);
         assert!(caps.commands.is_empty());
         assert!(!caps.ai_masks && !caps.ai_enhance);
         // 畸形输入同样不炸
-        let caps2 = parse_capabilities(&serde_json::json!({"commands": [1, "x", null]}), "1.6.0");
+        let caps2 = parse_capabilities(
+            &serde_json::json!({"commands": [1, "x", null]}),
+            "1.6.0",
+            false,
+        );
         assert!(caps2.commands.is_empty());
     }
 

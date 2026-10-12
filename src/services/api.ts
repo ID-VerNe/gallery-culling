@@ -5,10 +5,13 @@ import {
   ExportItem,
   FolderScanResult,
   LumenCapabilities,
+  LumenMask,
+  LumenMaskResult,
   LumenPreviewResult,
   LumenRatingSyncResult,
   LumenRecipe,
   LumenStatus,
+  MaskAdjustments,
   ToneAdjustments,
   ToneState,
   ToneWriteReport,
@@ -272,5 +275,26 @@ export const api = {
   /** 统一调色读取：返回生效值 + 两个真值 + 是否分歧 */
   getToneState: async (filePath: string): Promise<ToneState> => {
     return await invoke<ToneState>('get_tone_state_cmd', { filePath });
+  },
+
+  /**
+   * 应用 AI 蒙版（需 GPU 版 LUMEN RAW）。CPU 版会明确报错而不是静默成功。
+   * 实耗时约 4s —— 调用方必须给进度反馈。
+   */
+  applyLumenMask: async (
+    filePath: string,
+    region: string,
+    adjustments: MaskAdjustments,
+  ): Promise<LumenMaskResult> => {
+    return await invoke<LumenMaskResult>('lumen_apply_mask_cmd', {
+      filePath,
+      region,
+      adjustments,
+    });
+  },
+
+  /** 读回工程里现有的 AI 蒙版 */
+  listLumenMasks: async (filePath: string): Promise<LumenMask[]> => {
+    return await invoke<LumenMask[]>('lumen_list_masks_cmd', { filePath });
   },
 };

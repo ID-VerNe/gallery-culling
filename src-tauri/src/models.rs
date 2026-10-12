@@ -43,6 +43,20 @@ pub struct ToneAdjustments {
     pub contrast: f32,
 }
 
+/// AI 蒙版内的局部调色。字段是 lumen `masks[].adjustments` 的子集，
+/// 包含全局滑杆没有的 dehaze / clarity / saturation。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskAdjustments {
+    pub exposure: f32,
+    pub highlights: f32,
+    pub shadows: f32,
+    pub dehaze: f32,
+    pub clarity: f32,
+    pub saturation: f32,
+    pub temperature: f32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PhotoGroupInfo {
@@ -179,4 +193,16 @@ pub struct ToneState {
     /// 两侧不一致 —— 前端必须提示，绝不静默取舍
     pub divergent: bool,
     pub lumen_available: bool,
+}
+
+/// `lumen_apply_mask_cmd` 的结果。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LumenMaskResult {
+    /// lumen 回显的变更描述（如 ["新增蒙版 天空：去薄雾 +60"]）
+    pub applied: serde_json::Value,
+    /// 工程里现有的蒙版列表
+    pub masks: Vec<serde_json::Value>,
+    /// 实测耗时（AI 蒙版约 4s，UI 需要进度反馈）
+    pub elapsed_ms: u64,
 }

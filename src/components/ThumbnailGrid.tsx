@@ -394,12 +394,23 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
         .then((r) => {
           if (!active) return;
           if (r.previewPath) setThumbSrc(api.toAssetUrl(r.previewPath));
-          else api.getThumbnail(targetPath, 200).then((url) => active && setThumbSrc(url));
+          // 回落也必须兜住错误：磁盘/权限问题会让两条路同时失败，
+          // 没有 catch 的话格子会永远停在"加载中"（这正是本模块要避免的空洞）
+          else
+            api
+              .getThumbnail(targetPath, 200)
+              .then((url) => active && setThumbSrc(url))
+              .catch(() => active && setThumbSrc(null));
         })
         .catch(() => {
-          api.getThumbnail(targetPath, 200).then((url) => {
-            if (active) setThumbSrc(url);
-          });
+          api
+            .getThumbnail(targetPath, 200)
+            .then((url) => {
+              if (active) setThumbSrc(url);
+            })
+            .catch(() => {
+              if (active) setThumbSrc(null);
+            });
         });
     } else {
       api.getThumbnail(targetPath, 200).then((url) => {

@@ -14,6 +14,18 @@ import {
 import { ToneAdjustments } from '../types';
 import { DEFAULT_TONE } from '../utils/autoTone';
 
+/** AI 蒙版可选区域（中文展示，英文 id 落进 .lumen 工程）。 */
+const MASK_REGIONS: Array<{ id: string; label: string }> = [
+  { id: 'sky', label: '天空' },
+  { id: 'subject', label: '主体' },
+  { id: 'person', label: '人像' },
+  { id: 'background', label: '背景' },
+  { id: 'foreground', label: '前景' },
+  { id: 'top', label: '顶部' },
+  { id: 'bottom', label: '底部' },
+  { id: 'edges', label: '边缘' },
+];
+
 interface TonalAdjusterProps {
   tone: ToneAdjustments;
   onChange: (tone: ToneAdjustments) => void;
@@ -34,6 +46,10 @@ interface TonalAdjusterProps {
   /** AI 蒙版是否可用（GPU flavor 才有）。false 时显示说明而不是假装能用。 */
   aiAvailable?: boolean;
   onApplyPreset?: (name: string) => void;
+  /** 套用 AI 蒙版（GPU 版实测约 4s，UI 负责进度反馈） */
+  onApplyMask?: (region: string, dehaze: number) => Promise<void>;
+  /** 工程里现有的 AI 蒙版（读回，用于显示已套用） */
+  masks?: Array<{ index?: number; name?: string; kind?: string }>;
 }
 
 /**
@@ -127,9 +143,17 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
   lumenPresets = [],
   aiAvailable = false,
   onApplyPreset,
+  onApplyMask,
+  masks = [],
   isSaving = false,
 }) => {
   const [saveFeedback, setSaveFeedback] = useState(false);
+  /** 保存失败提示（统一命令的 rejection 出口） */
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [maskRegion, setMaskRegion] = useState('sky');
+  const [maskDehaze, setMaskDehaze] = useState(60);
+  const [isMasking, setIsMasking] = useState(false);
+  const [maskError, setMaskError] = useState<string | null>(null);
 
   const handleSlider = (field: keyof ToneAdjustments, value: number) => {
     onChange({
@@ -151,10 +175,33 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
     else if (onAutoTone) onAutoTone();
   };
 
+  const handleApplyMaskClick = async () => {
+    if (!onApplyMask) return;
+    setIsMasking(true);
+    setMaskError(null);
+    try {
+      await onApplyMask(maskRegion, maskDehaze);
+    } catch (err) {
+      console.error('AI 蒙版失败:', err);
+      setMaskError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsMasking(false);
+    }
+  };
+
   const handleSaveClick = async () => {
-    await onSave();
-    setSaveFeedback(true);
-    setTimeout(() => setSaveFeedback(false), 2000);
+    // 必须兜住 rejection：onSave 现在是一条统一命令（XMP + LUMEN RAW），
+    // 任一环节 reject 都会变成未处理的 Promise rejection，用户看不到任何反馈，
+    // 按钮也不会复位。失败时明确回报，绝不假装成功。
+    try {
+      await onSave();
+      setSaveFeedback(true);
+      setTimeout(() => setSaveFeedback(false), 2000);
+    } catch (err) {
+      console.error('保存调色失败:', err);
+      setSaveError(err instanceof Error ? err.message : String(err));
+      setTimeout(() => setSaveError(null), 5000);
+    }
   };
 
   return (
@@ -264,6 +311,65 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
         </div>
       )}
 
+      {/* AI 蒙版：只有 GPU 版可用。CPU 版时上面已给出说明，这里不出现死控件。 */}
+      {onApplyMask && (
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor="tonal-mask-region"
+            className="text-white/70 font-medium"
+          >
+            AI 局部蒙版
+          </label>
+          <div className="flex items-center gap-1.5">
+            <select
+              id="tonal-mask-region"
+              value={maskRegion}
+              onChange={(e) => setMaskRegion(e.target.value)}
+              className="focus-ring flex-1 min-w-0 bg-background-base border border-border-default rounded-md px-2 py-1.5 text-white outline-none text-xs focus:border-white/40"
+            >
+              {MASK_REGIONS.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={maskDehaze}
+              onChange={(e) => setMaskDehaze(Number(e.target.value))}
+              className="focus-ring flex-1 min-w-0 accent-white"
+              aria-label="蒙版去薄雾强度"
+            />
+            <button
+              onClick={handleApplyMaskClick}
+              disabled={isMasking}
+              className="focus-ring shrink-0 px-2.5 py-1.5 bg-white/5 hover:bg-white/10 active:scale-[0.98] text-white rounded-md text-xs transition-colors disabled:opacity-50"
+              title="用 AI 检测该区域并只对它应用去薄雾"
+            >
+              {isMasking ? '检测中…' : '套用'}
+            </button>
+          </div>
+          <p className="text-[10px] leading-relaxed text-white/60">
+            {isMasking
+              ? 'AI 正在检测区域并应用（实测约 4 秒）。'
+              : 'AI 本地检测区域，只对天空/主体等局部生效；不影响其它区域。'}
+          </p>
+          {masks.length > 0 && (
+            <p className="text-[10px] text-white/60">
+              已套用：{masks.map((m) => m.name ?? m.kind).join('、')}
+            </p>
+          )}
+          {maskError && (
+            <p role="alert" className="text-[10px] text-red-300/90">
+              {maskError}
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Action Buttons: Auto, Reset, Save to XMP */}
       <div className="flex items-center gap-2 pt-3 mt-auto border-t border-white/10">
         {/* Auto Button */}
@@ -301,10 +407,26 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
         >
           <Save className="w-3.5 h-3.5" aria-hidden="true" />
           <span className="pb-[1px]">
-            {saveFeedback ? '已保存' : isSaving ? '保存中…' : '保存调色'}
+            {saveError
+              ? '保存失败'
+              : saveFeedback
+                ? '已保存'
+                : isSaving
+                  ? '保存中…'
+                  : '保存调色'}
           </span>
         </button>
       </div>
+
+      {/* 保存失败必须有出口，否则统一命令的 rejection 会静默 */}
+      {saveError && (
+        <p
+          role="alert"
+          className="text-[10px] leading-relaxed text-red-300/90 rounded-md border border-red-400/25 px-2 py-1.5"
+        >
+          保存调色失败：{saveError}
+        </p>
+      )}
     </div>
   );
 };
