@@ -16,6 +16,8 @@ interface KeyboardShortcutsProps {
   onToggleTonalPanel?: () => void;
   onHoldOriginalStart?: () => void;
   onHoldOriginalEnd?: () => void;
+  onFocusSearch?: () => void;
+  onOpenShortcutHelp?: () => void;
 }
 
 export function useKeyboardShortcuts({
@@ -34,9 +36,24 @@ export function useKeyboardShortcuts({
   onToggleTonalPanel,
   onHoldOriginalStart,
   onHoldOriginalEnd,
+  onFocusSearch,
+  onOpenShortcutHelp,
 }: KeyboardShortcutsProps) {
   useEffect(() => {
+    /**
+     * True when a modal dialog owns the screen.
+     *
+     * Without this, the global single-handed shortcuts keep firing on the
+     * photo behind the scrim while the export / settings / metadata dialog is
+     * open — e.g. pressing `3` with a radio focused rates an invisible photo
+     * and desyncs the modal's live count (F-05).
+     */
+    const isDialogOpen = () =>
+      document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isDialogOpen()) return;
+
       // Ignore shortcut if user is focusing an input or textarea
       const target = e.target as HTMLElement;
       if (
@@ -54,6 +71,23 @@ export function useKeyboardShortcuts({
           e.preventDefault();
           onHoldOriginalStart();
         }
+        return;
+      }
+
+      // Focus the grid search field. `/` is the convention; Ctrl/Cmd+F also
+      // works because the OS find bar is useless inside a photo grid.
+      if (
+        (e.key === '/' || ((e.ctrlKey || e.metaKey) && e.key === 'f')) &&
+        onFocusSearch
+      ) {
+        e.preventDefault();
+        onFocusSearch();
+        return;
+      }
+
+      if (e.key === '?' && onOpenShortcutHelp) {
+        e.preventDefault();
+        onOpenShortcutHelp();
         return;
       }
 
@@ -201,6 +235,8 @@ export function useKeyboardShortcuts({
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
+      if (isDialogOpen()) return;
+
       const target = e.target as HTMLElement;
       if (
         target &&
@@ -239,5 +275,7 @@ export function useKeyboardShortcuts({
     onToggleTonalPanel,
     onHoldOriginalStart,
     onHoldOriginalEnd,
+    onFocusSearch,
+    onOpenShortcutHelp,
   ]);
 }
