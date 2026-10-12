@@ -116,3 +116,12 @@ pub struct ExportItem {
     pub jpg_path: Option<String>,
     pub raw_path: Option<String>,
 }
+
+/// `lumen_get_recipe_cmd` 返回：宿主侧调色面板的初始态。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LumenRecipe {
+    pub available: bool,
+    pub tone: ToneAdjustments,
+    pub monochrome: bool,
+}

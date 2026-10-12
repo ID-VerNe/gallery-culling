@@ -4,8 +4,10 @@ use std::process::Command;
 use tauri::State;
 
 use crate::db::Database;
-use crate::lumen::{self, LumenStatus, PreviewVariant, PINNED_LUMEN_VERSION};
-use crate::models::{AppSettings, ExportItem, FolderScanResult, LumenPreviewResult};
+use crate::lumen::{self, LumenError, LumenStatus, PreviewVariant, PINNED_LUMEN_VERSION};
+use crate::models::{
+    AppSettings, ExportItem, FolderScanResult, LumenPreviewResult, LumenRecipe, ToneAdjustments,
+};
 use crate::scanner::scan_folders;
 use crate::thumbnail::{get_cache_dir, get_or_create_thumbnail};
 use crate::xmp;
@@ -351,9 +353,26 @@ pub async fn lumen_preview_cmd(
     file_path: String,
     width: Option<u32>,
     original: Option<bool>,
+    // recipe: 调色参数 JSON 文本（如 {"adjustments":{"exposure":0.5}}），参与缓存键；
+    // 不传则走 .lumen 工程里的既有状态。
+    recipe: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<LumenPreviewResult, String> {
     let settings = state.db.load_settings()?;
+    // 坏 JSON 不能让预览整个失败：按"无 recipe"处理，行为退回今天。
+    let recipe: Option<serde_json::Value> = recipe.and_then(|r| match serde_json::from_str(&r) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            eprintln!("lumen_preview_cmd: recipe JSON 解析失败，已忽略: {}", e);
+            None
+        }
+    });
+    // 原图变体不含任何编辑 → 忽略 recipe（避免为原图算两个缓存条目）
+    let recipe = if original.unwrap_or(false) {
+        None
+    } else {
+        recipe
+    };
     let original = original.unwrap_or(false);
     let width = width.unwrap_or(1600).clamp(128, 1600); // sidecar 源上限 1600
 
@@ -392,13 +411,14 @@ pub async fn lumen_preview_cmd(
     };
     let cache_root = get_cache_dir().join("gallery");
 
-    let key = lumen::lumen_cache_key(
+    let key = lumen::lumen_cache_key_with_recipe(
         &src,
         width,
         variant,
         PINNED_LUMEN_VERSION,
         src_mtime,
         project_mtime,
+        recipe.as_ref(),
     );
     let was_cached = lumen::cached_preview(&cache_root, &key, width, variant).is_some();
 
@@ -409,9 +429,18 @@ pub async fn lumen_preview_cmd(
         lumen_version: PINNED_LUMEN_VERSION,
         src_mtime,
         project_mtime,
+        recipe: recipe.clone(),
     };
     let rendered = tokio::task::spawn_blocking(move || {
         lumen::ensure_preview(&src, &cache_root, inputs, |_tmp, args| {
+            // 调色 recipe 必须**先** edit.apply 写进 .lumen 工程再渲染：
+            // render.preview 不接受 recipe 参数（真实 sidecar 实测会报
+            // "unknown argument(s) for render.preview: recipe"）。
+            if let Some(recipe) = &recipe {
+                runtime
+                    .apply_recipe(&exe, &src.to_string_lossy(), recipe)
+                    .map_err(|e| LumenError::Protocol(format!("应用调色参数失败: {}", e)))?;
+            }
             // A 通道优先（常驻 sidecar，热态省掉每次 ~2s 的解释器冷启动）；
             // 失败时 runtime 内部自动降级到 B 通道单发。
             runtime.render_preview(&exe, args).map(|_| ())
@@ -482,4 +511,72 @@ pub async fn lumen_sync_ratings_cmd(
     })
     .await
     .map_err(|e| format!("评级同步任务异常: {}", e))?
+}
+
+/// 读取 LUMEN RAW 侧调色 recipe（宿主调色面板的初始态来源）。
+#[tauri::command]
+pub async fn lumen_get_recipe_cmd(
+    state: State<'_, AppState>,
+    file_path: String,
+) -> Result<LumenRecipe, String> {
+    let settings = state.db.load_settings()?;
+    let unavailable = || LumenRecipe {
+        available: false,
+        tone: ToneAdjustments::default(),
+        monochrome: false,
+    };
+    if !settings.lumen_enabled {
+        return Ok(unavailable());
+    }
+    let exe = match lumen::find_lumen_cli(&settings.lumen_cli_path) {
+        Some(e) => e,
+        None => return Ok(unavailable()),
+    };
+
+    tokio::task::spawn_blocking(move || {
+        let out = lumen::run_lumen(
+            &exe,
+            "edit.get",
+            &serde_json::json!({ "path": file_path, "full": true }),
+        )
+        .map_err(|e| e.to_string())?;
+        let state_obj = out.get("state").cloned().unwrap_or(serde_json::Value::Null);
+        Ok(LumenRecipe {
+            available: true,
+            tone: lumen::recipe_to_tone(&state_obj),
+            monochrome: state_obj
+                .get("monochrome")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        })
+    })
+    .await
+    .map_err(|e| format!("读取 recipe 任务异常: {}", e))?
+}
+
+/// 把宿主调色面板的 6 个滑杆写入 LUMEN RAW recipe。
+#[tauri::command]
+pub async fn lumen_apply_recipe_cmd(
+    state: State<'_, AppState>,
+    file_path: String,
+    recipe_json: String,
+) -> Result<(), String> {
+    let settings = state.db.load_settings()?;
+    if !settings.lumen_enabled {
+        return Err("未启用 LUMEN RAW 引擎".to_string());
+    }
+    let exe = lumen::find_lumen_cli(&settings.lumen_cli_path)
+        .ok_or_else(|| "未找到 lumen-cli".to_string())?;
+    let runtime = state.lumen.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let changes: serde_json::Value =
+            serde_json::from_str(&recipe_json).map_err(|e| format!("调色参数格式错误: {}", e))?;
+        runtime
+            .apply_recipe(&exe, &file_path, &changes)
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("应用 recipe 任务异常: {}", e))?
 }

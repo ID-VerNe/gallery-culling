@@ -13,9 +13,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gallery_culling_lib::lumen::{
-    ensure_preview, exec_and_classify, find_in_path, preview_cache_path, query_version,
-    run_lumen, lumen_cache_key, LumenError, PreviewCacheInputs, PreviewVariant,
-    PINNED_LUMEN_VERSION,
+    ensure_preview, exec_and_classify, find_in_path, lumen_cache_key, preview_cache_path,
+    query_version, run_lumen, LumenError, PreviewCacheInputs, PreviewVariant, PINNED_LUMEN_VERSION,
 };
 use serde_json::Value;
 
@@ -45,6 +44,13 @@ fn temp_cache(tag: &str) -> PathBuf {
     dir
 }
 
+/// 文件内容 sha256（E2E 里判断"渲染结果真的变了"，不做图像解码比较）。
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let d = Sha256::digest(bytes);
+    d.iter().take(16).map(|b| format!("{:02x}", b)).collect()
+}
+
 #[test]
 #[ignore = "需要已构建的 lumen-cli sidecar（设置 LUMEN_CLI 后用 --ignored 运行）"]
 fn e2e_sidecar_version_matches_pin() {
@@ -63,8 +69,12 @@ fn e2e_b_channel_info_on_real_photo() {
     let exe = require_sidecar();
     let sample = sample_photo().expect("需要 LUMEN_SAMPLE=<真实照片路径>");
     // photo.info 是 read_only 命令（B 通道最轻的真实往返）
-    let out = run_lumen(&exe, "photo.info", &serde_json::json!({"path": sample.to_string_lossy()}))
-        .expect("photo.info 应成功");
+    let out = run_lumen(
+        &exe,
+        "photo.info",
+        &serde_json::json!({"path": sample.to_string_lossy()}),
+    )
+    .expect("photo.info 应成功");
     assert!(out["width"].as_u64().unwrap_or(0) > 0, "应有宽度: {}", out);
     assert!(out["height"].as_u64().unwrap_or(0) > 0, "应有高度: {}", out);
 }
@@ -79,18 +89,24 @@ fn e2e_render_preview_produces_jpeg_and_caches() {
         width: 1024,
         variant: PreviewVariant::Edited,
         lumen_version: PINNED_LUMEN_VERSION,
-        src_mtime: std::fs::metadata(&sample).ok().and_then(|m| m.modified().ok()),
+        src_mtime: std::fs::metadata(&sample)
+            .ok()
+            .and_then(|m| m.modified().ok()),
         project_mtime: None,
+        recipe: None,
     };
 
     let t0 = std::time::Instant::now();
-    let path = ensure_preview(&sample, &cache_root, inputs, |_tmp, args| {
+    let path = ensure_preview(&sample, &cache_root, inputs.clone(), |_tmp, args| {
         run_lumen(&exe, "render.preview", args).map(|_| ())
     })
     .expect("首次渲染应成功");
     let cold = t0.elapsed();
     assert!(path.is_file(), "产物应落盘: {}", path.display());
-    assert!(path.to_string_lossy().contains("_lumen"), "文件名带 _lumen 标记");
+    assert!(
+        path.to_string_lossy().contains("_lumen"),
+        "文件名带 _lumen 标记"
+    );
     assert!(path.to_string_lossy().ends_with(".jpg"), "应为 jpg");
 
     // 真的是 JPEG（魔数 FF D8 FF）
@@ -106,7 +122,10 @@ fn e2e_render_preview_produces_jpeg_and_caches() {
         inputs.src_mtime,
         inputs.project_mtime,
     );
-    assert_eq!(preview_cache_path(&cache_root, &key, 1024, PreviewVariant::Edited), path);
+    assert_eq!(
+        preview_cache_path(&cache_root, &key, 1024, PreviewVariant::Edited),
+        path
+    );
     let again = ensure_preview(&sample, &cache_root, inputs, |_tmp, _args| {
         panic!("缓存命中时绝不能调用渲染边界")
     })
@@ -178,7 +197,8 @@ fn e2e_mcp_jsonrpc_over_stdio_roundtrip() {
     let mut reader = std::io::BufReader::new(stdout);
     let mut line = String::new();
     reader.read_line(&mut line).expect("应读到一行");
-    let v: Value = serde_json::from_str(line.trim()).unwrap_or_else(|e| panic!("非法 JSON: {} ({})", line, e));
+    let v: Value =
+        serde_json::from_str(line.trim()).unwrap_or_else(|e| panic!("非法 JSON: {} ({})", line, e));
     assert_eq!(v["id"], 1);
     assert_eq!(v["result"]["serverInfo"]["version"], PINNED_LUMEN_VERSION);
     drop(child.stdin.take());
@@ -193,10 +213,7 @@ fn e2e_requires_sidecar_message_is_actionable() {
     }
     let msg = std::panic::catch_unwind(|| require_sidecar())
         .expect_err("无 sidecar 时应 panic 并给出提示");
-    let text = msg
-        .downcast_ref::<String>()
-        .cloned()
-        .unwrap_or_default();
+    let text = msg.downcast_ref::<String>().cloned().unwrap_or_default();
     assert!(text.contains("LUMEN_CLI"), "提示应指明如何配置: {}", text);
 }
 
@@ -232,8 +249,7 @@ fn e2e_a_channel_warm_preview_beats_cold() {
     let sample = sample_photo().expect("需要 LUMEN_SAMPLE");
     let rt = LumenRuntime::new();
     let args_for = |tag: &str| {
-        let out = std::env::temp_dir()
-            .join(format!("lumen_a_{}_{}.jpg", std::process::id(), tag));
+        let out = std::env::temp_dir().join(format!("lumen_a_{}_{}.jpg", std::process::id(), tag));
         let _ = std::fs::remove_file(&out);
         serde_json::json!({
             "path": sample.to_string_lossy(),
@@ -245,12 +261,16 @@ fn e2e_a_channel_warm_preview_beats_cold() {
 
     // 第一次：冷（spawn + 解释器启动 + 握手 + 渲染）
     let t0 = std::time::Instant::now();
-    let first = rt.render_preview(&exe, &args_for("cold")).expect("cold 应成功");
+    let first = rt
+        .render_preview(&exe, &args_for("cold"))
+        .expect("cold 应成功");
     let cold = t0.elapsed();
 
     // 第二次：热（同一 sidecar 进程，只解码+渲染）
     let t1 = std::time::Instant::now();
-    let second = rt.render_preview(&exe, &args_for("warm")).expect("warm 应成功");
+    let second = rt
+        .render_preview(&exe, &args_for("warm"))
+        .expect("warm 应成功");
     let warm = t1.elapsed();
 
     assert!(first["output"].is_string(), "cold 结果应带 output 路径");
@@ -261,7 +281,12 @@ fn e2e_a_channel_warm_preview_beats_cold() {
         warm,
         cold.as_secs_f64() / warm.as_secs_f64().max(1e-6)
     );
-    assert!(warm < cold, "热态必须快于冷态（warm={:?} cold={:?}）", warm, cold);
+    assert!(
+        warm < cold,
+        "热态必须快于冷态（warm={:?} cold={:?}）",
+        warm,
+        cold
+    );
 }
 
 #[test]
@@ -274,7 +299,10 @@ fn e2e_a_channel_status_ready_after_handshake() {
     // 触发建连（会失败，因为样张不存在，但 client 已建立与否以 status 为准）
     let _ = rt.render_preview(&exe, &args);
     let st = rt.status(true, Some(exe.clone()));
-    println!("E2E status: available={} found={:?} detail={}", st.available, st.found_version, st.detail);
+    println!(
+        "E2E status: available={} found={:?} detail={}",
+        st.available, st.found_version, st.detail
+    );
 }
 
 #[test]
@@ -323,4 +351,84 @@ fn e2e_rating_zero_not_pushed() {
     let rt = LumenRuntime::new();
     let folder = std::env::temp_dir();
     let _ = rt.pull_ratings(&exe, &folder);
+}
+
+#[test]
+#[ignore = "需要已构建的 lumen-cli sidecar + LUMEN_SAMPLE"]
+fn e2e_recipe_apply_then_render_changes_pixels() {
+    use gallery_culling_lib::lumen::LumenRuntime;
+    let exe = require_sidecar();
+    let sample = sample_photo().expect("需要 LUMEN_SAMPLE");
+    let photo = sample.to_string_lossy().to_string();
+    let rt = LumenRuntime::new();
+
+    let render = |tag: &str| {
+        let out =
+            std::env::temp_dir().join(format!("lumen_recipe_{}_{}.jpg", std::process::id(), tag));
+        let _ = std::fs::remove_file(&out);
+        rt.render_preview(
+            &exe,
+            &serde_json::json!({
+                "path": photo,
+                "size": 512,
+                "output": out.to_string_lossy(),
+            }),
+        )
+        .expect("渲染应成功");
+        out
+    };
+
+    // 基线：先把 session 调色清零（apply 本身会建立 A 通道）
+    let zero = rt
+        .apply_recipe(
+            &exe,
+            &photo,
+            &serde_json::json!({"adjustments": {"exposure": 0.0}}),
+        )
+        .expect("归零 recipe 应成功");
+    assert_eq!(zero["state"]["adjustments"]["exposure"].as_f64(), Some(0.0));
+    let base = render("base");
+    let base_hash = sha256(&std::fs::read(&base).unwrap());
+
+    // 套 +2 档曝光（同一常驻进程内 —— lumen 的编辑状态是 session 态）
+    let applied = rt
+        .apply_recipe(
+            &exe,
+            &photo,
+            &serde_json::json!({"adjustments": {"exposure": 2.0}}),
+        )
+        .expect("应用 recipe 应成功");
+    assert_eq!(
+        applied["state"]["adjustments"]["exposure"].as_f64(),
+        Some(2.0),
+        "apply_edits 响应应回显新值，实际: {}",
+        applied
+    );
+    assert!(
+        !applied["applied"]
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(true),
+        "applied 列表不应为空"
+    );
+
+    let edited = render("edited");
+    let edited_hash = sha256(&std::fs::read(&edited).unwrap());
+    println!(
+        "E2E recipe: base={} edited={} (同进程 +2EV)",
+        &base_hash[..12],
+        &edited_hash[..12]
+    );
+    assert_ne!(
+        base_hash, edited_hash,
+        "+2EV 后渲染结果必须变化（否则 recipe 没进渲染路径）"
+    );
+
+    // 还原：同一进程内清零
+    let _ = rt.apply_recipe(
+        &exe,
+        &photo,
+        &serde_json::json!({"adjustments": {"exposure": 0.0}}),
+    );
+    let _ = std::fs::remove_file(sample.with_extension("lumen"));
 }

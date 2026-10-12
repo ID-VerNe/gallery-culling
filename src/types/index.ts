@@ -53,6 +53,34 @@ export interface AppSettings {
   photoshopPath: string;
   thumbnailWidth: number;
   sortOrder: SortOrder;
+  /** 是否启用 LUMEN RAW 引擎集成（默认 false，零迁移风险） */
+  lumenEnabled: boolean;
+  /** lumen-cli.exe 路径（空 = 自动查找） */
+  lumenCliPath: string;
+}
+
+/** lumen_preview_cmd 返回：previewPath = null 表示引擎不可用（前端静默降级） */
+export interface LumenPreviewResult {
+  previewPath: string | null;
+  width: number;
+  original: boolean;
+  cached: boolean;
+}
+
+/** LUMEN RAW 侧调色 recipe（宿主调色面板的初始态） */
+export interface LumenRecipe {
+  available: boolean;
+  tone: ToneAdjustments;
+  monochrome: boolean;
+}
+
+/** LUMEN RAW 集成握手状态 */
+export interface LumenStatus {
+  available: boolean;
+  enabled: boolean;
+  pinnedVersion: string;
+  foundVersion: string | null;
+  detail: string;
 }
 
 export interface ExportItem {

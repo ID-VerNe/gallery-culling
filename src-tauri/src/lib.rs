@@ -42,6 +42,8 @@ pub fn run() {
             lumen_status_cmd,
             lumen_preview_cmd,
             lumen_sync_ratings_cmd,
+            lumen_get_recipe_cmd,
+            lumen_apply_recipe_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

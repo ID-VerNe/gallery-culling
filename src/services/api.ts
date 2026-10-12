@@ -5,6 +5,7 @@ import {
   ExportItem,
   FolderScanResult,
   LumenPreviewResult,
+  LumenRecipe,
   LumenStatus,
   ToneAdjustments,
 } from '../types';
@@ -215,12 +216,13 @@ export const api = {
    */
   getLumenPreview: async (
     filePath: string,
-    opts?: { width?: number; original?: boolean },
+    opts?: { width?: number; original?: boolean; recipe?: unknown },
   ): Promise<LumenPreviewResult> => {
     return await invoke<LumenPreviewResult>('lumen_preview_cmd', {
       filePath,
       width: opts?.width ?? null,
       original: opts?.original ?? null,
+      recipe: opts?.recipe ? JSON.stringify(opts.recipe) : null,
     });
   },
 
@@ -230,5 +232,18 @@ export const api = {
    */
   syncLumenRatings: async (folder: string): Promise<string[]> => {
     return await invoke<string[]>('lumen_sync_ratings_cmd', { folder });
+  },
+
+  /** 读取 LUMEN RAW 侧 recipe（available=false 表示引擎不可用） */
+  getLumenRecipe: async (filePath: string): Promise<LumenRecipe> => {
+    return await invoke<LumenRecipe>('lumen_get_recipe_cmd', { filePath });
+  },
+
+  /** 把调色滑杆写入 LUMEN RAW recipe */
+  applyLumenRecipe: async (filePath: string, changes: unknown): Promise<void> => {
+    await invoke('lumen_apply_recipe_cmd', {
+      filePath,
+      recipeJson: JSON.stringify(changes),
+    });
   },
 };

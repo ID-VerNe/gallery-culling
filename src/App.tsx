@@ -28,6 +28,7 @@ import {
 } from './types';
 import { api } from './services/api';
 import { computeAutoTone, DEFAULT_TONE } from './utils/autoTone';
+import { toneToRecipe } from './utils/toneToRecipe';
 
 function AppShell() {
   const toast = useToast();
@@ -78,6 +79,8 @@ function AppShell() {
   // LUMEN RAW engine handshake (P0). Zero requests while disabled — the hook
   // itself owns the 1.5s delay and the silent degradation.
   const lumenStatus = useLumenStatus(settings?.lumenEnabled ?? false);
+  // 只有握手成功（版本 1.6.0 匹配）才出现 LUMEN RAW 专属入口
+  const lumenAvailable = lumenStatus.available;
 
   // Load initial settings and default paths on startup
   useEffect(() => {
@@ -597,6 +600,31 @@ function AppShell() {
     }
   }, [currentGroup, toneMap, toast]);
 
+  /**
+   * 把调色滑杆写入 LUMEN RAW 的 recipe（edit.apply，最终值语义）。
+   * 引擎不可用时按钮不出现 —— 前端行为与今天逐像素一致。
+   */
+  const handleSaveToneToLumen = useCallback(async () => {
+    if (!currentGroup) return;
+    const toneToSave =
+      toneMap[currentGroup.id] || currentGroup.tone || DEFAULT_TONE;
+    const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
+    if (!targetPath) return;
+
+    try {
+      await api.applyLumenRecipe(targetPath, toneToRecipe(toneToSave));
+      setGroups((prev) =>
+        prev.map((g) =>
+          g.id === currentGroup.id ? { ...g, tone: toneToSave } : g,
+        ),
+      );
+      toast.success('调色参数已应用到 LUMEN RAW。');
+    } catch (err) {
+      console.error('Failed to apply LUMEN RAW recipe:', err);
+      toast.error(`应用调色到 LUMEN RAW 失败：${String(err)}`);
+    }
+  }, [currentGroup, toneMap, toast]);
+
   // Luminar AI Roundtrip Handler
   const handleOpenLuminar = useCallback(async () => {
     if (!currentGroup) return;
@@ -831,6 +859,7 @@ function AppShell() {
               onReset={handleResetTone}
               onAuto={handleAutoTone}
               onSaveXmp={handleSaveToneToXmp}
+              onSaveToLumen={lumenAvailable ? handleSaveToneToLumen : undefined}
               onClose={() => setShowTonalPanel(false)}
             />
           ) : (

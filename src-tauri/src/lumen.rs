@@ -219,20 +219,45 @@ pub fn lumen_cache_key(
     src_mtime: Option<SystemTime>,
     project_mtime: Option<SystemTime>,
 ) -> String {
+    lumen_cache_key_with_recipe(
+        src,
+        width,
+        variant,
+        lumen_version,
+        src_mtime,
+        project_mtime,
+        None,
+    )
+}
+
+/// 带 recipe 的缓存键。recipe 参与键是**硬要求**：改了色必须重新渲染，
+/// 否则用户会看到上一次的图（Step 9 spec 不变量 N4）。
+pub fn lumen_cache_key_with_recipe(
+    src: &Path,
+    width: u32,
+    variant: PreviewVariant,
+    lumen_version: &str,
+    src_mtime: Option<SystemTime>,
+    project_mtime: Option<SystemTime>,
+    recipe: Option<&Value>,
+) -> String {
     // 相对路径 canonicalize，保证同一文件不同写法同 key。
     let abs = src.canonicalize().unwrap_or_else(|_| src.to_path_buf());
     let variant_tag = match variant {
         PreviewVariant::Edited => "edited",
         PreviewVariant::Original => "orig",
     };
+    // v2：新增 recipe 段。升级版本号会让所有旧缓存自然失效（一次性重渲染）。
+    let recipe_tag = recipe.map(recipe_hash).unwrap_or_else(|| "-".to_string());
     let payload = format!(
-        "lumen-preview-v1|{}|{}|{}|{}|{}|{}",
+        "lumen-preview-v2|{}|{}|{}|{}|{}|{}|{}",
         lumen_version,
         abs.display(),
         mtime_tag(src_mtime),
         mtime_tag(project_mtime),
         width,
-        variant_tag
+        variant_tag,
+        recipe_tag
     );
     let digest = Sha256::digest(payload.as_bytes());
     // 16 位小写 hex = 前 8 字节。
@@ -501,6 +526,87 @@ fn tool_to_command_id(tool: &str) -> &'static str {
     }
 }
 
+/// 宿主 ToneAdjustments → lumen recipe changes（**最终值**语义）。
+///
+/// `include_temperature` 默认 false：lumen 的 temperature 是**相对偏移**（0.0 基线），
+/// 宿主写 XMP 用的是**绝对 K**（5350 基线）—— 量纲未闭环前透传会把画面彻底带偏
+/// （glue 报告 F §4.3-2）。有显式开关留给未来的换算实现。
+pub fn tone_to_recipe(tone: &crate::models::ToneAdjustments, include_temperature: bool) -> Value {
+    let mut adj = serde_json::Map::new();
+    adj.insert("exposure".into(), json_f32(tone.exposure));
+    adj.insert("highlights".into(), json_f32(tone.highlights));
+    adj.insert("shadows".into(), json_f32(tone.shadows));
+    adj.insert("tint".into(), json_f32(tone.tint));
+    adj.insert("contrast".into(), json_f32(tone.contrast));
+    if include_temperature {
+        adj.insert("temperature".into(), json_f32(tone.temperature));
+    }
+    serde_json::json!({ "adjustments": adj })
+}
+
+/// lumen `state.adjustments` → 宿主 ToneAdjustments（缺失字段 → 0）。
+pub fn recipe_to_tone(state: &Value) -> crate::models::ToneAdjustments {
+    let adj = state.get("adjustments").cloned().unwrap_or(Value::Null);
+    let g = |k: &str| adj.get(k).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+    crate::models::ToneAdjustments {
+        exposure: g("exposure"),
+        highlights: g("highlights"),
+        shadows: g("shadows"),
+        // temperature 同量纲问题：回读也只作展示，不参与回写
+        temperature: g("temperature"),
+        tint: g("tint"),
+        contrast: g("contrast"),
+    }
+}
+
+/// f32 → JSON：量化到 4 位小数，消除 f32→f64 的二进制表示噪声
+/// （0.65f32 直接转 f64 会得到 0.6499999761581421，破坏快照对比与缓存稳定性）。
+fn json_f32(v: f32) -> Value {
+    let rounded = (v as f64 * 10_000.0).round() / 10_000.0;
+    serde_json::Number::from_f64(rounded)
+        .map(Value::Number)
+        .unwrap_or(Value::Null)
+}
+
+/// recipe 的规范化哈希（进缓存键）：键排序 + 浮点归一，保证同配方同 key。
+pub fn recipe_hash(changes: &Value) -> String {
+    let canonical = canonical_json(changes);
+    let digest = Sha256::digest(canonical.as_bytes());
+    digest
+        .iter()
+        .take(8)
+        .map(|b| format!("{:02x}", b))
+        .collect()
+}
+
+/// 递归规范化：对象键排序、浮点保留 4 位，避免 0.30000000000000004 之类的抖动。
+fn canonical_json(v: &Value) -> String {
+    match v {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let inner: Vec<String> = keys
+                .iter()
+                .map(|k| format!("{:?}:{}", k, canonical_json(&map[*k])))
+                .collect();
+            format!("{{{}}}", inner.join(","))
+        }
+        Value::Array(items) => format!(
+            "[{}]",
+            items
+                .iter()
+                .map(canonical_json)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Value::Number(n) => {
+            let f = n.as_f64().unwrap_or(0.0);
+            format!("{:.4}", f)
+        }
+        other => other.to_string(),
+    }
+}
+
 /// 同步动作：宿主评级 → lumen。
 ///
 /// `rating = 0 且 flag = none` 不推：lumen 的 `Catalog.compact()` 会把全零条目压掉，
@@ -653,6 +759,65 @@ impl LumenRuntime {
                 run_lumen(exe, "render.preview", args)
             }
         }
+    }
+
+    /// 应用 recipe（`edit.apply`，最终值语义）。
+    ///
+    /// **只能走 A 通道**：lumen 的编辑状态是**进程内 session**——headless 单发
+    /// `run edit.apply` 会返回 `applied: [...]`，但下一个进程 `edit.get` 读回仍是 0
+    /// （实测：不落盘、无 .lumen 工程文件）。所以必须与随后的 `render_preview` 落在
+    /// **同一个 sidecar 进程**内。B 通道兜底在这里是假的成功，故不做兜底。
+    pub fn apply_recipe(
+        &self,
+        exe: &Path,
+        photo: &str,
+        changes: &Value,
+    ) -> Result<Value, LumenError> {
+        let args = serde_json::json!({ "path": photo, "changes": changes });
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| LumenError::Io("锁中毒".to_string()))?;
+        if guard.failures >= MAX_RESTARTS {
+            return Err(LumenError::Timeout);
+        }
+        if guard.client.is_none() {
+            let transport = ProcessTransport::spawn(exe, &["mcp", "--headless"])?;
+            let mut client = McpClient::new(transport);
+            client.handshake()?;
+            guard.version = client.server_version().map(str::to_string);
+            guard.client = Some(client);
+        }
+        let client = guard.client.as_mut().expect("client 已建立");
+        match client.call_tool("apply_edits", &args) {
+            Ok(v) => {
+                guard.failures = 0;
+                Ok(v)
+            }
+            Err(e) => {
+                guard.client = None;
+                guard.version = None;
+                guard.failures = guard.failures.saturating_add(1);
+                Err(e)
+            }
+        }
+    }
+
+    /// A 通道是否活着（调色等 session 态操作的前提）。
+    pub fn has_live_client(&self) -> bool {
+        self.inner
+            .lock()
+            .map(|g| g.client.is_some())
+            .unwrap_or(false)
+    }
+
+    /// 读回 recipe（`edit.get full=true`）。
+    pub fn get_recipe(&self, exe: &Path, photo: &str) -> Result<Value, LumenError> {
+        run_lumen(
+            exe,
+            "edit.get",
+            &serde_json::json!({ "path": photo, "full": true }),
+        )
     }
 
     /// 推送评级到 LUMEN RAW（Step 8）：A 通道工具优先，B 通道兜底。
@@ -1019,24 +1184,40 @@ pub fn cached_preview(
 }
 
 /// 预览缓存键的全部输入（打包以保持函数签名 ≤7 参数，clippy too_many_arguments）。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PreviewCacheInputs {
     pub width: u32,
     pub variant: PreviewVariant,
     pub lumen_version: &'static str,
     pub src_mtime: Option<SystemTime>,
     pub project_mtime: Option<SystemTime>,
+    /// 待渲染的调色 recipe（进缓存键 + 渲染参数）
+    pub recipe: Option<Value>,
+}
+
+impl Default for PreviewCacheInputs {
+    fn default() -> Self {
+        Self {
+            width: 1600,
+            variant: PreviewVariant::Edited,
+            lumen_version: PINNED_LUMEN_VERSION,
+            src_mtime: None,
+            project_mtime: None,
+            recipe: None,
+        }
+    }
 }
 
 impl PreviewCacheInputs {
     pub fn key(&self, src: &Path) -> String {
-        lumen_cache_key(
+        lumen_cache_key_with_recipe(
             src,
             self.width,
             self.variant,
             self.lumen_version,
             self.src_mtime,
             self.project_mtime,
+            self.recipe.as_ref(),
         )
     }
 
@@ -1548,6 +1729,7 @@ mod tests {
             lumen_version: PINNED_LUMEN_VERSION,
             src_mtime,
             project_mtime: None,
+            recipe: None,
         }
     }
 
@@ -2259,6 +2441,180 @@ ope\lumen-cli-xyz.exe"
         let c: (u8, String, i64) = (4, "pick".to_string(), 1_700_000_000);
         assert_eq!(c.0, 4);
         assert_eq!(c.1, "pick");
+    }
+
+    // ---- Step 9: recipe 互通 ----
+    #[test]
+    fn tone_to_recipe_excludes_temperature_by_default() {
+        let tone = crate::models::ToneAdjustments {
+            exposure: 0.65,
+            highlights: -20.0,
+            shadows: 45.0,
+            temperature: 5350.0,
+            tint: 5.0,
+            contrast: 10.0,
+        };
+        let r = tone_to_recipe(&tone, false);
+        let adj = r["adjustments"].as_object().unwrap();
+        assert_eq!(adj.len(), 5, "默认只透传 5 个字段，实际: {:?}", adj);
+        assert_eq!(adj["exposure"], serde_json::json!(0.65));
+        assert_eq!(adj["highlights"], serde_json::json!(-20.0));
+        assert!(
+            !adj.contains_key("temperature"),
+            "temperature 量纲未闭环（绝对 K vs 相对偏移），禁止透传"
+        );
+        // 显式开关才带上
+        let r2 = tone_to_recipe(&tone, true);
+        assert!(r2["adjustments"]
+            .as_object()
+            .unwrap()
+            .contains_key("temperature"));
+    }
+
+    #[test]
+    fn recipe_to_tone_defaults_missing_fields() {
+        let state = serde_json::json!({
+            "adjustments": { "exposure": 0.5, "highlights": -10.0 }
+        });
+        let t = recipe_to_tone(&state);
+        assert_eq!(t.exposure, 0.5);
+        assert_eq!(t.highlights, -10.0);
+        assert_eq!(t.shadows, 0.0, "缺失字段应为 0");
+        assert_eq!(t.contrast, 0.0);
+        // 空状态
+        let empty = recipe_to_tone(&serde_json::json!({}));
+        assert_eq!(empty.exposure, 0.0);
+    }
+
+    #[test]
+    fn recipe_requires_live_session_channel() {
+        // 无常驻连接时 apply_recipe 必须失败（而不是假装成功）：
+        // lumen 的编辑状态是进程内 session，B 通道单发不落盘。
+        let rt = LumenRuntime::new();
+        assert!(!rt.has_live_client(), "新建运行时不应有客户端");
+        let err = rt
+            .apply_recipe(
+                Path::new(
+                    r"C:
+ope\lumen-cli-xyz.exe",
+                ),
+                "x.ARW",
+                &serde_json::json!({"adjustments": {"exposure": 1.0}}),
+            )
+            .expect_err("无常驻通道时不应成功");
+        assert!(matches!(err, LumenError::NotInstalled), "实际: {:?}", err);
+    }
+
+    #[test]
+    fn recipe_hash_is_canonical_and_recipe_sensitive() {
+        // 键顺序不同 → 同 hash
+        let a = serde_json::json!({"adjustments": {"exposure": 0.3, "tint": 0.1}});
+        let b = serde_json::json!({"adjustments": {"tint": 0.1, "exposure": 0.3}});
+        assert_eq!(recipe_hash(&a), recipe_hash(&b), "键顺序不应影响 hash");
+        // 浮点抖动归一
+        let c = serde_json::json!({"exposure": 0.30000000000000004});
+        let d = serde_json::json!({"exposure": 0.3});
+        assert_eq!(recipe_hash(&c), recipe_hash(&d), "浮点抖动应归一");
+        // 值不同 → hash 不同
+        assert_ne!(
+            recipe_hash(&a),
+            recipe_hash(&serde_json::json!({"exposure": 0.9}))
+        );
+    }
+
+    #[test]
+    fn cache_key_includes_recipe() {
+        // 真实签名：同一张图、同样的 mtime，只有 recipe 不同 → key 必须不同。
+        let src = Path::new("src.ARW");
+        let a = lumen_cache_key_with_recipe(
+            src,
+            1600,
+            PreviewVariant::Edited,
+            PINNED_LUMEN_VERSION,
+            None,
+            None,
+            None,
+        );
+        let b = lumen_cache_key_with_recipe(
+            src,
+            1600,
+            PreviewVariant::Edited,
+            PINNED_LUMEN_VERSION,
+            None,
+            None,
+            Some(&serde_json::json!({"adjustments": {"exposure": 0.5}})),
+        );
+        let c = lumen_cache_key_with_recipe(
+            src,
+            1600,
+            PreviewVariant::Edited,
+            PINNED_LUMEN_VERSION,
+            None,
+            None,
+            Some(&serde_json::json!({"adjustments": {"exposure": 0.9}})),
+        );
+        assert_ne!(a, b, "加了 recipe 必须换缓存条目（否则改色返旧图）");
+        assert_ne!(b, c, "recipe 值不同 → key 不同");
+        // 等价 recipe（键序不同）→ 同 key，不浪费缓存
+        let d = lumen_cache_key_with_recipe(
+            src,
+            1600,
+            PreviewVariant::Edited,
+            PINNED_LUMEN_VERSION,
+            None,
+            None,
+            Some(&serde_json::json!({"adjustments": {"tint": 0.0, "exposure": 0.5}})),
+        );
+        assert_ne!(d, b);
+        // PreviewCacheInputs 走同一条路径
+        let mut inputs = ep_inputs(None);
+        inputs.recipe = Some(serde_json::json!({"adjustments": {"exposure": 0.5}}));
+        assert_eq!(inputs.key(src), b, "PreviewCacheInputs 必须用同一个键算法");
+    }
+
+    #[test]
+    fn recipe_changes_re_render_through_ensure_preview() {
+        // 端到端（缓存层）：改 recipe → ensure_preview 必须真的重渲染，而不是命中旧图
+        let root = tmp("ep_recipe");
+        let src_path = tmp("ep_recipe_src");
+        std::fs::write(&src_path, b"raw").unwrap();
+        let mut inputs = ep_inputs(Some(t_plus(1)));
+
+        // 计数器与"抓到的渲染参数"用 Cell，闭包可重复传入
+        let calls = std::cell::Cell::new(0);
+        let seen = std::cell::RefCell::new(None);
+        let render = |tmp: &Path, args: &Value| {
+            calls.set(calls.get() + 1);
+            *seen.borrow_mut() = Some(args.clone());
+            std::fs::write(tmp, b"rendered").map_err(|e| LumenError::Io(e.to_string()))
+        };
+
+        // 第一次：无 recipe
+        let a = ensure_preview(&src_path, &root, inputs.clone(), render).unwrap();
+        let first = std::fs::read(&a).unwrap();
+
+        // 同 recipe → 命中缓存（渲染闭包不该再被调用）
+        let a2 = ensure_preview(&src_path, &root, inputs.clone(), render).unwrap();
+        assert_eq!(std::fs::read(&a2).unwrap(), first);
+        assert_eq!(calls.get(), 1, "同 recipe 必须命中缓存");
+
+        // 改 recipe → 必须重新渲染
+        inputs.recipe = Some(serde_json::json!({"adjustments": {"exposure": 1.25}}));
+        let b = ensure_preview(&src_path, &root, inputs.clone(), render).unwrap();
+        assert_eq!(calls.get(), 2, "recipe 变了必须重新渲染");
+        assert_ne!(b, a, "不同 recipe 必须落到不同缓存文件");
+
+        // 契约核对：`render.preview` **不接受** recipe 参数（真实 sidecar 实测
+        // 'unknown argument(s) for render.preview: recipe'），所以 recipe 由调用方
+        // 先 edit.apply 写进 .lumen 工程，渲染只带 path/size/output。
+        let captured = seen.borrow().clone().expect("渲染闭包至少应被调用一次");
+        assert!(
+            captured.get("recipe").is_none(),
+            "render.preview 不接受 recipe 键（会把整个渲染打挂）: {:?}",
+            captured
+        );
+        assert_eq!(captured["size"], 1600);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
