@@ -110,6 +110,14 @@
 | N-15 | t6 | LOW | pnpm→npm 迁移残留：`node_modules__pnpm_backup/`、`pnpm-lock.yaml`、`pnpm-workspace.yaml` 与 `package-lock.json` 并存 | 仓库根 |
 | N-16 | t1 | MEDIUM | `apply_tone_cmd` 的 XMP 写入（`fs::write` 截断+写）**不在 `spawn_blocking` 内** → 并发可截断 `.xmp` | `commands.rs:696-704`、`xmp.rs:326` |
 
+### 2.5 批次 D 实施期**追加发现**（复核报告未列，实施时由 impl-d1-tests 发现）
+
+| 新增 ID | 定级 | 内容 | 位置 | 处置 |
+|---|---|---|---|---|
+| N-17 | LOW | **`BeforeAfterViewport` 半成品接线 / 死 API 面**：props 声明了 `onPrev?`/`onNext?`，App 也**确实传了** `handlePrev`/`handleNext`，但组件从未解构、从未消费（无「上一张/下一张」按钮）→ 死 props + 空的传参链路 | `BeforeAfterViewport.tsx:28-29`（接口）、`:49-64`（解构缺失）、`App.tsx:1114-1115`（传参） | **已修**（批次 D）：**删除**这两个未被消费的 props 与 App 侧传参。**未**新增翻页 UI —— 属功能变更（见下） |
+
+**为何选"删除"而非"补翻页按钮"：** `PreviewViewport`（单图）有 ChevronLeft/Right 覆盖层且 props 为**必填**；`SplitCompareViewport` 从一开始**就没有**这对 props。只有 `BeforeAfterViewport` 声明了**可选**却永不用 —— 这是死面，不是功能缺失。若改为补按钮，只补 Before/After 会造成**新的**三视口不对称；两处都补则是**功能新增**（涉及布局与"对比视图是否要翻页"的产品判断），超出 31.0 人天修复范围。删除可逆：日后若产品要翻页，恢复 props 并按 `PreviewViewport:264-286` 复制 JSX 即可。
+
 ---
 
 ## 3. 复核推翻 / 修正 / 新增清单（诚信章节）

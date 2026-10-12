@@ -14,6 +14,30 @@ import {
 import { PhotoGroupInfo } from '../types';
 import { api } from '../services/api';
 
+/**
+ * 宫格子格子的高度（px）。
+ *
+ * **强绑定**：`GridPhotoCell` 的 `style.height` 直接用 `GRID_CELL_HEIGHT[columns]`；
+ * 行容器（`grid gap-1.5 pb-1.5`）再贡献 `GRID_ROW_GAP_BOTTOM` 的底部内边距。
+ * 两者相加即虚拟化要用的精确行高 `gridRowHeight()`。**改动任一高度（或 Tailwind
+ * 的 `pb-*`）都必须同步改这里**，否则每行会产生固定偏差（1 万张 / 3 列累计
+ * ≈ 6666px 的滚动漂移、scrollToIndex 落点偏移）。
+ */
+const GRID_CELL_HEIGHT: Record<3 | 4, number> = { 3: 132, 4: 110 };
+
+/** 行容器 `pb-1.5` = 0.375rem = 6px（Tailwind 类无法被 JS 读取，只能写死并注释）。 */
+const GRID_ROW_GAP_BOTTOM = 6;
+
+/**
+ * 虚拟化的精确估算行高 = 子格子高度 + 行容器底部内边距（3 列 138 / 4 列 116）。
+ *
+ * 行容器挂了 `measureElement`，实测尺寸会覆盖本估算值 —— 所以本值只是"首帧尚未
+ * 测量"时的占位，真正的抗漂移来自自测。导出仅为让回归测试能断言这两个数字。
+ */
+export function gridRowHeight(columns: 3 | 4): number {
+  return GRID_CELL_HEIGHT[columns] + GRID_ROW_GAP_BOTTOM;
+}
+
 interface ThumbnailGridProps {
   groups: PhotoGroupInfo[];
   selectedIndex: number;
@@ -58,6 +82,12 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   const parentRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  // 每个宫格实例持有一份缩略图去重/缓存（滚动回来命中、并发共享），卸载即释放。
+  // 用惰性初始化的 ref 而不是 useState：不需要触发重渲染，且实例稳定。
+  const loaderRef = useRef<ThumbnailLoader | null>(null);
+  if (!loaderRef.current) loaderRef.current = createThumbnailLoader();
+  const loader = loaderRef.current;
+
   // 面板互换（调色面板 → 宫格）时旧 DOM 被卸载，焦点会退回 body。
   // 与既有的"搜索打开时聚焦输入框"合成一个 effect：搜索框优先，否则在
   // 焦点无主时把焦点移入 listbox（parentRef，它已是 tabIndex=0 的宿主）。
@@ -90,8 +120,10 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
     return res;
   }, [groups, columns]);
 
-  // Virtualizer for multi-column rows
-  const rowHeight = columns === 3 ? 140 : 118;
+  // Virtualizer for multi-column rows.
+  // 行高用精确值（不再是 140/118 的估算），并配合行容器上的 measureElement
+  // 自测：估算只保证首帧不跳，实测保证对后续样式改动免疫。见 gridRowHeight()。
+  const rowHeight = gridRowHeight(columns);
   const gridVirtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
@@ -293,13 +325,18 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
               return (
                 <div
                   key={virtualRow.index}
+                  // N-10：把行交给虚拟化器实测（配合 data-index）。**刻意不再写死
+                  // height**：写死会让 offsetHeight 永远等于估算值，measureElement
+                  // 量到的就是它自己算的，自测退化为空转、样式改动仍会错位。交给内容
+                  // 决定高度后，实测值才能真正纠正估算。
+                  ref={gridVirtualizer.measureElement}
+                  data-index={virtualRow.index}
                   role="presentation"
                   style={{
                     position: 'absolute',
                     top: 0,
                     left: 0,
                     width: '100%',
-                    height: `${virtualRow.size}px`,
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
                   className={`grid gap-1.5 pb-1.5 ${
@@ -325,6 +362,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
                         isCandidate={isCandidate}
                         onSelect={() => onSelect(itemIndex)}
                         lumenThumbnails={lumenThumbnails}
+                        loader={loader}
                       />
                     );
                   })}
@@ -376,6 +414,79 @@ function makeOptionId(groupId: string): string {
   return `grid-opt-${groupId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
 }
 
+/* -------------------------------------------------------------------------- */
+
+/** 宫格缩略图统一按 200px 请求（与后端默认一致）。 */
+const THUMB_WIDTH = 200;
+
+/**
+ * 缩略图请求的进程内「并发去重 + 结果缓存」。
+ *
+ * 每个进入虚拟窗口的格子都在挂载时请求缩略图；快速滚动/来回滚动会大量卸载与重挂，
+ * 同一文件被反复请求。这把「同一路径 + 同宽度」收敛成一个 Promise：
+ *  - **并发命中**：多个格子共享同一个 inflight Promise，只发一次 IPC；
+ *  - **完成命中**：结果留在 cache，滚回来直接命中，不再发 IPC。
+ *
+ * 失败**不缓存**，并从 inflight 移除 —— 否则一次磁盘抖动会让该图永远空白、无法重试。
+ * 作用域为 `ThumbnailGrid` 实例（useRef 持有），随组件卸载释放，避免跨会话陈旧。
+ *
+ * 键用 `宽度|路径`：`group.jpg?.path` / `raw.path` 稳定，适合做键（见 §4 (b)）。
+ */
+interface ThumbnailLoader {
+  /** EXIF 内嵌/缩放缩略图，resolve 已 `convertFileSrc` 的 URL。 */
+  thumbnail: (path: string, width: number) => Promise<string>;
+  /** LUMEN 预览路径；无预览视为失败（不缓存），触发调用方的内嵌回落。 */
+  lumenPreview: (path: string, width: number) => Promise<string>;
+}
+
+/** 通用去重器：命中缓存直接返回；命中 inflight 复用；否则发起并登记。 */
+function dedupeAsync<T>(
+  cache: Map<string, T>,
+  inflight: Map<string, Promise<T>>,
+  key: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const cached = cache.get(key);
+  if (cached !== undefined) return Promise.resolve(cached);
+  const pending = inflight.get(key);
+  if (pending) return pending;
+  const p = run().then(
+    (value) => {
+      inflight.delete(key);
+      cache.set(key, value);
+      return value;
+    },
+    (err) => {
+      // 失败不缓存：移除 inflight 以便后续重挂能重试。
+      inflight.delete(key);
+      throw err;
+    },
+  );
+  inflight.set(key, p);
+  return p;
+}
+
+function createThumbnailLoader(): ThumbnailLoader {
+  const thumbCache = new Map<string, string>();
+  const thumbInflight = new Map<string, Promise<string>>();
+  const lumenCache = new Map<string, string>();
+  const lumenInflight = new Map<string, Promise<string>>();
+
+  return {
+    thumbnail: (path, width) =>
+      dedupeAsync(thumbCache, thumbInflight, `${width}|${path}`, () =>
+        api.getThumbnail(path, width),
+      ),
+    lumenPreview: (path, width) =>
+      dedupeAsync(lumenCache, lumenInflight, `${width}|${path}`, async () => {
+        const r = await api.getLumenPreview(path, { width });
+        // 无预览路径 = 本次拿不到（引擎忙/失败），当作失败：不缓存、走内嵌回落。
+        if (!r.previewPath) throw new Error('lumen preview unavailable');
+        return r.previewPath;
+      }),
+  };
+}
+
 interface GridPhotoCellProps {
   group: PhotoGroupInfo;
   index: number;
@@ -388,6 +499,8 @@ interface GridPhotoCellProps {
   onSelect: () => void;
   /** 见 ThumbnailGridProps.lumenThumbnails */
   lumenThumbnails?: boolean;
+  /** 缩略图加载器（去重 + 缓存），由 ThumbnailGrid 实例持有。 */
+  loader: ThumbnailLoader;
 }
 
 const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
@@ -400,6 +513,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
   isCandidate = false,
   onSelect,
   lumenThumbnails = false,
+  loader,
 }) => {
   // 三态：`null` 加载中 · `undefined` 两条路都失败 · 字符串 有图。
   // 之前用 null 同时表示"加载中"和"失败"，回落也失败时格子会永远显示加载中。
@@ -410,51 +524,36 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
     const targetPath = group.jpg?.path || group.raw?.path;
     if (!targetPath) return;
 
-    if (lumenThumbnails && group.raw?.path) {
-      // 引擎路径：RAW 由 LUMEN RAW 真实解码渲染（200px）。
-      // 任何失败都静默回落到内嵌缩略图 —— 引擎抖动不该让宫格出现空洞。
-      api
-        .getLumenPreview(group.raw.path, { width: 200 })
-        .then((r) => {
-          if (!active) return;
-          if (r.previewPath) setThumbSrc(api.toAssetUrl(r.previewPath));
-          // 回落也必须兜住错误：磁盘/权限问题会让两条路同时失败，
-          // 没有 catch 的话格子会永远停在"加载中"（这正是本模块要避免的空洞）
-          else
-            api
-              .getThumbnail(targetPath, 200)
-              .then((url) => active && setThumbSrc(url))
-              // 回落也失败（磁盘只读/权限不足，与引擎死亡同源）：进入失败态，
-              // 不能停在"加载中"——那正是本模块要避免的整屏空洞。
-              .catch(() => active && setThumbSrc(undefined));
-        })
-        .catch(() => {
-          api
-            .getThumbnail(targetPath, 200)
-            .then((url) => {
-              if (active) setThumbSrc(url);
-            })
-            .catch(() => {
-              if (active) setThumbSrc(undefined);
-            });
-        });
-    } else {
-      api
-        .getThumbnail(targetPath, 200)
+    // 走带去重/缓存的 loader：并发与滚动回来的重复请求共享同一 Promise，不再重复 IPC。
+    const { thumbnail, lumenPreview } = loader;
+
+    // 兜住「回落也失败」的错误：磁盘/权限问题会让两条路同时失败，没有 catch 的话
+    // 格子会永远停在"加载中"（这正是本模块要避免的整屏空洞）。失败态用 undefined。
+    const loadFallback = () =>
+      thumbnail(targetPath, THUMB_WIDTH)
         .then((url) => {
-          if (active) {
-            setThumbSrc(url);
-          }
+          if (active) setThumbSrc(url);
         })
         .catch(() => {
           if (active) setThumbSrc(undefined);
         });
+
+    if (lumenThumbnails && group.raw?.path) {
+      // 引擎路径：RAW 由 LUMEN RAW 真实解码渲染（200px）。
+      // 无预览或抛错都静默回落到内嵌缩略图 —— 引擎抖动不该让宫格出现空洞。
+      lumenPreview(group.raw.path, THUMB_WIDTH)
+        .then((previewPath) => {
+          if (active) setThumbSrc(api.toAssetUrl(previewPath));
+        })
+        .catch(loadFallback);
+    } else {
+      loadFallback();
     }
 
     return () => {
       active = false;
     };
-  }, [group.jpg?.path, group.raw?.path, lumenThumbnails]);
+  }, [group.jpg?.path, group.raw?.path, lumenThumbnails, loader]);
 
   const flagBorder =
     group.flag === 'pick'
@@ -502,7 +601,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
           ? 'border-sky-400/60 ring-1 ring-inset ring-sky-400/40'
           : `hover:border-white/30 ${flagBorder}`
       }`}
-      style={{ height: columns === 3 ? '132px' : '110px' }}
+      style={{ height: `${GRID_CELL_HEIGHT[columns]}px` }}
     >
       {/* Thumbnail Container */}
       <div className="relative flex-1 bg-background-base overflow-hidden flex items-center justify-center p-0.5">

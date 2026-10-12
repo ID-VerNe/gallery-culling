@@ -25,8 +25,6 @@ interface BeforeAfterViewportProps {
   group?: PhotoGroupInfo;
   tone?: ToneAdjustments;
   isHoldOriginal?: boolean;
-  onPrev?: () => void;
-  onNext?: () => void;
   onRate: (rating: number) => void;
   onFlag: (flag: 'pick' | 'reject' | 'none') => void;
   onOpenLuminar?: () => void;

@@ -63,30 +63,28 @@ describe('TonalAdjuster —— 统一保存（XMP + LUMEN RAW）', () => {
     await waitFor(() => expect(saveBtn()).toHaveTextContent('已保存'));
   });
 
-  it('isSaving 时按钮禁用且文案切到「保存中…」', () => {
-    renderAdjuster({ isSaving: true });
+  /**
+   * 展示契约（**不是**重入契约）：
+   * 重入保证由 owner 经 `isSaving` 驱动 —— 端到端证明在 `App.toneSave.test.tsx`
+   * （App 在写入挂起期间传 `isSaving=true` 并短路 `handleSaveTone`）。
+   * 组件自身**刻意不持有**本地 saving 状态：那会制造"同一事实多份真值"，并可能在
+   * owner 仍在飞行时提前解禁 —— 正是 H-02 修掉的"双击重复落盘"。
+   * 本用例只证明「prop → 渲染 + 禁用确实在 DOM 层挡住点击」这条展示契约，
+   * 因此它不再自称在测重入，也就不是假护栏。
+   */
+  it('isSaving 为真时按钮禁用、文案切「保存中…」，且点击不会触发 onSave', () => {
+    const onSave = vi.fn(async () => {});
+    renderAdjuster({ isSaving: true, onSave });
 
-    expect(saveBtn()).toBeDisabled();
-    expect(saveBtn()).toHaveTextContent('保存中…');
-  });
+    const btn = saveBtn();
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveTextContent('保存中…');
 
-  it('保存进行中（慢 promise）不会重复触发保存', async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((r) => {
-      release = r;
-    });
-    const onSave = vi.fn(async () => {
-      await gate;
-    });
-    const { user } = renderAdjuster({ onSave });
-
-    await user.click(saveBtn());
-    // 第一次点击已进入 await，还没 resolve
-    expect(onSave).toHaveBeenCalledTimes(1);
-
-    release();
-    await waitFor(() => expect(saveBtn()).toHaveTextContent('已保存'));
-    expect(onSave).toHaveBeenCalledTimes(1);
+    // 2d 实证结论：本仓 jsdom 环境下 `fireEvent.click` 落到 disabled 的 button 上
+    // **不会**触发 onClick（jsdom 遵循「disabled 表单控件不产生 click 事件」）。
+    // 这正是 App.toneSave.test.tsx 里「双击只发 1 次」能成立的前提之一。
+    fireEvent.click(btn);
+    expect(onSave).not.toHaveBeenCalled();
   });
 });
 

@@ -1111,8 +1111,6 @@ function AppShell() {
             group={currentGroup}
             tone={currentTone}
             isHoldOriginal={isHoldOriginal}
-            onPrev={handlePrev}
-            onNext={handleNext}
             onRate={(r) => handleRate(r)}
             onFlag={(f) => handleFlag(f)}
             onOpenLuminar={handleOpenLuminar}

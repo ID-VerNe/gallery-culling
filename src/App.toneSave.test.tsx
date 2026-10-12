@@ -90,7 +90,16 @@ function mockPendingSave() {
 
 const saveBtn = () => screen.getByRole('button', { name: '保存调色' });
 
-describe('App —— 调色保存挂起期间不可重入 (H-02)', () => {
+describe('App —— 调色保存挂起期间不可重入 (H-02 / N-13 真护栏)', () => {
+  /**
+   * ⚠️ 本条**不具区分力**，别把它当成 H-02/N-13 的证据。
+   *
+   * 原因：`invokeCount === 1` 在修复前**也**成立。`fireEvent.click` 之间会 flush，
+   * App 重渲染后 `handleSaveTone` 已带上 `isSavingTone=true` 的新闭包（守卫是
+   * state-closure：`App.tsx` 里 `if (isSavingTone) return;` 且 `isSavingTone` 在
+   * `useCallback` 依赖中），第二次点击即使真的触发了 onClick 也会被短路。
+   * 真正能区分修复前后的是下面那条「disabled + 保存中…」。
+   */
   it('保存挂起时双击「保存调色」，apply_tone_cmd 只发一次', async () => {
     mockStartup();
     mockPendingSave();
@@ -103,6 +112,13 @@ describe('App —— 调色保存挂起期间不可重入 (H-02)', () => {
     expect(invokeCount('apply_tone_cmd')).toBe(1);
   });
 
+  /**
+   * ✅ 这才是 N-13 的真护栏（修复前应失败）。
+   *
+   * 修复前 `App` 渲染 `<TonalAdjuster>` 时**没有** `isSaving={isSavingTone}`，
+   * 组件里 `disabled={isSaving}` 收到 `undefined`、文案停在「保存调色」——
+   * 本用例的 `toBeDisabled()` 与「保存中…」会**同时失败**。修复后两者成立。
+   */
   it('保存挂起时保存按钮 disabled 且文案含「保存中…」', async () => {
     mockStartup();
     mockPendingSave();
