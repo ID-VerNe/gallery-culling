@@ -34,6 +34,13 @@ interface TopBarProps {
   onOpenMetadataModal?: () => void;
   onToggleTonalAdjuster?: () => void;
   showTonalPanel?: boolean;
+  /**
+   * 调色面板的**派生真值**（= 用户意图 && 当前有可调对象）。
+   * 缺省时退回 `showTonalPanel`（保持向后兼容）。
+   */
+  tonalPanelVisible?: boolean;
+  /** 当前筛选没有照片：按钮置灰并说明这是 no-op，而不是"按了没反应"。 */
+  tonalToggleDisabled?: boolean;
   onOpenLuminar?: () => void;
   isLuminarRunning?: boolean;
   /** True while the grid search field is open. */
@@ -61,6 +68,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenMetadataModal,
   onToggleTonalAdjuster,
   showTonalPanel,
+  tonalPanelVisible,
+  tonalToggleDisabled,
   onOpenLuminar,
   isLuminarRunning,
   isGridSearchOpen,
@@ -91,6 +100,10 @@ export const TopBar: React.FC<TopBarProps> = ({
       icon: <Split className="w-3.5 h-3.5" aria-hidden="true" />,
     },
   ];
+
+  // M-10：按下态由传入的派生真值决定，缺省退回用户意图（向后兼容）。
+  const tonalVisible = tonalPanelVisible ?? !!showTonalPanel;
+  const tonalDisabled = !!tonalToggleDisabled;
 
   return (
     <header className="bg-background-base/80 backdrop-blur-md border-b border-white/10 flex flex-col gap-1 px-3 py-1.5 shrink-0 text-xs">
@@ -289,14 +302,19 @@ export const TopBar: React.FC<TopBarProps> = ({
           {onToggleTonalAdjuster && (
             <button
               onClick={onToggleTonalAdjuster}
+              disabled={tonalDisabled}
               className={`focus-ring flex items-center gap-1.5 px-3 py-1 rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap ${
-                showTonalPanel
+                tonalDisabled
+                  ? 'bg-white/5 text-white/40 cursor-not-allowed'
+                  : tonalVisible
                   ? 'bg-white text-black shadow-sm'
                   : 'bg-white/5 hover:bg-white/10 text-white'
               }`}
-              title="调色 (快捷键 E)"
+              title={tonalDisabled ? '当前筛选没有照片' : '调色 (快捷键 E)'}
               aria-label="轻量调色预检面板"
-              aria-pressed={showTonalPanel}
+              aria-pressed={tonalVisible}
+              aria-expanded={tonalVisible}
+              aria-controls="tonal-adjuster-panel"
             >
               <SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
               <span className="pb-[1px]">调色</span>

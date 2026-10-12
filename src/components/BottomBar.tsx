@@ -4,6 +4,7 @@ import {
   ExternalLink,
   HardDrive,
   Keyboard,
+  Search,
   Sliders,
 } from 'lucide-react';
 
@@ -14,6 +15,14 @@ interface BottomBarProps {
   onOpenExternal: () => void;
   onOpenMetadataModal?: () => void;
   onOpenShortcutHelp?: () => void;
+  /**
+   * 宫格搜索是否正在收窄宫格列表。搜索只作用于宫格（给宫格做减法），
+   * 中心视口与底栏仍锚定工作集；为真时把两个口径都摆出来，避免
+   * `501/1200` 被误读成"搜索后的计数"。
+   */
+  searchActive?: boolean;
+  /** 宫格搜索的命中数（用于「宫格筛选 X/Y」口径）。 */
+  searchResultCount?: number;
 }
 
 export const BottomBar: React.FC<BottomBarProps> = ({
@@ -23,7 +32,19 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   onOpenExternal,
   onOpenMetadataModal,
   onOpenShortcutHelp,
+  searchActive = false,
+  searchResultCount = 0,
 }) => {
+  const humanIndex = totalCount > 0 ? currentIndex + 1 : 0;
+  const counterText = searchActive
+    ? `宫格筛选 ${searchResultCount}/${totalCount} · 当前 ${humanIndex}/${totalCount}`
+    : totalCount > 0
+    ? `${currentIndex + 1} / ${totalCount}`
+    : '0 / 0';
+  const counterLabel = searchActive
+    ? `宫格筛选 ${searchResultCount}/${totalCount} 张，当前第 ${humanIndex} 张，共 ${totalCount} 张`
+    : `当前第 ${humanIndex} 张，共 ${totalCount} 张`;
+
   return (
     <footer className="h-9 bg-background-base border-t border-white/10 flex items-center justify-between px-3 text-[11px] text-white/70 shrink-0 gap-3">
       {/* Left: Current File Info (Selectable text) */}
@@ -97,13 +118,22 @@ export const BottomBar: React.FC<BottomBarProps> = ({
 
       {/* Right: Counter & Quick Open */}
       <div className="flex items-center gap-3 select-none shrink-0">
+        {searchActive && (
+          <span
+            className="hidden sm:flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/10 text-[10px] text-white/80 shrink-0"
+            title="宫格搜索只收窄宫格列表；中心视口与底栏仍按工作集计数"
+          >
+            <Search className="w-3 h-3" aria-hidden="true" />
+            <span>宫格筛选中</span>
+          </span>
+        )}
         <div
           className="flex items-center gap-1 font-mono text-white/80 tabular-nums"
           role="status"
-          aria-label={`当前第 ${totalCount > 0 ? currentIndex + 1 : 0} 张，共 ${totalCount} 张`}
+          aria-label={counterLabel}
         >
           <HardDrive className="w-3.5 h-3.5 text-white/50" aria-hidden="true" />
-          <span>{totalCount > 0 ? `${currentIndex + 1} / ${totalCount}` : '0 / 0'}</span>
+          <span>{counterText}</span>
         </div>
 
         <button

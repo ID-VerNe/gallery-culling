@@ -29,6 +29,7 @@ import {
 } from './types';
 import { api } from './services/api';
 import { computeAutoTone, DEFAULT_TONE } from './utils/autoTone';
+import { deriveCompareGroups } from './utils/compareGroups';
 
 function AppShell() {
   const toast = useToast();
@@ -210,56 +211,42 @@ function AppShell() {
       setSelectedIndex((prev) =>
         filteredIndices.includes(prev) ? prev : filteredIndices[0],
       );
+      // N-04: the compare candidate has to be pulled into the visible set too,
+      // otherwise the split view keeps rendering a photo the search excluded
+      // and stops matching the grid it sits next to.
+      setCompareIndex((prev) =>
+        filteredIndices.includes(prev) ? prev : filteredIndices[0],
+      );
     }
   }, [filteredIndices, gridSearch]);
 
   const currentGroup = filteredGroups[selectedIndex] || undefined;
 
-  // Compute compare groups based on pinned reference
+  /**
+   * M-10：调色面板的**单一真值**。
+   *
+   * `showTonalPanel` 是「用户意图」，`currentGroup` 是「当前是否有可调对象」，
+   * 可见性 = 二者与。此前显示层只读 `showTonalPanel`，于是筛选变空时会出现
+   * 「按钮说开着、屏幕显示着宫格」，且再按 E 看似失灵。所有显示与传参统一用
+   * 这个派生值；`showTonalPanel` 保持为意图（筛选恢复后面板自动回来）。
+   */
+  const tonalPanelVisible = showTonalPanel && !!currentGroup;
+
+  // Compute compare groups based on pinned reference.
+  // 推导逻辑抽到 `utils/compareGroups`，以便对 filterMode × gridSearch × pinnedId
+  // 的四种组合做穷举回归（见该模块的 N-01/N-03 说明）。
   const { leftCompareGroup, rightCompareGroup, isLeftPinned, isRightPinned } =
-    useMemo(() => {
-      const leftBase = filteredGroups[selectedIndex];
-
-      // When the working set shrinks (filter change, scan), the clamped indices
-      // can collide. Showing the same photo on both sides of a comparison is
-      // never useful, so fall through to a neighbour.
-      let rightDefault = filteredGroups[compareIndex];
-      if (
-        !rightDefault ||
-        (rightDefault.id === leftBase?.id && filteredGroups.length > 1)
-      ) {
-        rightDefault =
-          filteredGroups[selectedIndex + 1] ?? filteredGroups[0];
-      }
-
-      if (!pinnedId) {
-        return {
-          leftCompareGroup: leftBase,
-          rightCompareGroup: rightDefault,
-          isLeftPinned: false,
-          isRightPinned: false,
-        };
-      }
-
-      const pinnedGroup =
-        filteredGroups.find((g) => g.id === pinnedId) || leftBase;
-
-      if (isPinnedOnLeft) {
-        return {
-          leftCompareGroup: pinnedGroup,
-          rightCompareGroup: filteredGroups[compareIndex] || rightDefault,
-          isLeftPinned: true,
-          isRightPinned: false,
-        };
-      } else {
-        return {
-          leftCompareGroup: filteredGroups[selectedIndex] || leftBase,
-          rightCompareGroup: pinnedGroup,
-          isLeftPinned: false,
-          isRightPinned: true,
-        };
-      }
-    }, [filteredGroups, selectedIndex, compareIndex, pinnedId, isPinnedOnLeft]);
+    useMemo(
+      () =>
+        deriveCompareGroups(
+          filteredGroups,
+          selectedIndex,
+          compareIndex,
+          pinnedId,
+          isPinnedOnLeft,
+        ),
+      [filteredGroups, selectedIndex, compareIndex, pinnedId, isPinnedOnLeft],
+    );
 
   // Pin / Unpin Left as Reference
   const handleTogglePinLeft = useCallback(() => {
@@ -945,7 +932,8 @@ function AppShell() {
         onOpenSettingsModal={() => setIsSettingsOpen(true)}
         onOpenMetadataModal={() => setIsMetadataOpen(true)}
         onToggleTonalAdjuster={handleToggleTonalPanel}
-        showTonalPanel={showTonalPanel}
+        tonalPanelVisible={tonalPanelVisible}
+        tonalToggleDisabled={!currentGroup}
         onOpenLuminar={handleOpenLuminar}
         isLuminarRunning={isLuminarRunning}
         isGridSearchOpen={gridSearchOpen}
@@ -975,7 +963,7 @@ function AppShell() {
             onOpenExternal={handleOpenExternal}
             onOpenLuminar={handleOpenLuminar}
             onToggleTonalAdjuster={handleToggleTonalPanel}
-            isTonalPanelOpen={showTonalPanel}
+            isTonalPanelOpen={tonalPanelVisible}
             isLuminarRunning={isLuminarRunning}
             emptyState={viewportEmptyState}
             onImageElement={setPreviewImage}
@@ -993,9 +981,10 @@ function AppShell() {
             onFlag={(f) => handleFlag(f)}
             onOpenLuminar={handleOpenLuminar}
             onToggleTonalAdjuster={handleToggleTonalPanel}
-            isTonalPanelOpen={showTonalPanel}
+            isTonalPanelOpen={tonalPanelVisible}
             isLuminarRunning={isLuminarRunning}
             emptyState={viewportEmptyState}
+            lumenStatus={lumenStatus}
           />
         )}
 
@@ -1010,16 +999,12 @@ function AppShell() {
             onSwap={handleSwapCompare}
             onRate={(g, r) => handleRate(r, g)}
             onFlag={(g, f) => handleFlag(f, g)}
-            onSelectLeft={() => {}}
-            onSelectRight={() => {
-              if (compareIndex >= 0 && compareIndex < filteredGroups.length) {
-                setSelectedIndex(compareIndex);
-              }
-            }}
+            lumenStatus={lumenStatus}
+            getTone={(g) => toneMap[g.id] || g.tone}
           />
         )}        {/* Right Sidebar (Thumbnail Grid OR Tonal Adjuster) */}
         <div className="w-[390px] h-full shrink-0 bg-background-base">
-          {showTonalPanel && currentGroup ? (
+          {tonalPanelVisible ? (
             <TonalAdjuster
               tone={currentTone || DEFAULT_TONE}
               onChange={handleToneChange}
@@ -1056,6 +1041,7 @@ function AppShell() {
               }}
               totalLoaded={filteredGroups.length}
               lumenThumbnails={lumenGridThumbs}
+              candidateId={rightCompareGroup?.id}
             />
           )}
         </div>
@@ -1069,6 +1055,8 @@ function AppShell() {
         onOpenExternal={handleOpenExternal}
         onOpenMetadataModal={() => setIsMetadataOpen(true)}
         onOpenShortcutHelp={() => setIsShortcutHelpOpen(true)}
+        searchActive={gridSearch.trim().length > 0}
+        searchResultCount={visibleGroups.length}
       />
 
       {/* Batch Export Modal */}
@@ -1089,6 +1077,7 @@ function AppShell() {
         lumenStatus={lumenStatus}
         capabilities={lumenCaps}
         onSyncRatings={lumenStatus?.available ? handleSyncLumenRatings : undefined}
+        savedLumenEnabled={settings?.lumenEnabled ?? false}
       />
 
       {/* Manual Lens Metadata Editor Modal */}

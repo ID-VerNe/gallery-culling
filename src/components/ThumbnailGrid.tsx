@@ -9,6 +9,7 @@ import {
   Pin,
   Search,
   Images,
+  Target,
 } from 'lucide-react';
 import { PhotoGroupInfo } from '../types';
 import { api } from '../services/api';
@@ -17,6 +18,11 @@ interface ThumbnailGridProps {
   groups: PhotoGroupInfo[];
   selectedIndex: number;
   pinnedId?: string | null;
+  /**
+   * 对比候选（split 且钉左基准时，右视口正在显示的那张）。
+   * 与 `pinnedId`（基准）是两个不同的角色标记，可落在不同格子上。
+   */
+  candidateId?: string | null;
   onSelect: (index: number) => void;
   /** Filter applied by the grid, owned by the app shell. */
   searchQuery?: string;
@@ -38,6 +44,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   groups,
   selectedIndex,
   pinnedId,
+  candidateId,
   onSelect,
   searchQuery = '',
   searchOpen = false,
@@ -51,10 +58,18 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   const parentRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Focus the field whenever search opens, or when the shell asks for focus
-  // again while it is already open (the `/` shortcut).
+  // 面板互换（调色面板 → 宫格）时旧 DOM 被卸载，焦点会退回 body。
+  // 与既有的"搜索打开时聚焦输入框"合成一个 effect：搜索框优先，否则在
+  // 焦点无主时把焦点移入 listbox（parentRef，它已是 tabIndex=0 的宿主）。
+  // 与 Modal 的初始焦点不同：这里不做 Tab 陷阱、不归还焦点。
   useEffect(() => {
-    if (searchOpen) searchInputRef.current?.focus();
+    if (searchOpen) {
+      searchInputRef.current?.focus();
+      return;
+    }
+    const ae = document.activeElement;
+    if (ae && ae !== document.body) return; // 已被主动聚焦，别抢
+    parentRef.current?.focus({ preventScroll: true });
   }, [searchOpen, searchFocusToken]);
 
   // Escape inside the search field collapses it again.
@@ -295,6 +310,8 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
                     const itemIndex = virtualRow.index * columns + colIdx;
                     const isSelected = itemIndex === selectedIndex;
                     const isPinned = pinnedId === group.id;
+                    const isCandidate =
+                      candidateId != null && candidateId === group.id;
 
                     return (
                       <GridPhotoCell
@@ -305,6 +322,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
                         columns={columns}
                         isSelected={isSelected}
                         isPinned={isPinned}
+                        isCandidate={isCandidate}
                         onSelect={() => onSelect(itemIndex)}
                         lumenThumbnails={lumenThumbnails}
                       />
@@ -365,6 +383,8 @@ interface GridPhotoCellProps {
   columns: 3 | 4;
   isSelected: boolean;
   isPinned: boolean;
+  /** 该格是否是对比候选（钉左基准时的右视口照片）。 */
+  isCandidate?: boolean;
   onSelect: () => void;
   /** 见 ThumbnailGridProps.lumenThumbnails */
   lumenThumbnails?: boolean;
@@ -377,6 +397,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
   columns,
   isSelected,
   isPinned,
+  isCandidate = false,
   onSelect,
   lumenThumbnails = false,
 }) => {
@@ -453,6 +474,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
     group.tone ? '已调色' : null,
     group.edited ? '含精修成果' : null,
     isPinned ? '已设为对比基准' : null,
+    isCandidate && !isPinned ? '当前对比候选' : null,
   ]
     .filter(Boolean)
     .join('，');
@@ -472,6 +494,8 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
           ? 'border-white/90 ring-1 ring-inset ring-white/90'
           : isSelected
           ? 'border-white/60 ring-1 ring-inset ring-white/60'
+          : isCandidate
+          ? 'border-sky-400/60 ring-1 ring-inset ring-sky-400/40'
           : `hover:border-white/30 ${flagBorder}`
       }`}
       style={{ height: columns === 3 ? '132px' : '110px' }}
@@ -538,6 +562,18 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
               aria-hidden="true"
             />
             <span>{group.rating}</span>
+          </div>
+        )}
+
+        {/* Bottom-Left: 对比候选（与「基准」是不同角色，样式刻意区分） */}
+        {isCandidate && !isPinned && (
+          <div
+            className="absolute bottom-1 left-1 bg-sky-500/20 border border-sky-400/50 text-sky-200 rounded px-1 py-[2px] flex items-center gap-0.5 text-[9px] font-medium"
+            role="img"
+            aria-label="当前对比候选"
+          >
+            <Target className="w-2.5 h-2.5" aria-hidden="true" />
+            <span>候选</span>
           </div>
         )}
       </div>

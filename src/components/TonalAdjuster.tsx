@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Wand2,
   RotateCcw,
@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { ToneAdjustments } from '../types';
 import { DEFAULT_TONE } from '../utils/autoTone';
+import { usePanelInitialFocus } from '../hooks/usePanelInitialFocus';
 
 /** AI 蒙版可选区域（中文展示，英文 id 落进 .lumen 工程）。 */
 const MASK_REGIONS: Array<{ id: string; label: string }> = [
@@ -155,6 +156,12 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
   const [isMasking, setIsMasking] = useState(false);
   const [maskError, setMaskError] = useState<string | null>(null);
 
+  // 面板互换时（E 键 / 触发按钮）旧 DOM 被整棵卸载，焦点会退回 body。
+  // 挂载时若焦点无主，就把焦点移入本面板容器，让读屏播报 region 名；
+  // 有意不聚焦第一个滑杆——滑杆拿到焦点后方向键会被占用，妨碍用户先浏览。
+  const rootRef = useRef<HTMLDivElement>(null);
+  usePanelInitialFocus(rootRef, true);
+
   const handleSlider = (field: keyof ToneAdjustments, value: number) => {
     onChange({
       ...tone,
@@ -210,8 +217,11 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
 
   return (
     <div
+      ref={rootRef}
+      id="tonal-adjuster-panel"
+      tabIndex={-1}
       onClick={(e) => e.stopPropagation()}
-      className="bg-background-base border-l border-white/10 h-full w-full p-5 text-xs flex flex-col gap-4 overflow-y-auto"
+      className="focus-ring bg-background-base border-l border-white/10 h-full w-full p-5 text-xs flex flex-col gap-4 overflow-y-auto"
       role="region"
       aria-label="快速调色控制面板"
     >

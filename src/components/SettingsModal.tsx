@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Settings, FolderOpen, Save } from 'lucide-react';
 import { AppSettings, LumenCapabilities, LumenStatus } from '../types';
 import { api } from '../services/api';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Modal } from './Modal';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -16,6 +17,13 @@ interface SettingsModalProps {
   capabilities?: LumenCapabilities | null;
   /** 把 LUMEN RAW 的评级拉回侧边栏（返回被更新的文件数） */
   onSyncRatings?: (folder: string) => Promise<number>;
+  /**
+   * App 侧**已保存**的 `lumenEnabled` 真值。
+   * 状态行与 GPU 能力警告都以它为准（能力探测只对已保存配置有意义），
+   * 避免"本地刚勾上、尚未保存"时冒出与勾选矛盾的死文案。
+   * 缺省时退回本地值（保持向后兼容）。
+   */
+  savedLumenEnabled?: boolean;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -26,10 +34,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   lumenStatus,
   capabilities,
   onSyncRatings,
+  savedLumenEnabled,
 }) => {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  /** 加载成功时的基线快照 —— 用于脏检查。 */
+  const loadedRef = useRef<AppSettings | null>(null);
+  /** 「放弃未保存的更改？」确认弹窗。 */
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const handleSyncRatings = async () => {
     if (!onSyncRatings) return;
@@ -50,13 +63,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      api.getSettings().then(setSettings).catch((e) => {
-        onError?.(`读取设置失败：${String(e)}`);
-      });
+      api
+        .getSettings()
+        .then((s) => {
+          setSettings(s);
+          // 基线快照：AppSettings 九个字段全是原始类型，浅拷贝即可用于逐键比较。
+          loadedRef.current = { ...s };
+        })
+        .catch((e) => {
+          onError?.(`读取设置失败：${String(e)}`);
+        });
     }
     // `onError` is a toast callback and intentionally not a dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
+
+  const isDirty =
+    settings != null &&
+    loadedRef.current != null &&
+    (Object.keys(settings) as (keyof AppSettings)[]).some(
+      (k) => settings[k] !== loadedRef.current![k],
+    );
+
+  /**
+   * 所有关闭路径（取消 / X / Esc）都走这里：脏则先确认，未脏直接关。
+   * 保存成功那条路不经此处——`handleSave` 自己调用 `onClose`。
+   */
+  const requestClose = () => {
+    if (isDirty) setConfirmOpen(true);
+    else onClose();
+  };
 
   const handleBrowsePhotoshop = async () => {
     if (!settings) return;
@@ -84,17 +120,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  // M-06：状态行的「门控」与「数据源」统一到同一份真值。
+  // `savedLumenEnabled` 缺省时退回本地值（向后兼容）。
+  const effectiveSavedLumenEnabled =
+    savedLumenEnabled ?? settings?.lumenEnabled ?? false;
+  /** 本地勾选与已保存值不一致 —— 状态行文案要标注「保存后生效」。 */
+  const lumenEnabledPending =
+    settings != null && settings.lumenEnabled !== effectiveSavedLumenEnabled;
+  const showLumenStatusRow =
+    settings != null &&
+    (effectiveSavedLumenEnabled || settings.lumenEnabled);
+  const lumenStatusText = lumenStatus?.available
+    ? `已连接 LUMEN RAW ${lumenStatus.foundVersion ?? ''}`.trim()
+    : lumenStatus?.detail ?? '正在探测引擎…';
+  const lumenStatusDisplay = lumenEnabledPending
+    ? `${lumenStatusText}（保存后生效）`
+    : lumenStatusText;
+
   return (
+    <>
     <Modal
       isOpen={isOpen}
-      onClose={onClose}
+      onClose={requestClose}
       title="首选项与工具设置"
       maxWidth="max-w-md"
       icon={<Settings className="w-4 h-4" aria-hidden="true" />}
       footer={
         <>
           <button
-            onClick={onClose}
+            onClick={requestClose}
             className="focus-ring px-3.5 py-1.5 rounded-md bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white/80 transition-colors"
           >
             取消
@@ -190,16 +244,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               自动回退到相机内嵌预览，不影响选片。
             </p>
 
-            {/* 引擎握手状态（只读，来自 lumen_status_cmd 的缓存） */}
-            {settings.lumenEnabled && (
+            {/* 引擎握手状态（只读，来自 lumen_status_cmd 的缓存）。
+                门控用「已保存 || 本地勾选」：本地新勾上时也要出现，但要标注
+                「保存后生效」而不是显示已保存配置的死文案。 */}
+            {showLumenStatusRow && (
               <p
                 className="text-[10px] leading-relaxed text-white/60"
                 role="status"
                 aria-live="polite"
               >
-                {lumenStatus?.available
-                  ? `已连接 LUMEN RAW ${lumenStatus.foundVersion ?? ''}`.trim()
-                  : (lumenStatus?.detail ?? '正在探测引擎…')}
+                {lumenStatusDisplay}
               </p>
             )}
 
@@ -248,7 +302,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 AI 蒙版需要带 onnxruntime 与模型的构建（体积约 487MB）。
                 勾选后若当前路径是 CPU 版，这里会直接提示，不会让你在保存调色时才发现。
               </p>
-              {settings.lumenExpectAi && capabilities && !capabilities.aiMasks && (
+              {settings.lumenExpectAi &&
+                effectiveSavedLumenEnabled &&
+                capabilities &&
+                !capabilities.aiMasks && (
                 <p
                   role="status"
                   className="text-[10px] leading-relaxed text-amber-200/80 rounded-md border border-amber-200/25 px-2 py-1.5"
@@ -310,5 +367,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </>
       )}
     </Modal>
+    <ConfirmDialog
+      isOpen={confirmOpen}
+      onClose={() => setConfirmOpen(false)}
+      onConfirm={onClose}
+      title="放弃未保存的更改？"
+      message="你对设置所做的修改尚未保存。放弃这些更改并关闭？"
+      confirmLabel="放弃更改"
+      cancelLabel="继续编辑"
+      destructive
+    />
+    </>
   );
 };

@@ -6,7 +6,6 @@ import {
   Check,
   X,
   ExternalLink,
-  Camera,
   RotateCcw,
   Sparkles,
   Sliders,
@@ -18,6 +17,7 @@ import { api } from '../services/api';
 import { getToneFilterString } from '../utils/autoTone';
 import { useLumenPreview } from '../hooks/useLumenPreview';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
+import { ViewportEmptyStateView } from './ViewportEmptyState';
 
 interface PreviewViewportProps {
   group?: PhotoGroupInfo;
@@ -160,28 +160,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
       : getToneFilterString(isHoldOriginal ? undefined : tone);
 
   if (!group || !imageSrc) {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center bg-background-base text-white/60 p-6 text-center">
-        <div className="w-16 h-16 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center mb-4">
-          <Camera className="w-8 h-8 text-white stroke-[1.5]" aria-hidden="true" />
-        </div>
-        <h3 className="text-base font-medium text-white mb-1">
-          {emptyState.title}
-        </h3>
-        <p className="text-xs text-white/60 max-w-sm mb-5 leading-relaxed">
-          {emptyState.description}
-        </p>
-        {emptyState.onAction && (
-          <button
-            onClick={emptyState.onAction}
-            className="focus-ring flex items-center gap-2 px-4 py-2 bg-white hover:bg-white/90 text-black active:scale-[0.96] rounded-lg text-xs font-semibold transition-transform"
-            aria-label={emptyState.actionLabel}
-          >
-            <span>{emptyState.actionLabel ?? '继续'}</span>
-          </button>
-        )}
-      </div>
-    );
+    return <ViewportEmptyStateView emptyState={emptyState} />;
   }
 
   const zoomPercent = `${Math.round(scale * 100)}%`;
@@ -225,6 +204,19 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
         }}
         className="max-h-full max-w-full object-contain pointer-events-none origin-center"
       />
+
+      {/* 含成品提示：该分组存在 edited（Luminar 成果）。
+          主图口径仍是工作版（jpg/raw + LUMEN 调色）——这里只提示、不改显示内容，
+          避免 edited 在单图视图里无声消失。 */}
+      {group.edited && (
+        <div
+          className="absolute top-3 left-3 bg-purple-500/15 border border-purple-500/30 text-purple-300 backdrop-blur-md px-2 py-1 rounded-md text-[11px] font-medium flex items-center gap-1 pointer-events-none"
+          title="包含精修成果 (Luminar AI)"
+        >
+          <Sparkles className="w-3 h-3" aria-hidden="true" />
+          <span>含成品</span>
+        </div>
+      )}
 
       {/* Hold Original Indicator — static, no pulsing animation (F-20) */}
       {isHoldOriginal && (
@@ -405,6 +397,8 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
             title="调色面板 (E)"
             aria-label="打开调色面板"
             aria-pressed={isTonalPanelOpen}
+            aria-expanded={isTonalPanelOpen}
+            aria-controls="tonal-adjuster-panel"
           >
             <Sliders className="w-3.5 h-3.5" aria-hidden="true" />
             <span>调色</span>

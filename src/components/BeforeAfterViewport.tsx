@@ -2,20 +2,23 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Columns2,
   Link,
+  Unlink,
   Star,
   Check,
   X,
   Sparkles,
   Sliders,
   RotateCcw,
-  Camera,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { PhotoGroupInfo, ToneAdjustments } from '../types';
+import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
 import { api } from '../services/api';
 import { getToneFilterString } from '../utils/autoTone';
+import { useLumenPreview } from '../hooks/useLumenPreview';
+import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import type { ViewportEmptyState } from './PreviewViewport';
+import { ViewportEmptyStateView } from './ViewportEmptyState';
 
 interface BeforeAfterViewportProps {
   group?: PhotoGroupInfo;
@@ -29,6 +32,8 @@ interface BeforeAfterViewportProps {
   onToggleTonalAdjuster?: () => void;
   isLuminarRunning?: boolean;
   isTonalPanelOpen?: boolean;
+  /** LUMEN RAW 引擎握手状态；可用时 RAW-only 分组走真实解码（M-02）。 */
+  lumenStatus?: LumenStatus;
   /** Copy and action for the "nothing to show" state, decided by the shell. */
   emptyState?: ViewportEmptyState;
 }
@@ -36,6 +41,9 @@ interface BeforeAfterViewportProps {
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 10;
 const ZOOM_STEP = 1.25;
+const LUMEN_PANE_WIDTH = 1600;
+
+type PaneSide = 'before' | 'after';
 
 export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
   group,
@@ -47,67 +55,130 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
   onToggleTonalAdjuster,
   isLuminarRunning = false,
   isTonalPanelOpen = false,
+  lumenStatus,
   emptyState = {
     title: '未加载照片',
     description: '选择 JPG 或 RAW 文件夹，即可开始极速选片。',
   },
 }) => {
-  const [scale, setScale] = useState(1);
-  const [pos, setPos] = useState({ x: 0, y: 0 });
+  // 联动锁焦为真开关（L-01）：锁定时两图共用比例/位移，解锁后各自独立。
+  const [syncLock, setSyncLock] = useState(true);
+  const [beforeScale, setBeforeScale] = useState(1);
+  const [beforePos, setBeforePos] = useState({ x: 0, y: 0 });
+  const [afterScale, setAfterScale] = useState(1);
+  const [afterPos, setAfterPos] = useState({ x: 0, y: 0 });
 
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  // 独立模式下接受手势、以及 ± 作用的窗格。
+  const [activePane, setActivePane] = useState<PaneSide>('after');
+
+  // RAW 真实解码（有 JPG 时零请求）；与单图/对比视图同口径。
+  const lumenPreview = useLumenPreview(group, lumenStatus ?? LUMEN_UNAVAILABLE, LUMEN_PANE_WIDTH);
+  const [lumenBroken, setLumenBroken] = useState(false);
 
   // Reset zoom and pan on photo change
   useEffect(() => {
-    setScale(1);
-    setPos({ x: 0, y: 0 });
+    setBeforeScale(1);
+    setAfterScale(1);
+    setBeforePos({ x: 0, y: 0 });
+    setAfterPos({ x: 0, y: 0 });
+    setLumenBroken(false);
   }, [group?.id]);
 
-  const zoomBy = useCallback((factor: number) => {
-    setScale((s) => Math.min(Math.max(s * factor, MIN_SCALE), MAX_SCALE));
-  }, []);
+  const clampScale = (s: number) => Math.min(Math.max(s, MIN_SCALE), MAX_SCALE);
+
+  const zoomBy = useCallback(
+    (factor: number) => {
+      if (syncLock) {
+        const next = clampScale(beforeScale * factor);
+        setBeforeScale(next);
+        setAfterScale(next);
+      } else if (activePane === 'before') {
+        setBeforeScale((s) => clampScale(s * factor));
+      } else {
+        setAfterScale((s) => clampScale(s * factor));
+      }
+    },
+    [syncLock, beforeScale, activePane],
+  );
 
   const resetView = useCallback(() => {
-    setScale(1);
-    setPos({ x: 0, y: 0 });
+    setBeforeScale(1);
+    setAfterScale(1);
+    setBeforePos({ x: 0, y: 0 });
+    setAfterPos({ x: 0, y: 0 });
   }, []);
 
-  const handleWheel = (e: React.WheelEvent) => {
+  const handleWheel = (side: PaneSide, e: React.WheelEvent) => {
     e.preventDefault();
-    zoomBy(e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP);
+    setActivePane(side);
+    const delta = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+    if (syncLock) {
+      const next = clampScale(beforeScale * delta);
+      setBeforeScale(next);
+      setAfterScale(next);
+    } else if (side === 'before') {
+      setBeforeScale((s) => clampScale(s * delta));
+    } else {
+      setAfterScale((s) => clampScale(s * delta));
+    }
   };
 
-  const handleMouseDown = (e: React.MouseEvent) => {
+  const handleMouseDown = (side: PaneSide, e: React.MouseEvent) => {
     if (e.button === 0) {
       setIsDragging(true);
-      setDragStart({ x: e.clientX - pos.x, y: e.clientY - pos.y });
+      setActivePane(side);
+      setDragStart({ x: e.clientX, y: e.clientY });
     }
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!isDragging) return;
-    setPos({
-      x: e.clientX - dragStart.x,
-      y: e.clientY - dragStart.y,
-    });
+    const dx = e.clientX - dragStart.x;
+    const dy = e.clientY - dragStart.y;
+    setDragStart({ x: e.clientX, y: e.clientY });
+
+    if (syncLock) {
+      setBeforePos((p) => ({ x: p.x + dx, y: p.y + dy }));
+      setAfterPos((p) => ({ x: p.x + dx, y: p.y + dy }));
+    } else if (activePane === 'before') {
+      setBeforePos((p) => ({ x: p.x + dx, y: p.y + dy }));
+    } else {
+      setAfterPos((p) => ({ x: p.x + dx, y: p.y + dy }));
+    }
   };
 
   const handleMouseUp = () => {
     setIsDragging(false);
   };
 
-  const handleDoubleClick = () => {
-    setScale((s) => (s === 1 ? 2.5 : 1));
-    setPos({ x: 0, y: 0 });
+  const handleDoubleClick = (side: PaneSide) => {
+    setActivePane(side);
+    const currentScale = side === 'before' ? beforeScale : afterScale;
+    const targetScale = currentScale === 1 ? 2.5 : 1;
+    if (syncLock) {
+      setBeforeScale(targetScale);
+      setAfterScale(targetScale);
+      setBeforePos({ x: 0, y: 0 });
+      setAfterPos({ x: 0, y: 0 });
+    } else if (side === 'before') {
+      setBeforeScale(targetScale);
+      setBeforePos({ x: 0, y: 0 });
+    } else {
+      setAfterScale(targetScale);
+      setAfterPos({ x: 0, y: 0 });
+    }
   };
 
-  // Original image source (Before)
-  const beforeSrc = group?.jpg?.path
+  // Original image source (Before): LUMEN RAW preview when available, else jpg/raw.
+  const legacySrc = group?.jpg?.path
     ? api.toAssetUrl(group.jpg.path)
     : group?.raw?.path
     ? api.toAssetUrl(group.raw.path)
     : null;
+  const lumenActive = Boolean(lumenPreview.url && !lumenBroken);
+  const beforeSrc = lumenActive ? lumenPreview.url : legacySrc;
 
   // After image source: If Luminar AI edited version exists, use it; otherwise use base image with tone filter
   const hasLuminarEdit = !!group?.edited?.path;
@@ -115,35 +186,25 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
     ? api.toAssetUrl(group.edited.path)
     : beforeSrc;
 
+  // LUMEN 命中时不再叠加 CSS 滤镜（否则 develop 两次）；edited 成品与按住原片同样不套。
   const toneFilter =
-    !hasLuminarEdit && !isHoldOriginal ? getToneFilterString(tone) : 'none';
+    !hasLuminarEdit && !isHoldOriginal && !lumenActive
+      ? getToneFilterString(tone)
+      : 'none';
 
   if (!group || !beforeSrc) {
-    // Same shape as the single-view empty state so the two "nothing selected"
-    // conditions read identically (F-18).
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center bg-background-base text-white/60 p-6 text-center">
-        <div className="w-16 h-16 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center mb-4">
-          <Camera className="w-8 h-8 text-white stroke-[1.5]" aria-hidden="true" />
-        </div>
-        <h3 className="text-base font-medium text-white mb-1">
-          {emptyState.title}
-        </h3>
-        <p className="text-xs text-white/60 max-w-sm mb-5 leading-relaxed">
-          {emptyState.description}
-        </p>
-        {emptyState.onAction && (
-          <button
-            onClick={emptyState.onAction}
-            className="focus-ring flex items-center gap-2 px-4 py-2 bg-white hover:bg-white/90 text-black active:scale-[0.96] rounded-lg text-xs font-semibold transition-transform"
-            aria-label={emptyState.actionLabel}
-          >
-            <span>{emptyState.actionLabel ?? '继续'}</span>
-          </button>
-        )}
-      </div>
-    );
+    // Same shared empty state as the single view (M-03).
+    return <ViewportEmptyStateView emptyState={emptyState} />;
   }
+
+  const effectiveScale = syncLock
+    ? beforeScale
+    : activePane === 'before'
+    ? beforeScale
+    : afterScale;
+
+  const beforeFocused = !syncLock && activePane === 'before';
+  const afterFocused = !syncLock && activePane === 'after';
 
   return (
     <div className="flex-1 flex flex-col h-full w-full bg-background-surface relative select-none">
@@ -164,22 +225,39 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
           <div className="flex items-center gap-0.5 bg-white/10 rounded text-[11px]">
             <button
               onClick={() => zoomBy(1 / ZOOM_STEP)}
-              disabled={scale <= MIN_SCALE}
+              disabled={effectiveScale <= MIN_SCALE}
               className="focus-ring p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-l active:scale-[0.96] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               title="缩小"
               aria-label="缩小"
             >
               <ZoomOut className="w-3.5 h-3.5" aria-hidden="true" />
             </button>
-            <span
-              className="font-mono tabular-nums text-white/80 w-10 text-center"
-              aria-label={`当前缩放 ${Math.round(scale * 100)}%`}
-            >
-              {Math.round(scale * 100)}%
-            </span>
+            {syncLock ? (
+              <span
+                className="font-mono tabular-nums text-white/80 w-10 text-center"
+                aria-label={`当前缩放 ${Math.round(beforeScale * 100)}%`}
+              >
+                {Math.round(beforeScale * 100)}%
+              </span>
+            ) : (
+              <span
+                className="font-mono tabular-nums text-white/80 px-1 text-center flex items-center gap-1"
+                aria-label={`当前缩放：前 ${Math.round(beforeScale * 100)}%，后 ${Math.round(
+                  afterScale * 100,
+                )}%（聚焦${activePane === 'before' ? '前' : '后'}图）`}
+              >
+                <span className={activePane === 'before' ? 'text-white' : 'text-white/45'}>
+                  前 {Math.round(beforeScale * 100)}%
+                </span>
+                <span className="text-white/25">/</span>
+                <span className={activePane === 'after' ? 'text-white' : 'text-white/45'}>
+                  后 {Math.round(afterScale * 100)}%
+                </span>
+              </span>
+            )}
             <button
               onClick={() => zoomBy(ZOOM_STEP)}
-              disabled={scale >= MAX_SCALE}
+              disabled={effectiveScale >= MAX_SCALE}
               className="focus-ring p-1 text-white/70 hover:text-white hover:bg-white/15 active:scale-[0.96] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               title="放大"
               aria-label="放大"
@@ -218,47 +296,83 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
             title="调色面板 (快捷键 E)"
             aria-label="打开调色面板"
             aria-pressed={isTonalPanelOpen}
+            aria-expanded={isTonalPanelOpen}
+            aria-controls="tonal-adjuster-panel"
           >
             <Sliders className="w-3.5 h-3.5" aria-hidden="true" />
             <span>调色面板</span>
           </button>
 
-          {/* Sync Zoom indicator */}
-          <div
-            className="flex items-center gap-1 px-2 py-0.5 bg-white/10 text-white border border-white/25 rounded text-[11px] font-medium"
-            title="锁定同步缩放"
+          {/* Sync-zoom lock toggle (L-01): a real, keyboard-operable switch. */}
+          <button
+            onClick={() => setSyncLock((v) => !v)}
+            className={`focus-ring flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium active:scale-[0.96] transition-colors border ${
+              syncLock
+                ? 'bg-white/10 text-white border-white/25'
+                : 'bg-white/5 text-white/60 border-white/10 hover:text-white hover:bg-white/10'
+            }`}
+            title={
+              syncLock
+                ? '两图同步缩放与平移（点击解锁独立对照）'
+                : '两图独立缩放与平移（点击恢复联动）'
+            }
+            aria-label="切换前后两图联动缩放"
+            aria-pressed={syncLock}
           >
-            <Link className="w-3 h-3" aria-hidden="true" />
-            <span>联动锁焦</span>
-          </div>
+            {syncLock ? (
+              <Link className="w-3 h-3" aria-hidden="true" />
+            ) : (
+              <Unlink className="w-3 h-3" aria-hidden="true" />
+            )}
+            <span className="pb-[1px]">{syncLock ? '联动锁焦' : '独立对照'}</span>
+          </button>
         </div>
       </div>
 
       {/* Dual Split Panes */}
-      <div
-        onWheel={handleWheel}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-        onDoubleClick={handleDoubleClick}
-        className={`flex-1 flex overflow-hidden ${
-          isDragging ? 'cursor-grabbing' : 'cursor-grab'
-        }`}
-      >
+      <div className="flex-1 flex overflow-hidden">
         {/* Left: Before (Original) */}
-        <div className="relative flex-1 bg-background-surface overflow-hidden flex items-center justify-center border-r border-border-subtle">
+        <div
+          onWheel={(e) => handleWheel('before', e)}
+          onMouseDown={(e) => handleMouseDown('before', e)}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          onDoubleClick={() => handleDoubleClick('before')}
+          className={`relative flex-1 bg-background-surface overflow-hidden flex items-center justify-center border-r border-border-subtle ${
+            isDragging ? 'cursor-grabbing' : 'cursor-grab'
+          }`}
+        >
+          {beforeFocused && (
+            <div
+              className="absolute inset-0 border-2 border-sky-400/60 pointer-events-none z-10"
+              aria-hidden="true"
+            />
+          )}
+
           <img
             src={beforeSrc}
             alt={`${group.baseName} 调色前原片`}
             draggable={false}
+            onError={() => {
+              if (lumenPreview.url && !lumenBroken) setLumenBroken(true);
+            }}
             style={{
-              transform: `translate(${pos.x}px, ${pos.y}px) scale(${scale})`,
+              transform: `translate(${beforePos.x}px, ${beforePos.y}px) scale(${beforeScale})`,
               transition: isDragging ? 'none' : 'transform 0.05s ease-out',
               imageOrientation: 'from-image',
             }}
             className="max-h-full max-w-full object-contain pointer-events-none origin-center"
           />
+
+          {lumenPreview.loading && (
+            <div
+              role="status"
+              className="absolute top-3 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3 py-1 rounded-md text-[11px] font-semibold text-white/80 border border-white/10 pointer-events-none"
+            >
+              正在渲染 RAW…
+            </div>
+          )}
 
           {/* Before Badge */}
           <div className="absolute top-3 left-3 bg-background-base/85 backdrop-blur-xl px-3 py-1.5 rounded-lg text-xs text-white/80 flex items-center gap-2 border border-white/15 select-text">
@@ -271,13 +385,30 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
         </div>
 
         {/* Right: After (Adjusted or Luminar Edit) */}
-        <div className="relative flex-1 bg-background-surface overflow-hidden flex items-center justify-center">
+        <div
+          onWheel={(e) => handleWheel('after', e)}
+          onMouseDown={(e) => handleMouseDown('after', e)}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          onDoubleClick={() => handleDoubleClick('after')}
+          className={`relative flex-1 bg-background-surface overflow-hidden flex items-center justify-center ${
+            isDragging ? 'cursor-grabbing' : 'cursor-grab'
+          }`}
+        >
+          {afterFocused && (
+            <div
+              className="absolute inset-0 border-2 border-sky-400/60 pointer-events-none z-10"
+              aria-hidden="true"
+            />
+          )}
+
           <img
             src={afterSrc ?? beforeSrc}
             alt={`${group.baseName} 调色后效果`}
             draggable={false}
             style={{
-              transform: `translate(${pos.x}px, ${pos.y}px) scale(${scale})`,
+              transform: `translate(${afterPos.x}px, ${afterPos.y}px) scale(${afterScale})`,
               transition: isDragging ? 'none' : 'transform 0.05s ease-out',
               filter: toneFilter,
               imageOrientation: 'from-image',
