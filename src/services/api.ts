@@ -4,7 +4,9 @@ import {
   AppSettings,
   ExportItem,
   FolderScanResult,
+  LumenCapabilities,
   LumenPreviewResult,
+  LumenRatingSyncResult,
   LumenRecipe,
   LumenStatus,
   ToneAdjustments,
@@ -230,8 +232,8 @@ export const api = {
    * 从 LUMEN RAW 拉取该文件夹的评级并写回侧边栏（返回被更新的文件路径）。
    * 引擎关闭或未安装时返回空数组（静默降级）。
    */
-  syncLumenRatings: async (folder: string): Promise<string[]> => {
-    return await invoke<string[]>('lumen_sync_ratings_cmd', { folder });
+  syncLumenRatings: async (folder: string): Promise<LumenRatingSyncResult> => {
+    return await invoke<LumenRatingSyncResult>('lumen_sync_ratings_cmd', { folder });
   },
 
   /** 读取 LUMEN RAW 侧 recipe（available=false 表示引擎不可用） */
@@ -245,5 +247,15 @@ export const api = {
       filePath,
       recipeJson: JSON.stringify(changes),
     });
+  },
+
+  /** 探测 sidecar 能力（命令表 + 预设 + AI 可用性） */
+  getLumenCapabilities: async (): Promise<LumenCapabilities> => {
+    return await invoke<LumenCapabilities>('lumen_capabilities_cmd');
+  },
+
+  /** 应用 LUMEN RAW 内置预设（amount 0..100） */
+  applyLumenPreset: async (filePath: string, name: string, amount = 100): Promise<void> => {
+    await invoke('lumen_apply_preset_cmd', { filePath, name, amount });
   },
 };

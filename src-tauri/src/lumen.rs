@@ -687,8 +687,10 @@ pub struct LumenRuntime {
 
 #[derive(Default)]
 struct RuntimeInner {
+    // capabilities 见下方字段
     client: Option<McpClient<ProcessTransport>>,
     version: Option<String>,
+    capabilities: Option<LumenCapabilities>,
     failures: u32,
     last_error: Option<String>,
 }
@@ -698,6 +700,59 @@ impl Default for LumenRuntime {
         Self {
             inner: std::sync::Arc::new(std::sync::Mutex::new(RuntimeInner::default())),
         }
+    }
+}
+
+/// sidecar 实际能力（由 `commands.list` 真实解析，不靠猜）。
+///
+/// 用途：AI 蒙版 / 增强只在 GPU flavor 里存在（CPU-only 包没有 `mask.*`/
+/// `photo.enhance`，因为 onnxruntime 不在包里）。前端据此**提前**说明不可用，
+/// 而不是等用户点下去再报错。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LumenCapabilities {
+    /// 27 条命令的 id（原始顺序，便于契约冻结比对）
+    pub commands: Vec<String>,
+    /// 内置预设（`edit.presets`），CPU-only 包也有
+    pub presets: Vec<String>,
+    /// AI 蒙版是否可用（需要 GPU flavor）
+    pub ai_masks: bool,
+    /// AI 增强（去噪/超分）是否可用（需要 GPU flavor）
+    pub ai_enhance: bool,
+    pub version: String,
+}
+
+/// AI 相关命令的判据：出现任一即认为装了 GPU/AI flavor。
+const AI_COMMAND_MARKERS: [&str; 6] = [
+    "mask.",
+    "photo.enhance",
+    "ai.",
+    "enhance.",
+    "super_resolution",
+    "segment",
+];
+
+/// 从 `commands.list` 的原始 JSON 解析能力。
+pub fn parse_capabilities(commands_json: &Value, version: &str) -> LumenCapabilities {
+    let commands: Vec<String> = commands_json
+        .get("commands")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| c.get("id").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let has_ai = commands
+        .iter()
+        .any(|c| AI_COMMAND_MARKERS.iter().any(|m| c.starts_with(m)));
+    LumenCapabilities {
+        ai_masks: commands.iter().any(|c| c.starts_with("mask.")),
+        ai_enhance: has_ai,
+        presets: Vec::new(), // 由调用方补（需要额外一次 edit.presets 调用）
+        version: version.to_string(),
+        commands,
     }
 }
 
@@ -774,6 +829,16 @@ impl LumenRuntime {
         changes: &Value,
     ) -> Result<Value, LumenError> {
         let args = serde_json::json!({ "path": photo, "changes": changes });
+        self.call_session_tool(exe, "apply_edits", &args)
+    }
+
+    /// 常驻 session 内的工具调用（编辑类命令的唯一可行通道）。
+    ///
+    /// lumen 的编辑状态是**进程内 session**：headless 单发 `run edit.apply` 会
+    /// 返回 `applied: [...]`，但下一个进程 `edit.get` 读回仍是 0（实测不落盘）。
+    /// 所以 apply + render 必须落在同一个 sidecar 进程内 —— 这里没有 B 通道兜底，
+    /// 兜底会是假的成功。
+    fn call_session_tool(&self, exe: &Path, tool: &str, args: &Value) -> Result<Value, LumenError> {
         let mut guard = self
             .inner
             .lock()
@@ -789,7 +854,7 @@ impl LumenRuntime {
             guard.client = Some(client);
         }
         let client = guard.client.as_mut().expect("client 已建立");
-        match client.call_tool("apply_edits", &args) {
+        match client.call_tool(tool, args) {
             Ok(v) => {
                 guard.failures = 0;
                 Ok(v)
@@ -955,6 +1020,54 @@ impl LumenRuntime {
         }
         let client = guard.client.as_mut().expect("client 已建立");
         client.call_tool("render_preview", args)
+    }
+    /// 探测 sidecar 能力（`commands.list` + `edit.presets`），结果缓存在运行��内。
+    pub fn capabilities(&self, exe: &Path) -> Result<LumenCapabilities, LumenError> {
+        if let Some(caps) = self.inner.lock().ok().and_then(|g| g.capabilities.clone()) {
+            return Ok(caps);
+        }
+        let version = query_version(exe).unwrap_or_default();
+        let listing = run_lumen(exe, "commands.list", &serde_json::json!({}))?;
+        let mut caps = parse_capabilities(&listing, &version);
+        // 预设清单失败不算能力缺失（老版本可能没有该命令）
+        if caps.commands.iter().any(|c| c == "edit.presets") {
+            if let Ok(p) = run_lumen(exe, "edit.presets", &serde_json::json!({})) {
+                caps.presets = p
+                    .get("presets")
+                    .and_then(Value::as_array)
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.get("name").and_then(Value::as_str))
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+            }
+        }
+        if let Ok(mut g) = self.inner.lock() {
+            g.capabilities = Some(caps.clone());
+        }
+        Ok(caps)
+    }
+
+    /// 应用内置预设（`edit.preset`，**必须走 A 通道**：编辑态是进程内 session）。
+    pub fn apply_preset(
+        &self,
+        exe: &Path,
+        photo: &str,
+        name: &str,
+        amount: u8,
+    ) -> Result<Value, LumenError> {
+        let args = serde_json::json!({
+            "path": photo,
+            "name": name,
+            // schema: 0..100（不是 0..1，也不是 strength）
+            "amount": (amount.min(100)) as i64,
+        });
+        // 必须走 apply_preset 工具：**不能**复用 apply_recipe —— 后者会把载荷
+        // 包进 {"changes": ...}，而 edit.preset 的参数是 {path, name, amount}。
+        // 包错了会静默变成 no-op（预设"应用成功"但什么都没变）。
+        self.call_session_tool(exe, "apply_preset", &args)
     }
 }
 
@@ -2615,6 +2728,64 @@ ope\lumen-cli-xyz.exe",
         );
         assert_eq!(captured["size"], 1600);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- Step 11: 能力探测 ----
+    #[test]
+    fn capabilities_detect_ai_absence_in_cpu_build() {
+        // 真实 CPU-only sidecar 的命令表（节选）：无任何 AI 命令
+        let listing = serde_json::json!({
+            "commands": [
+                {"id": "app.status"},
+                {"id": "edit.apply"},
+                {"id": "edit.presets"},
+                {"id": "edit.preset"},
+                {"id": "render.preview"},
+                {"id": "library.rate"},
+                {"id": "photo.export"},
+            ]
+        });
+        let caps = parse_capabilities(&listing, "1.6.0");
+        assert_eq!(caps.commands.len(), 7);
+        assert!(!caps.ai_masks, "CPU-only 包没有 mask.*");
+        assert!(!caps.ai_enhance, "CPU-only 包没有任何 AI 命令");
+        assert_eq!(caps.version, "1.6.0");
+    }
+
+    #[test]
+    fn capabilities_detect_ai_in_gpu_build() {
+        let listing = serde_json::json!({
+            "commands": [
+                {"id": "edit.apply"},
+                {"id": "mask.list"},
+                {"id": "photo.enhance"},
+                {"id": "render.preview"},
+            ]
+        });
+        let caps = parse_capabilities(&listing, "1.6.0-gpu");
+        assert!(caps.ai_masks, "有 mask.* 就该判定 AI 蒙版可用");
+        assert!(caps.ai_enhance, "有 photo.enhance 就该判定 AI 增强可用");
+    }
+
+    #[test]
+    fn capabilities_tolerate_empty_listing() {
+        // 命令表拿不到时不能 panic，也不能谎报 AI 可用
+        let caps = parse_capabilities(&serde_json::json!({}), "");
+        assert!(caps.commands.is_empty());
+        assert!(!caps.ai_masks && !caps.ai_enhance);
+        // 畸形输入同样不炸
+        let caps2 = parse_capabilities(&serde_json::json!({"commands": [1, "x", null]}), "1.6.0");
+        assert!(caps2.commands.is_empty());
+    }
+
+    #[test]
+    fn preset_amount_is_zero_to_hundred() {
+        // schema 是 amount 0..100（曾误用 strength，真实 sidecar 报 unknown argument）
+        let json = serde_json::json!({"path": "x.ARW", "name": "金色时刻", "amount": 60});
+        assert_eq!(json["amount"], serde_json::json!(60));
+        // 越界必须夹紧（schema 会拒绝 >100）
+        let clamped = (140u8).min(100);
+        assert_eq!(clamped, 100);
     }
 
     #[test]

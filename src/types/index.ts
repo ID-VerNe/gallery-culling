@@ -76,6 +76,32 @@ export interface LumenRecipe {
   monochrome: boolean;
 }
 
+/** 评级同步结果：写回了什么、跳过什么、哪里冲突（冲突绝不自动覆盖） */
+export interface LumenRatingConflict {
+  path: string;
+  hostRating: number;
+  hostFlag: string;
+  lumenRating: number;
+  lumenFlag: string;
+}
+
+export interface LumenRatingSyncResult {
+  updated: string[];
+  skipped: number;
+  conflicts: LumenRatingConflict[];
+}
+
+/** LUMEN RAW sidecar 的真实能力（由 commands.list 解析，不靠猜） */
+export interface LumenCapabilities {
+  commands: string[];
+  presets: string[];
+  /** AI 蒙版（需要 GPU flavor） */
+  aiMasks: boolean;
+  /** AI 增强：去噪/超分（需要 GPU flavor） */
+  aiEnhance: boolean;
+  version: string;
+}
+
 /** LUMEN RAW 集成握手状态 */
 export interface LumenStatus {
   available: boolean;

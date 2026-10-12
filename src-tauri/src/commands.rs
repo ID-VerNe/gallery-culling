@@ -6,7 +6,8 @@ use tauri::State;
 use crate::db::Database;
 use crate::lumen::{self, LumenError, LumenStatus, PreviewVariant, PINNED_LUMEN_VERSION};
 use crate::models::{
-    AppSettings, ExportItem, FolderScanResult, LumenPreviewResult, LumenRecipe, ToneAdjustments,
+    AppSettings, ExportItem, FolderScanResult, LumenPreviewResult, LumenRatingConflict,
+    LumenRatingSync, LumenRecipe, ToneAdjustments,
 };
 use crate::scanner::scan_folders;
 use crate::thumbnail::{get_cache_dir, get_or_create_thumbnail};
@@ -261,6 +262,15 @@ pub fn save_settings_cmd(
     settings: AppSettings,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
+    // 换了 lumen-cli 路径 = 指向了另一个 catalog，旧的同步游标不再有意义
+    // （否则冲突判定会拿旧引擎的值做基准）。清空是安全方向：最坏情况是
+    // 下次同步时按"首次见到"处理，不会误覆盖。
+    if let Ok(old) = state.db.load_settings() {
+        if old.lumen_cli_path.trim() != settings.lumen_cli_path.trim() {
+            let _ = state.db.clear_rating_sync();
+            state.lumen.shutdown();
+        }
+    }
     state.db.save_settings(&settings)?;
     Ok(true)
 }
@@ -459,55 +469,93 @@ pub async fn lumen_preview_cmd(
 }
 
 /// 从 LUMEN RAW 拉取评级（catalog 真值）并写回宿主侧边栏。
+///
+/// 冲突语义（Step 8 SPEC B4）：以 `rating_sync` 游标为基准判断谁改过。
+/// - 只有 LUMEN 侧变 → 写回宿主；
+/// - 只有宿主变 → 不动（等宿主推给 LUMEN）；
+/// - 两侧都变 → **绝不静默覆盖**，计入 conflicts 交用户裁决；
+/// - 首次见到且 LUMEN 无值 → 不产生动作。
 #[tauri::command]
 pub async fn lumen_sync_ratings_cmd(
     state: State<'_, AppState>,
     folder: String,
-) -> Result<Vec<String>, String> {
+) -> Result<LumenRatingSync, String> {
     let settings = state.db.load_settings()?;
     if !settings.lumen_enabled {
-        return Ok(Vec::new()); // 引擎关闭 → 零请求
+        return Ok(LumenRatingSync::default()); // 引擎关闭 → 零请求
     }
     let exe = match lumen::find_lumen_cli(&settings.lumen_cli_path) {
         Some(e) => e,
-        None => return Ok(Vec::new()), // 未安装 → 静默降级
+        None => return Ok(LumenRatingSync::default()), // 未安装 → 静默降级
     };
     let runtime = state.lumen.clone();
     let db = state.db.clone();
 
     tokio::task::spawn_blocking(move || {
         let folder_path = PathBuf::from(&folder);
-        let entries = match runtime.pull_ratings(&exe, &folder_path) {
-            Ok(v) => v,
-            Err(e) => return Err(format!("拉取 LUMEN RAW 评级失败: {}", e)),
-        };
+        let entries = runtime
+            .pull_ratings(&exe, &folder_path)
+            .map_err(|e| format!("拉取 LUMEN RAW 评级失败: {}", e))?;
 
-        let mut updated = Vec::new();
-        for (path, rating, flag) in entries {
+        let mut result = LumenRatingSync::default();
+        for (path, lumen_rating, lumen_flag) in entries {
             let p = PathBuf::from(&path);
             if !p.exists() {
                 continue;
             }
-            let host_flag =
-                flag_from_xmp(&read_xmp_full(&xmp::get_xmp_path(&p)).unwrap_or_default());
-            let host_rating = read_xmp_full(&xmp::get_xmp_path(&p))
-                .map(|m| m.rating)
-                .unwrap_or(0);
-            if host_rating == rating && host_flag == flag {
-                continue; // 已一致
-            }
-            // lumen 的 reject → 宿主的 reject（flag_from_xmp 已统一 -1 语义）
-            write_xmp(&p, rating, &flag)?;
-            let _ = db.upsert_rating_sync(
-                &path,
-                rating,
-                &flag,
-                "lumen",
-                crate::db::file_mtime_secs(&xmp::get_xmp_path(&p)),
+            let xmp = xmp::get_xmp_path(&p);
+            let host_meta = read_xmp_full(&xmp);
+            let host_rating = host_meta.as_ref().map(|m| m.rating).unwrap_or(0);
+            let host_flag = host_meta
+                .as_ref()
+                .map(flag_from_xmp)
+                .unwrap_or_else(|| "none".to_string());
+            let host_mtime = crate::db::file_mtime_secs(&xmp);
+
+            // 游标：(rating, flag, source, sidecar_mtime)。判定用 (rating, flag,
+            // mtime)；source 只用于诊断，不参与决策。
+            let cursor = db
+                .lookup_rating_sync(&path)
+                .ok()
+                .flatten()
+                .map(|(r, f, _source, mtime)| (r, f, mtime));
+
+            let decision = lumen::decide_sync(
+                cursor,
+                (host_rating, host_flag.clone(), host_mtime),
+                Some((lumen_rating, lumen_flag.clone())),
             );
-            updated.push(path);
+
+            match decision {
+                lumen::SyncDecision::InSync => {}
+                lumen::SyncDecision::PullFromLumen => {
+                    // lumen 的 reject → 宿主的 reject（Rating=-1 语义已统一）
+                    write_xmp(&p, lumen_rating, &lumen_flag)?;
+                    let _ = db.upsert_rating_sync(
+                        &path,
+                        lumen_rating,
+                        &lumen_flag,
+                        "lumen",
+                        crate::db::file_mtime_secs(&xmp),
+                    );
+                    result.updated.push(path);
+                }
+                lumen::SyncDecision::PushToLumen => {
+                    // 宿主更新 → 交给 update_rating_flag_cmd 推，不在这里覆盖
+                    result.skipped += 1;
+                }
+                lumen::SyncDecision::Conflict => {
+                    result.conflicts.push(LumenRatingConflict {
+                        path,
+                        host_rating,
+                        host_flag,
+                        lumen_rating,
+                        lumen_flag,
+                    });
+                }
+            }
         }
-        Ok(updated)
+        Ok(result)
     })
     .await
     .map_err(|e| format!("评级同步任务异常: {}", e))?
@@ -579,4 +627,49 @@ pub async fn lumen_apply_recipe_cmd(
     })
     .await
     .map_err(|e| format!("应用 recipe 任务异常: {}", e))?
+}
+
+/// 探测 LUMEN RAW sidecar 的真实能力（命令表 + 内置预设 + AI 可用性）。
+///
+/// AI 蒙版/增强只在 GPU flavor 里存在（CPU-only 包没有 onnxruntime），
+/// 前端据此提前说明，而不是等用户点下去才失败。
+#[tauri::command]
+pub async fn lumen_capabilities_cmd(
+    state: State<'_, AppState>,
+) -> Result<lumen::LumenCapabilities, String> {
+    let settings = state.db.load_settings()?;
+    if !settings.lumen_enabled {
+        return Err("未启用 LUMEN RAW 引擎".to_string());
+    }
+    let exe = lumen::find_lumen_cli(&settings.lumen_cli_path)
+        .ok_or_else(|| "未找到 lumen-cli".to_string())?;
+    let runtime = state.lumen.clone();
+    tokio::task::spawn_blocking(move || runtime.capabilities(&exe).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| format!("能力探测任务异常: {}", e))?
+}
+
+/// 应用 LUMEN RAW 内置预设（编辑态是进程内 session，必须走 A 通道）。
+#[tauri::command]
+pub async fn lumen_apply_preset_cmd(
+    state: State<'_, AppState>,
+    file_path: String,
+    name: String,
+    amount: Option<u8>,
+) -> Result<(), String> {
+    let settings = state.db.load_settings()?;
+    if !settings.lumen_enabled {
+        return Err("未启用 LUMEN RAW 引擎".to_string());
+    }
+    let exe = lumen::find_lumen_cli(&settings.lumen_cli_path)
+        .ok_or_else(|| "未找到 lumen-cli".to_string())?;
+    let runtime = state.lumen.clone();
+    tokio::task::spawn_blocking(move || {
+        runtime
+            .apply_preset(&exe, &file_path, &name, amount.unwrap_or(100))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("应用预设任务异常: {}", e))?
 }

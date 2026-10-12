@@ -432,3 +432,146 @@ fn e2e_recipe_apply_then_render_changes_pixels() {
     );
     let _ = std::fs::remove_file(sample.with_extension("lumen"));
 }
+
+#[test]
+#[ignore = "需要已构建的 lumen-cli sidecar"]
+fn e2e_capabilities_match_real_cpu_build() {
+    use gallery_culling_lib::lumen::LumenRuntime;
+    let exe = require_sidecar();
+    let rt = LumenRuntime::new();
+    let caps = rt.capabilities(&exe).expect("能力探测应成功");
+
+    println!(
+        "E2E caps: {} 条命令, {} 个预设, aiMasks={} aiEnhance={} v{}",
+        caps.commands.len(),
+        caps.presets.len(),
+        caps.ai_masks,
+        caps.ai_enhance,
+        caps.version
+    );
+
+    // 契约冻结过的命令表必须仍然齐全（27 条）
+    assert_eq!(caps.commands.len(), 27, "命令表漂移: {:?}", caps.commands);
+    for required in [
+        "render.preview",
+        "edit.apply",
+        "edit.preset",
+        "edit.presets",
+        "library.rate",
+        "library.flag",
+        "photo.export",
+    ] {
+        assert!(
+            caps.commands.iter().any(|c| c == required),
+            "缺少命令 {}",
+            required
+        );
+    }
+    assert!(!caps.presets.is_empty(), "CPU 版也应有内置预设");
+    // CPU-only 包**没有** AI 命令 —— 探测结果必须如实报告不可用
+    assert!(!caps.ai_masks, "CPU-only 包不该报告 AI 蒙版可用");
+    assert!(!caps.ai_enhance, "CPU-only 包不该报告 AI 增强可用");
+}
+
+#[test]
+#[ignore = "需要已构建的 lumen-cli sidecar + LUMEN_SAMPLE"]
+fn e2e_preset_apply_changes_render() {
+    use gallery_culling_lib::lumen::LumenRuntime;
+    let exe = require_sidecar();
+    let sample = sample_photo().expect("需要 LUMEN_SAMPLE");
+    let photo = sample.to_string_lossy().to_string();
+    let rt = LumenRuntime::new();
+
+    // 归零 → 基线渲染
+    rt.apply_recipe(
+        &exe,
+        &photo,
+        &serde_json::json!({"adjustments": {"exposure": 0.0, "contrast": 0.0}}),
+    )
+    .expect("归零应成功");
+    let base = std::env::temp_dir().join(format!("lumen_preset_base_{}.jpg", std::process::id()));
+    let _ = std::fs::remove_file(&base);
+    rt.render_preview(
+        &exe,
+        &serde_json::json!({
+            "path": photo, "size": 512, "output": base.to_string_lossy(),
+        }),
+    )
+    .expect("基线渲染应成功");
+    let base_hash = sha256(&std::fs::read(&base).unwrap());
+
+    // 套第一个预设（名字来自 sidecar 自己的清单，不硬编码）
+    let caps = rt.capabilities(&exe).expect("能力探测应成功");
+    let preset = caps.presets.first().expect("应有预设").clone();
+    let applied = rt
+        .apply_preset(&exe, &photo, &preset, 100)
+        .expect("应用预设应成功");
+    // 断言"至少有一项非零"，而不是钉死某个字段：预设之间差异很大
+    // （"自然风光" 是 highlights/shadows 配方，contrast 本来就是 0）。
+    let adj = applied["state"]["adjustments"].clone();
+    let any_changed = adj
+        .as_object()
+        .map(|m| m.values().any(|v| v.as_f64().unwrap_or(0.0) != 0.0))
+        .unwrap_or(false);
+    assert!(any_changed, "预设应带来至少一项非零调整，实际 {}", adj);
+
+    let edited = std::env::temp_dir().join(format!("lumen_preset_edit_{}.jpg", std::process::id()));
+    let _ = std::fs::remove_file(&edited);
+    rt.render_preview(
+        &exe,
+        &serde_json::json!({
+            "path": photo, "size": 512, "output": edited.to_string_lossy(),
+        }),
+    )
+    .expect("预设渲染应成功");
+    let edited_hash = sha256(&std::fs::read(&edited).unwrap());
+    println!(
+        "E2E preset 「{}」: base={} edited={}",
+        preset,
+        &base_hash[..12],
+        &edited_hash[..12]
+    );
+    assert_ne!(base_hash, edited_hash, "套预设后渲染必须变化");
+
+    // 还原
+    rt.apply_recipe(
+        &exe,
+        &photo,
+        &serde_json::json!({"adjustments": {"exposure": 0.0, "contrast": 0.0}}),
+    )
+    .ok();
+    let _ = std::fs::remove_file(sample.with_extension("lumen"));
+}
+
+#[test]
+#[ignore = "需要已构建的 lumen-cli sidecar + LUMEN_SAMPLE"]
+fn e2e_conflict_is_not_silently_overwritten() {
+    // 契约测试（不跑真实引擎也能过）：两侧都改过时，判定必须是 Conflict，
+    // 且同步命令对该分支只记录、不写回 —— 绝不静默覆盖用户的本机评级。
+    use gallery_culling_lib::lumen::{decide_sync, SyncDecision};
+
+    let cursor = Some((1u8, "none".to_string(), 1_000i64));
+    let host = (5u8, "pick".to_string(), 2_000i64);
+    let lumen = (3u8, "pick".to_string());
+    assert_eq!(
+        decide_sync(cursor.clone(), host.clone(), Some(lumen.clone())),
+        SyncDecision::Conflict,
+        "两侧都改过必须是 Conflict"
+    );
+    // 只有一侧变 → 各走各的方向
+    assert_eq!(
+        decide_sync(cursor.clone(), host.clone(), Some((1, "none".to_string()))),
+        SyncDecision::PushToLumen,
+        "只有宿主变 → 推"
+    );
+    assert_eq!(
+        decide_sync(
+            cursor,
+            (1u8, "none".to_string(), 1_000i64),
+            Some(lumen.clone())
+        ),
+        SyncDecision::PullFromLumen,
+        "只有 LUMEN 变 → 拉"
+    );
+    let _ = sample_photo();
+}

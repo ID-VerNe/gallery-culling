@@ -19,6 +19,7 @@ import { useLumenStatus } from './hooks/useLumenStatus';
 import type { ViewportEmptyState } from './components/PreviewViewport';
 import {
   AppSettings,
+  LumenCapabilities,
   FilterMode,
   PhotoFileInfo,
   PhotoGroupInfo,
@@ -81,6 +82,22 @@ function AppShell() {
   const lumenStatus = useLumenStatus(settings?.lumenEnabled ?? false);
   // 只有握手成功（版本 1.6.0 匹配）才出现 LUMEN RAW 专属入口
   const lumenAvailable = lumenStatus.available;
+  // sidecar 真实能力（命令表/预设/AI）。只在握手成功时探测一次。
+  const [lumenCaps, setLumenCaps] = useState<LumenCapabilities | null>(null);
+  useEffect(() => {
+    if (!lumenAvailable) {
+      setLumenCaps(null);
+      return;
+    }
+    let active = true;
+    api
+      .getLumenCapabilities()
+      .then((c) => active && setLumenCaps(c))
+      .catch((e) => console.warn('LUMEN 能力探测失败:', e));
+    return () => {
+      active = false;
+    };
+  }, [lumenAvailable]);
   // 宫格引擎开关：仅在设置开启且引擎握手成功时才切到 lumen 渲染
   const lumenGridThumbs =
     (settings?.lumenGridThumbnails ?? false) && lumenAvailable;
@@ -647,16 +664,50 @@ function AppShell() {
         toast.error('无法确定所在目录，请先设置默认 RAW 目录。');
         return 0;
       }
-      const updated = await api.syncLumenRatings(folderPath);
-      if (updated.length > 0) {
-        toast.success(`已从 LUMEN RAW 同步 ${updated.length} 张的评级。`);
+      const result = await api.syncLumenRatings(folderPath);
+      if (result.updated.length > 0) {
+        toast.success(`已从 LUMEN RAW 同步 ${result.updated.length} 张的评级。`);
         // 评级变了 → 星级排序与边框都要跟着变，重新扫描当前目录
         if (jpgFolder) await handleScan();
       }
-      return updated.length;
+      if (result.conflicts.length > 0) {
+        // 两侧都改过 —— 不自动覆盖，明确告诉用户哪几张需要裁决
+        const first = result.conflicts[0];
+        toast.error(
+          `${result.conflicts.length} 张照片在两边都被改过，已保持本机值不覆盖。
+` +
+            `例如 ${first.path}：本机 ${first.hostRating}★/${first.hostFlag}，` +
+            `LUMEN RAW ${first.lumenRating}★/${first.lumenFlag}。`,
+        );
+      }
+      return result.updated.length;
     },
     // `handleScan` 依赖 jpgFolder/rawFolder/sortOrder
     [settings, currentGroup, toast, jpgFolder, handleScan],
+  );
+
+  /** 应用 LUMEN RAW 内置预设（编辑态是进程内 session，由后端保证同进程）。 */
+  const handleApplyLumenPreset = useCallback(
+    async (name: string) => {
+      if (!currentGroup) return;
+      const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
+      if (!targetPath) return;
+      try {
+        await api.applyLumenPreset(targetPath, name, 100);
+        // 套预设后把 lumen 侧的实际调整读回来，让滑杆反映真实状态
+        const recipe = await api.getLumenRecipe(targetPath);
+        setGroups((prev) =>
+          prev.map((g) =>
+            g.id === currentGroup.id ? { ...g, tone: recipe.tone } : g,
+          ),
+        );
+        toast.success(`已应用预设「${name}」。`);
+      } catch (err) {
+        console.error('Failed to apply preset:', err);
+        toast.error(`应用预设失败：${String(err)}`);
+      }
+    },
+    [currentGroup, toast],
   );
 
   // Luminar AI Roundtrip Handler
@@ -894,6 +945,9 @@ function AppShell() {
               onAuto={handleAutoTone}
               onSaveXmp={handleSaveToneToXmp}
               onSaveToLumen={lumenAvailable ? handleSaveToneToLumen : undefined}
+              lumenPresets={lumenCaps?.presets ?? []}
+              aiAvailable={lumenCaps?.aiMasks ?? false}
+              onApplyPreset={lumenAvailable ? handleApplyLumenPreset : undefined}
               onClose={() => setShowTonalPanel(false)}
             />
           ) : (

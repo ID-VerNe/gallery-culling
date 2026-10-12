@@ -25,6 +25,11 @@ interface TonalAdjusterProps {
   isSaving?: boolean;
   /** LUMEN RAW 引擎可用时出现：把滑杆写入 lumen recipe（而非 XMP）。 */
   onSaveToLumen?: () => void;
+  /** LUMEN RAW 内置预设（来自 commands.list，非硬编码） */
+  lumenPresets?: string[];
+  /** AI 蒙版是否可用（GPU flavor 才有）。false 时显示说明而不是假装能用。 */
+  aiAvailable?: boolean;
+  onApplyPreset?: (name: string) => void;
 }
 
 /**
@@ -115,6 +120,9 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
   onSaveXmp,
   onClose,
   onSaveToLumen,
+  lumenPresets = [],
+  aiAvailable = false,
+  onApplyPreset,
   isSaving = false,
 }) => {
   const [saveFeedback, setSaveFeedback] = useState(false);
@@ -208,6 +216,45 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
           );
         })}
       </div>
+
+      {/* LUMEN RAW presets (from the sidecar's own command table) */}
+      {onApplyPreset && lumenPresets.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor="tonal-preset"
+            className="text-white/70 font-medium"
+          >
+            LUMEN RAW 预设
+          </label>
+          <div className="flex items-center gap-1.5">
+            <select
+              id="tonal-preset"
+              defaultValue=""
+              onChange={(e) => {
+                if (e.target.value) onApplyPreset(e.target.value);
+                e.target.value = '';
+              }}
+              className="focus-ring flex-1 min-w-0 bg-background-base border border-border-default rounded-md px-2 py-1.5 text-white outline-none text-xs focus:border-white/40"
+            >
+              <option value="">选择预设…</option>
+              {lumenPresets.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="text-[10px] leading-relaxed text-white/60">
+            预设直接改 LUMEN RAW 的编辑状态，套用后滑杆会读回真实数值。
+          </p>
+          {!aiAvailable && (
+            <p className="text-[10px] leading-relaxed text-amber-200/70">
+              AI 蒙版与降噪/超分需要带 GPU 推理的 LUMEN RAW 版本（当前 CPU 版不含），
+              暂不可用。
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Action Buttons: Auto, Reset, Save to XMP */}
       <div className="flex items-center gap-2 pt-3 mt-auto border-t border-white/10">

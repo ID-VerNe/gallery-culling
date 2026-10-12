@@ -129,3 +129,25 @@ pub struct LumenRecipe {
     pub tone: ToneAdjustments,
     pub monochrome: bool,
 }
+
+/// `lumen_sync_ratings_cmd` 的结果：写回了什么、跳过了什么、哪里有冲突。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LumenRatingSync {
+    /// 已从 LUMEN RAW 写回侧边栏的路径
+    pub updated: Vec<String>,
+    /// 宿主侧更新、等待推给 LUMEN RAW 的照片数
+    pub skipped: u32,
+    /// 两侧都改过 —— 交用户裁决，**不自动覆盖**
+    pub conflicts: Vec<LumenRatingConflict>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LumenRatingConflict {
+    pub path: String,
+    pub host_rating: u8,
+    pub host_flag: String,
+    pub lumen_rating: u8,
+    pub lumen_flag: String,
+}
