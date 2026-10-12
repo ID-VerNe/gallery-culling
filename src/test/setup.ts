@@ -1,0 +1,244 @@
+/**
+ * 前端测试基座的统一环境。
+ *
+ * 关键约定：**所有 Tauri 边界都走 `src/services/api.ts`**，所以只 mock 三个
+ * 模块就能截获整个应用的 IPC —— 测试断言的是 `invoke` 收到的**命令名与参数**，
+ * 而不是某个组件内部实现。
+ *
+ * `invoke` 被做成可编程的 spy：
+ *  - `mockInvokeCommand('lumen_preview_cmd', value)` 按命令名注册返回值；
+ *  - `mockInvokeHandler(fn)` 全量接管（抛错、动态响应）；
+ *  - `invokeCalls('lumen_preview_cmd')` 取出历史调用（含参数），用于
+ *    "不该发请求""不该重试成风暴"这类负向断言。
+ */
+import '@testing-library/jest-dom/vitest';
+import { afterEach, beforeEach, vi } from 'vitest';
+import { cleanup } from '@testing-library/react';
+
+/* -------------------------------------------------------------------------- */
+/* invoke: 命令名 -> 返回值 / 抛出                                              */
+/* -------------------------------------------------------------------------- */
+
+export type InvokeArgs = Record<string, unknown> | undefined;
+
+interface InvokeCall {
+  command: string;
+  args: InvokeArgs;
+}
+
+const recordedCalls: InvokeCall[] = [];
+
+/** 命令名 -> 返回值（可能是函数式，按 args 求值）。 */
+const commandResults = new Map<string, unknown>();
+/** 命令名 -> 显式抛错。 */
+const commandErrors = new Map<string, Error>();
+/** 全量接管；设置后 commandResults / commandErrors 被忽略。 */
+let invokeHandler: ((command: string, args: InvokeArgs) => unknown) | null = null;
+
+/** 未注册的命令 = Tauri 侧 "command not found"。默认让测试炸出来，而不是静默返回 undefined。 */
+class UnmockedCommandError extends Error {
+  constructor(command: string) {
+    super(
+      `[test] invoke("${command}") 未注册。用 mockInvokeCommand('${command}', ...) ` +
+        `或 mockInvokeHandler(...) 先声明它。`,
+    );
+    this.name = 'UnmockedCommandError';
+  }
+}
+
+const invokeSpy = vi.fn(async (command: string, args?: InvokeArgs) => {
+  recordedCalls.push({ command, args });
+
+  if (invokeHandler) return invokeHandler(command, args);
+
+  const err = commandErrors.get(command);
+  if (err) throw err;
+
+  if (!commandResults.has(command)) throw new UnmockedCommandError(command);
+
+  const value = commandResults.get(command);
+  return typeof value === 'function' ? (value as (a: InvokeArgs) => unknown)(args) : value;
+});
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: invokeSpy,
+  convertFileSrc: vi.fn((path: string) => `asset://localhost/${path}`),
+  convertFileSrc_: vi.fn(),
+}));
+
+vi.mock('@tauri-apps/api', () => ({
+  invoke: invokeSpy,
+  convertFileSrc: vi.fn((path: string) => `asset://localhost/${path}`),
+}));
+
+/* -------------------------------------------------------------------------- */
+/* 对外的 mock 控制面（测试文件从这里 import）                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 按命令名注册 invoke 返回值。
+ *
+ * 两个重载让「函数式返回值」能被上下文类型化 —— 传 `(args) => ...` 时 args
+ * 自动是 InvokeArgs，不必在测试里手写 any（否则 tsc --noEmit 会报 TS7006）。
+ */
+export function mockInvokeCommand(command: string, value: (args: InvokeArgs) => unknown): void;
+export function mockInvokeCommand(command: string, value: unknown): void;
+export function mockInvokeCommand(command: string, value: unknown): void {
+  commandResults.set(command, value);
+  commandErrors.delete(command);
+}
+
+/** 让某个命令抛错（模拟 sidecar 挂掉 / 文件损坏）。 */
+export function mockInvokeError(command: string, error: Error = new Error(`${command} failed`)): void {
+  commandErrors.set(command, error);
+  commandResults.delete(command);
+}
+
+/** 全量接管 invoke。 */
+export function setInvokeHandler(
+  handler: ((command: string, args?: InvokeArgs) => unknown) | null,
+): void {
+  invokeHandler = handler;
+}
+
+/** 取某个命令的调用历史（含参数）。 */
+export function invokeCalls(command: string): InvokeCall[] {
+  return recordedCalls.filter((c) => c.command === command);
+}
+
+/** 取某个命令的调用次数。 */
+export function invokeCount(command: string): number {
+  return invokeCalls(command).length;
+}
+
+/** 取某个命令最近一次调用的参数。 */
+export function lastInvokeArgs(command: string): InvokeArgs {
+  const calls = recordedCalls.filter((c) => c.command === command);
+  return calls.length ? calls[calls.length - 1].args : undefined;
+}
+
+/** 全部 invoke 调用记录（按时间序）。 */
+export function allInvokeCalls(): readonly InvokeCall[] {
+  return recordedCalls;
+}
+
+export function resetInvokeMocks(): void {
+  recordedCalls.length = 0;
+  commandResults.clear();
+  commandErrors.clear();
+  invokeHandler = null;
+  invokeSpy.mockClear();
+}
+
+/* -------------------------------------------------------------------------- */
+/* 插件层（按需 mock；组件测试里不应触达真实 IPC）                                */
+/* -------------------------------------------------------------------------- */
+
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  open: vi.fn(async () => null),
+  save: vi.fn(async () => null),
+  message: vi.fn(async () => undefined),
+  confirm: vi.fn(async () => false),
+}));
+
+vi.mock('@tauri-apps/plugin-fs', () => ({
+  readFile: vi.fn(async () => new Uint8Array()),
+  writeFile: vi.fn(async () => undefined),
+  exists: vi.fn(async () => false),
+  mkdir: vi.fn(async () => undefined),
+  readDir: vi.fn(async () => []),
+  remove: vi.fn(async () => undefined),
+}));
+
+vi.mock('@tauri-apps/plugin-shell', () => ({
+  Command: class {
+    execute() {
+      return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+    }
+  },
+  open: vi.fn(async () => null),
+}));
+
+vi.mock('@tauri-apps/plugin-os', () => ({
+  platform: vi.fn(async () => 'windows'),
+  arch: vi.fn(async () => 'x86_64'),
+  type: vi.fn(async () => 'Windows'),
+}));
+
+vi.mock('@tauri-apps/plugin-opener', () => ({
+  openUrl: vi.fn(async () => undefined),
+  openPath: vi.fn(async () => undefined),
+  revealItemInDir: vi.fn(async () => undefined),
+}));
+
+vi.mock('@tauri-apps/plugin-updater', () => ({
+  check: vi.fn(async () => null),
+}));
+
+/* -------------------------------------------------------------------------- */
+/* jsdom 补齐：Tauri / 浏览器里存在、jsdom 里缺失的东西                            */
+/* -------------------------------------------------------------------------- */
+
+beforeEach(() => {
+  resetInvokeMocks();
+
+  // jsdom 没有实现，React 19 的 <img> 事件系统会直接抛 "Not implemented"。
+  if (!('matchMedia' in window)) {
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: (query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }),
+    });
+  }
+
+  if (!('ResizeObserver' in window)) {
+    Object.defineProperty(window, 'ResizeObserver', {
+      writable: true,
+      value: class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    });
+  }
+
+  // @tanstack/react-virtual 在 jsdom 里拿不到真实尺寸，直接把所有测量值归零，
+  // 否则宫格一行都不会被渲染出来，ThumbnailGrid 的用例会假通过。
+  Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', {
+    configurable: true,
+    writable: true,
+    value: () => ({
+      width: 1200,
+      height: 800,
+      top: 0,
+      left: 0,
+      bottom: 800,
+      right: 1200,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }),
+  });
+
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+    configurable: true,
+    get: () => 800,
+  });
+  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
+    configurable: true,
+    get: () => 1200,
+  });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllTimers();
+});

@@ -379,7 +379,10 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
   isPinned,
   onSelect,
   lumenThumbnails = false,
-}) => {  const [thumbSrc, setThumbSrc] = useState<string | null>(null);
+}) => {
+  // 三态：`null` 加载中 · `undefined` 两条路都失败 · 字符串 有图。
+  // 之前用 null 同时表示"加载中"和"失败"，回落也失败时格子会永远显示加载中。
+  const [thumbSrc, setThumbSrc] = useState<string | null | undefined>(null);
 
   useEffect(() => {
     let active = true;
@@ -400,7 +403,9 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
             api
               .getThumbnail(targetPath, 200)
               .then((url) => active && setThumbSrc(url))
-              .catch(() => active && setThumbSrc(null));
+              // 回落也失败（磁盘只读/权限不足，与引擎死亡同源）：进入失败态，
+              // 不能停在"加载中"——那正是本模块要避免的整屏空洞。
+              .catch(() => active && setThumbSrc(undefined));
         })
         .catch(() => {
           api
@@ -409,15 +414,20 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
               if (active) setThumbSrc(url);
             })
             .catch(() => {
-              if (active) setThumbSrc(null);
+              if (active) setThumbSrc(undefined);
             });
         });
     } else {
-      api.getThumbnail(targetPath, 200).then((url) => {
-        if (active) {
-          setThumbSrc(url);
-        }
-      });
+      api
+        .getThumbnail(targetPath, 200)
+        .then((url) => {
+          if (active) {
+            setThumbSrc(url);
+          }
+        })
+        .catch(() => {
+          if (active) setThumbSrc(undefined);
+        });
     }
 
     return () => {
@@ -476,6 +486,15 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
             className="w-full h-full object-contain pointer-events-none"
             loading="lazy"
           />
+        ) : thumbSrc === undefined ? (
+          <div
+            className="text-[10px] text-white/40 font-mono"
+            title="缩略图不可用：引擎与内嵌预览都读取失败"
+            role="img"
+            aria-label="缩略图不可用"
+          >
+            无预览
+          </div>
         ) : (
           <div className="text-[10px] text-white/60 font-mono">加载中</div>
         )}

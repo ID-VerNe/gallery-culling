@@ -195,10 +195,14 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
     // 按钮也不会复位。失败时明确回报，绝不假装成功。
     try {
       await onSave();
+      // 成功时清掉上一次的错误：否则按钮文案会一直卡在「保存失败」，
+      // 即使用户已经重试成功（错误优先级高于成功反馈）。
+      setSaveError(null);
       setSaveFeedback(true);
       setTimeout(() => setSaveFeedback(false), 2000);
     } catch (err) {
       console.error('保存调色失败:', err);
+      setSaveFeedback(false);
       setSaveError(err instanceof Error ? err.message : String(err));
       setTimeout(() => setSaveError(null), 5000);
     }
