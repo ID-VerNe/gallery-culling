@@ -134,12 +134,6 @@ pub fn read_xmp_full(xmp_path: &Path) -> Option<XmpMetadata> {
     })
 }
 
-/// Read rating and label from an existing XMP sidecar
-#[allow(dead_code)]
-pub fn read_xmp(xmp_path: &Path) -> Option<(u8, String)> {
-    read_xmp_full(xmp_path).map(|m| (m.rating, m.label))
-}
-
 /// 本方（Gallery Culling）拥有的命名空间。写回时只替换本方块，
 /// 第三方命名空间（Lightroom 的 lr:*/dc:*/GPS、未来的 lumen:* 等）原样保留。
 const OURS_NAMESPACES: [&str; 4] = [
@@ -400,11 +394,6 @@ fn append_our_block(existing: &str, our_block: &str) -> Result<String, String> {
     Ok(out)
 }
 
-/// Write Adobe Lightroom Classic & Capture One compatible XMP sidecar
-pub fn write_xmp_full(image_path: &Path, meta: &XmpMetadata) -> Result<PathBuf, String> {
-    write_xmp_preserving(image_path, meta)
-}
-
 /// Write Adobe Lightroom Classic & Capture One compatible XMP sidecar (preserving existing lens/metadata if present)
 pub fn write_xmp(image_path: &Path, rating: u8, flag: &str) -> Result<PathBuf, String> {
     let xmp_path = get_xmp_path(image_path);
@@ -434,7 +423,7 @@ pub fn write_xmp(image_path: &Path, rating: u8, flag: &str) -> Result<PathBuf, S
     // （界面显示 0 星，磁盘仍是 -1，Lightroom 里也仍是"已淘汰"）。
     // 调用方已经用 `flag` 显式声明了旗标意图，这里以它为准。
     meta.rejected = false;
-    write_xmp_full(image_path, &meta)
+    write_xmp_preserving(image_path, &meta)
 }
 
 /// Update tone adjustments in XMP sidecar, preserving rating, label, and lens info
@@ -455,7 +444,7 @@ pub fn update_xmp_tone(
     meta.temperature = temperature;
     meta.tint = tint;
     meta.contrast = contrast;
-    write_xmp_full(image_path, &meta)
+    write_xmp_preserving(image_path, &meta)
 }
 
 /// Update lens metadata (lens model, focal length, aperture) in XMP, preserving rating & flag
@@ -476,7 +465,7 @@ pub fn update_xmp_metadata(
     if let Some(a) = aperture {
         meta.aperture = Some(a.to_string());
     }
-    write_xmp_full(image_path, &meta)
+    write_xmp_preserving(image_path, &meta)
 }
 
 /// 唯一的 flag 映射：XMP → 宿主 flag。
@@ -1137,7 +1126,7 @@ mod tests {
 "#,
         )
         .unwrap();
-        let (rating, _) = read_xmp(&xmp).expect("应可读");
+        let rating = read_xmp_full(&xmp).expect("应可读").rating;
         assert_eq!(rating, 0, "-1 是 reject，不是 1 星");
         let _ = fs::remove_file(&xmp);
     }
@@ -1149,9 +1138,9 @@ mod tests {
         let xmp_file = write_xmp(&test_img, 4, "pick").expect("Should write xmp");
         assert!(xmp_file.exists());
 
-        let (rating, label) = read_xmp(&xmp_file).expect("Should read xmp");
-        assert_eq!(rating, 4);
-        assert_eq!(label, "Green");
+        let meta = read_xmp_full(&xmp_file).expect("Should read xmp");
+        assert_eq!(meta.rating, 4);
+        assert_eq!(meta.label, "Green");
 
         // Clean up
         let _ = fs::remove_file(xmp_file);
