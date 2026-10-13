@@ -162,12 +162,13 @@ impl<T: LineTransport> McpClient<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::sync::Mutex as StdMutex;
     use super::*;
-    use crate::lumen::next_backoff;
+    use crate::lumen::*;
+    use super::super::next_backoff;
 
 // ---- Step 3: scripted 传输层 + MCP 客户端 ----
-use std::collections::VecDeque;
-use std::sync::Mutex as StdMutex;
 
 /// 测试用传输层：预写应答队列，记录发出的行；读空 → 模拟超时。
 struct ScriptedTransport {

@@ -50,7 +50,7 @@ pub fn recipe_to_tone(state: &Value) -> crate::models::ToneAdjustments {
 
 /// f32 → JSON：量化到 4 位小数，消除 f32→f64 的二进制表示噪声
 /// （0.65f32 直接转 f64 会得到 0.6499999761581421，破坏快照对比与缓存稳定性）。
-pub fn json_f32(v: f32) -> Value {
+pub(super) fn json_f32(v: f32) -> Value {
     let rounded = (v as f64 * 10_000.0).round() / 10_000.0;
     serde_json::Number::from_f64(rounded)
         .map(Value::Number)
@@ -69,7 +69,7 @@ pub fn recipe_hash(changes: &Value) -> String {
 }
 
 /// 递归规范化：对象键排序、浮点保留 4 位，避免 0.30000000000000004 之类的抖动。
-pub fn canonical_json(v: &Value) -> String {
+pub(super) fn canonical_json(v: &Value) -> String {
     match v {
         Value::Object(map) => {
             let mut keys: Vec<&String> = map.keys().collect();
@@ -94,4 +94,9 @@ pub fn canonical_json(v: &Value) -> String {
         }
         other => other.to_string(),
     }
+}
+
+#[cfg(test)]
+mod tests {
+// ---- Step 9: recipe 互通 ----
 }

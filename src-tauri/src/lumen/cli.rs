@@ -72,3 +72,104 @@ pub fn run_cli(exe: &Path, args: &[&str]) -> Result<Value, LumenError> {
     cmd.args(args);
     exec_and_classify(&mut cmd)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use super::*;
+    use crate::lumen::*;
+// ---- B4 ----
+#[test]
+fn build_run_args_shape() {
+    let args = serde_json::json!({"path": "D:/x.CR2", "size": 1600});
+    let got = build_run_args("render.preview", &args);
+    let expected_json = serde_json::to_string(&args).unwrap();
+    assert_eq!(
+        got,
+        vec![
+            "run".to_string(),
+            "render.preview".to_string(),
+            expected_json,
+            "--headless".to_string()
+        ],
+        "参数形状必须是 run <cmd> <compact-json> --headless"
+    );
+}
+
+// ---- B5 ----
+#[test]
+fn classify_exit_ok_parses_pretty_json() {
+    let stdout = "{\n  \"ok\": true,\n  \"n\": 1\n}\n";
+    let value = classify_exit(Some(0), stdout, "").expect("exit 0 + 合法 JSON");
+    assert_eq!(value["ok"], serde_json::json!(true));
+    assert_eq!(value["n"], serde_json::json!(1));
+}
+
+#[test]
+fn classify_exit_ok_invalid_json_is_protocol() {
+    let err = classify_exit(Some(0), "this-is-not-json", "").expect_err("坏 JSON 应 Err");
+    assert!(matches!(err, LumenError::Protocol(_)), "实际: {:?}", err);
+}
+
+#[test]
+fn classify_exit_1_strips_prefix() {
+    let err = classify_exit(Some(1), "", "lumen-cli: file not found: D:\\x.CR2")
+        .expect_err("exit 1 应 Err");
+    match err {
+        LumenError::Command(m) => {
+            assert_eq!(
+                m, "file not found: D:\\x.CR2",
+                "应剥离 lumen-cli: 前缀并 trim"
+            )
+        }
+        other => panic!("应分类为 Command，实际: {:?}", other),
+    }
+}
+
+#[test]
+fn classify_exit_2_is_usage() {
+    let err = classify_exit(Some(2), "", "usage: lumen-cli ...").expect_err("exit 2 应 Err");
+    assert!(matches!(err, LumenError::Usage(_)), "实际: {:?}", err);
+}
+
+#[test]
+fn classify_exit_signal_killed() {
+    let err = classify_exit(None, "", "").expect_err("信号杀死应 Err");
+    assert!(matches!(err, LumenError::Exit(_)), "实际: {:?}", err);
+}
+
+#[test]
+fn classify_exit_unexpected_code() {
+    let err = classify_exit(Some(3), "", "").expect_err("其他退出码应 Err");
+    assert_eq!(err, LumenError::Exit(3));
+}
+
+// ---- B6 ----
+#[test]
+fn run_lumen_missing_exe_not_installed() {
+    let err = run_lumen(
+        Path::new(r"C:\definitely\not\a\real\lumen-cli-xyz987.exe"),
+        "render.preview",
+        &serde_json::json!({}),
+    )
+    .expect_err("exe 不存在应 Err");
+    assert_eq!(err, LumenError::NotInstalled);
+}
+
+#[test]
+fn run_lumen_exit1_real_spawn() {
+    // 真实 spawn where.exe 查找一个保证不存在的命令：where 对无匹配稳定返回 exit 1。
+    let err = run_lumen(
+        Path::new("where.exe"),
+        "definitely-not-a-real-command-xyz-987",
+        &serde_json::json!({}),
+    )
+    .expect_err("where 找不到模式应 exit 1 → Err");
+    assert!(
+        matches!(err, LumenError::Command(_)),
+        "应分类为 Command，实际: {:?}",
+        err
+    );
+}
+
+}

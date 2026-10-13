@@ -72,3 +72,85 @@ pub fn decide_sync(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+// ---- Step 8: 评级同步判定 ----
+#[test]
+fn push_skips_zero_rating() {
+    // lumen compact 会压掉全零条目 → 推过去等于消失
+    assert!(!should_push_rating(0, "none"), "0 星 + 无旗标不推");
+    assert!(!should_push_rating(0, ""), "0 星 + 空旗标不推");
+    assert!(should_push_rating(0, "pick"), "0 星 + pick 要推");
+    assert!(
+        should_push_rating(0, "reject"),
+        "0 星 + reject 要推（-1 语义）"
+    );
+    assert!(should_push_rating(3, "none"), "有星要推");
+}
+
+#[test]
+fn sync_decision_matrix() {
+    // 首次见到（无游标）+ lumen 无记录 → 静默（不产生动作）
+    assert_eq!(
+        decide_sync(None, (3, "pick".into(), 100), None),
+        SyncDecision::InSync
+    );
+    // 首次 + lumen 已有值 → 以宿主为准推过去
+    assert_eq!(
+        decide_sync(None, (3, "pick".into(), 100), Some((1, "none".into()))),
+        SyncDecision::PushToLumen
+    );
+    // 无变化 → InSync
+    assert_eq!(
+        decide_sync(
+            Some((3, "pick".into(), 90)),
+            (3, "pick".into(), 100),
+            Some((3, "pick".into()))
+        ),
+        SyncDecision::InSync
+    );
+    // 只有宿主变 → 推
+    assert_eq!(
+        decide_sync(
+            Some((1, "none".into(), 90)),
+            (3, "pick".into(), 100),
+            Some((1, "none".into()))
+        ),
+        SyncDecision::PushToLumen
+    );
+    // 只有 lumen 变 → 拉
+    assert_eq!(
+        decide_sync(
+            Some((1, "none".into(), 90)),
+            (1, "none".into(), 90),
+            Some((5, "pick".into()))
+        ),
+        SyncDecision::PullFromLumen
+    );
+    // 两侧都变 → 冲突（绝不静默覆盖）
+    assert_eq!(
+        decide_sync(
+            Some((1, "none".into(), 90)),
+            (3, "pick".into(), 100),
+            Some((5, "pick".into()))
+        ),
+        SyncDecision::Conflict
+    );
+    // lumen 无记录 + 宿主变了 → 推
+    assert_eq!(
+        decide_sync(Some((1, "none".into(), 90)), (2, "none".into(), 100), None),
+        SyncDecision::PushToLumen
+    );
+}
+
+#[test]
+fn rating_sync_cursor_roundtrip() {
+    // 纯逻辑：游标编码
+    let c: (u8, String, i64) = (4, "pick".to_string(), 1_700_000_000);
+    assert_eq!(c.0, 4);
+    assert_eq!(c.1, "pick");
+}
+
+}
