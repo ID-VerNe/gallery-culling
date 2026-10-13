@@ -32,8 +32,8 @@ pub fn run() {
             export_cancel: Arc::new(AtomicBool::new(false)),
         })
         .invoke_handler(tauri::generate_handler![
-            scan_folders_cmd,
-            cancel_scan_cmd,
+            commands::scan_folders_cmd,
+            commands::cancel_scan_cmd,
             commands::get_thumbnail_cmd,
             commands::update_rating_flag_cmd,
             commands::open_in_photoshop_cmd,

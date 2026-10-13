@@ -8,11 +8,10 @@ use tauri::{Emitter, State};
 use crate::db::Database;
 use crate::lumen::{self, LumenError, LumenStatus, PreviewVariant, PINNED_LUMEN_VERSION};
 use crate::models::{
-    AppSettings, ExportItem, FolderScanResult, LumenMaskResult, LumenPreviewResult,
+    AppSettings, ExportItem, LumenMaskResult, LumenPreviewResult,
     LumenRatingConflict, LumenRatingSync, LumenRecipe, MaskAdjustments, ToneAdjustments, ToneState,
     ToneWriteReport,
 };
-use crate::scanner::scan_folders;
 use crate::thumbnail::get_cache_dir;
 use crate::xmp;
 use crate::xmp::{flag_from_xmp, read_xmp_full, write_xmp};
@@ -24,6 +23,7 @@ use crate::xmp::{flag_from_xmp, read_xmp_full, write_xmp};
 // generate_handler 在 lib.rs 里按名字找它们，`macro_rules!` 无法被 glob 带出，
 // 故下面每个模块都要显式转发它自己的那组宏。
 mod apps;
+mod scanner;
 mod settings;
 mod thumbnail;
 
@@ -37,6 +37,12 @@ pub use settings::{
 
 pub use thumbnail::{
     __cmd__get_thumbnail_cmd, __tauri_command_name_get_thumbnail_cmd, get_thumbnail_cmd,
+};
+
+pub use scanner::{
+    __cmd__cancel_scan_cmd, __cmd__scan_folders_cmd,
+    __tauri_command_name_cancel_scan_cmd, __tauri_command_name_scan_folders_cmd,
+    cancel_scan_cmd, scan_folders_cmd,
 };
 
 pub use apps::{
@@ -63,17 +69,6 @@ pub struct AppState {
     pub scan_cancel: Arc<AtomicBool>,
     /// 导出取消标志（协作式轮询）。置位后导出丢弃临时目录，目标目录零污染。
     pub export_cancel: Arc<AtomicBool>,
-}
-
-/// `scan-progress` 事件负载。字段名即前端读取的键（都是单词，保持小写）。
-#[derive(Clone, serde::Serialize)]
-pub struct ScanProgress {
-    /// 阶段："enumerate" | "read" | "sort" | "done"
-    pub phase: String,
-    /// 当前阶段已处理数
-    pub processed: usize,
-    /// 当前阶段总数（枚举阶段未知时为 0）
-    pub total: usize,
 }
 
 /// `export-progress` 事件负载。
@@ -184,76 +179,11 @@ fn lumen_exe(settings: &AppSettings) -> Option<PathBuf> {
     lumen::find_lumen_cli(&settings.lumen_cli_path)
 }
 
-/// 请求取消正在进行的扫描（幂等：没有进行中的任务时调用也安全）。
-#[tauri::command]
-pub fn cancel_scan_cmd(state: State<'_, AppState>) -> Result<(), String> {
-    state.scan_cancel.store(true, Ordering::SeqCst);
-    Ok(())
-}
-
 /// 请求取消正在进行的导出（幂等）。取消后目标目录不会残留半成品。
 #[tauri::command]
 pub fn cancel_export_cmd(state: State<'_, AppState>) -> Result<(), String> {
     state.export_cancel.store(true, Ordering::SeqCst);
     Ok(())
-}
-
-#[tauri::command]
-pub async fn scan_folders_cmd(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    jpg_folder: String,
-    raw_folder: Option<String>,
-    sort_order: Option<String>,
-) -> Result<FolderScanResult, String> {
-    let sort = sort_order.unwrap_or_else(|| "time_filename".to_string());
-    let cancel = state.scan_cancel.clone();
-    cancel.store(false, Ordering::SeqCst); // 复位上一轮遗留的取消标志
-
-    // 首帧进度：让 UI 立刻切到"扫描中"并显示阶段，而不是干等到枚举结束
-    let _ = app.emit(
-        "scan-progress",
-        ScanProgress {
-            phase: "enumerate".to_string(),
-            processed: 0,
-            total: 0,
-        },
-    );
-
-    let app_for_progress = app.clone();
-    let result = blocking("扫描任务异常", move || {
-        let mut throttle = ProgressThrottle::new();
-        scan_folders(
-            &jpg_folder,
-            raw_folder.as_deref(),
-            &sort,
-            &cancel,
-            |phase, processed, total| {
-                if throttle.should_emit(phase, processed, total) {
-                    let _ = app_for_progress.emit(
-                        "scan-progress",
-                        ScanProgress {
-                            phase: phase.to_string(),
-                            processed,
-                            total,
-                        },
-                    );
-                }
-            },
-        )
-    })
-    .await?;
-
-    // 收尾进度：UI 据此把进度条推到 100%
-    let _ = app.emit(
-        "scan-progress",
-        ScanProgress {
-            phase: "done".to_string(),
-            processed: result.total_count,
-            total: result.total_count,
-        },
-    );
-    Ok(result)
 }
 
 /// 单个文件复制失败的明细（替代原来 `.is_ok()` 静默吞掉的错误）。
