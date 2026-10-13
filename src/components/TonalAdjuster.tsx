@@ -14,6 +14,7 @@ import {
 import { ToneAdjustments } from '../types';
 import { DEFAULT_TONE } from '../utils/autoTone';
 import { usePanelInitialFocus } from '../hooks/usePanelInitialFocus';
+import { ConfirmDialog } from './ConfirmDialog';
 
 /** AI 蒙版可选区域（中文展示，英文 id 落进 .lumen 工程）。 */
 const MASK_REGIONS: Array<{ id: string; label: string }> = [
@@ -51,6 +52,8 @@ interface TonalAdjusterProps {
   onApplyMask?: (region: string, dehaze: number) => Promise<void>;
   /** 工程里现有的 AI 蒙版（读回，用于显示已套用） */
   masks?: Array<{ index?: number; name?: string; kind?: string }>;
+  /** C3：当前编辑值相对磁盘基线是否有未保存改动（未保存会打标记 + 离开确认）。 */
+  dirty?: boolean;
 }
 
 /**
@@ -147,6 +150,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
   onApplyMask,
   masks = [],
   isSaving = false,
+  dirty = false,
 }) => {
   const [saveFeedback, setSaveFeedback] = useState(false);
   /** 保存失败提示（统一命令的 rejection 出口） */
@@ -155,6 +159,10 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
   const [maskDehaze, setMaskDehaze] = useState(60);
   const [isMasking, setIsMasking] = useState(false);
   const [maskError, setMaskError] = useState<string | null>(null);
+  // C4：预设与 AI 蒙版都会"点一下即刻写 LUMEN 工程"，属不可逆落盘操作。
+  // 先弹二次确认，确认后才真正下发，避免误点直接改到磁盘上。
+  const [pendingPreset, setPendingPreset] = useState<string | null>(null);
+  const [pendingMask, setPendingMask] = useState(false);
 
   // 面板互换时（E 键 / 触发按钮）旧 DOM 被整棵卸载，焦点会退回 body。
   // 挂载时若焦点无主，就把焦点移入本面板容器，让读屏播报 region 名；
@@ -221,7 +229,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
       id="tonal-adjuster-panel"
       tabIndex={-1}
       onClick={(e) => e.stopPropagation()}
-      className="focus-ring bg-background-base border-l border-white/10 h-full w-full p-5 text-xs flex flex-col gap-4 overflow-y-auto"
+      className="bg-background-base border-l border-white/10 h-full w-full p-5 text-xs flex flex-col gap-4 overflow-y-auto"
       role="region"
       aria-label="快速调色控制面板"
     >
@@ -230,6 +238,15 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
         <div className="flex items-center gap-2 font-medium text-white">
           <Sliders className="w-4 h-4 text-white/60" aria-hidden="true" />
           <span>调色</span>
+          {dirty && (
+            <span
+              role="status"
+              aria-live="polite"
+              className="text-[10px] font-normal text-amber-200 bg-amber-400/10 border border-amber-300/30 rounded px-1.5 py-0.5"
+            >
+              未保存
+            </span>
+          )}
         </div>
         <button
           onClick={onClose}
@@ -300,7 +317,8 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
               id="tonal-preset"
               defaultValue=""
               onChange={(e) => {
-                if (e.target.value) onApplyPreset(e.target.value);
+                // C4：先记下要套用的预设，弹二次确认后再真正下发。
+                if (e.target.value) setPendingPreset(e.target.value);
                 e.target.value = '';
               }}
               className="focus-ring flex-1 min-w-0 bg-background-base border border-border-default rounded-md px-2 py-1.5 text-white outline-none text-xs focus:border-white/40"
@@ -349,7 +367,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
               ))}
             </select>
             <button
-              onClick={handleApplyMaskClick}
+              onClick={() => setPendingMask(true)}
               disabled={isMasking}
               className="focus-ring shrink-0 px-2.5 py-1.5 bg-white/5 hover:bg-white/10 active:scale-[0.98] text-white rounded-md text-xs transition-colors disabled:opacity-50"
               title="用 AI 检测该区域并只对它应用去薄雾"
@@ -456,6 +474,28 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
           保存调色失败：{saveError}
         </p>
       )}
+
+      {/* C4：预设与 AI 蒙版落盘前二次确认（不可在本应用内撤销） */}
+      <ConfirmDialog
+        isOpen={pendingPreset !== null}
+        onClose={() => setPendingPreset(null)}
+        onConfirm={() => {
+          if (pendingPreset) onApplyPreset?.(pendingPreset);
+        }}
+        title="套用 LUMEN RAW 预设"
+        message={`将把「${pendingPreset ?? ''}」写入该照片的 LUMEN RAW 工程并保存。\n这会覆盖工程里当前的调色，且无法在本应用内撤销。`}
+        confirmLabel="套用并保存"
+      />
+      <ConfirmDialog
+        isOpen={pendingMask}
+        onClose={() => setPendingMask(false)}
+        onConfirm={() => {
+          void handleApplyMaskClick();
+        }}
+        title="套用 AI 局部蒙版"
+        message={`AI 将在本地检测「${MASK_REGIONS.find((r) => r.id === maskRegion)?.label ?? maskRegion}」并应用去薄雾，结果会立即写入 LUMEN RAW 工程（约 4 秒），且无法在本应用内撤销。`}
+        confirmLabel="检测并应用"
+      />
     </div>
   );
 };

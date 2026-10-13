@@ -103,6 +103,8 @@ describe('TonalAdjuster —— AI 蒙版（GPU 版）', () => {
 
     await userEvent.selectOptions(screen.getByLabelText(/AI 局部蒙版/), 'person');
     await userEvent.click(screen.getByRole('button', { name: '套用' }));
+    // C4：落盘前有二次确认
+    await userEvent.click(screen.getByRole('button', { name: '检测并应用' }));
 
     await waitFor(() => {
       expect(onApplyMask).toHaveBeenCalledWith('person', 60);
@@ -120,7 +122,9 @@ describe('TonalAdjuster —— AI 蒙版（GPU 版）', () => {
     renderAdjuster({ ...maskProps, onApplyMask });
 
     await userEvent.click(screen.getByRole('button', { name: '套用' }));
+    await userEvent.click(screen.getByRole('button', { name: '检测并应用' }));
     const button = await screen.findByRole('button', { name: '检测中…' });
+
     expect(button).toBeDisabled();
     expect(screen.getByText(/AI 正在检测区域并应用/)).toBeInTheDocument();
 
@@ -136,6 +140,7 @@ describe('TonalAdjuster —— AI 蒙版（GPU 版）', () => {
     renderAdjuster({ ...maskProps, onApplyMask });
 
     await userEvent.click(screen.getByRole('button', { name: '套用' }));
+    await userEvent.click(screen.getByRole('button', { name: '检测并应用' }));
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent('未检测到该区域');
     });

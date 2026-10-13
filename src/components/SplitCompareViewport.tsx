@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Columns2,
   Link,
@@ -12,6 +12,8 @@ import {
   ZoomIn,
   ZoomOut,
   Sparkles,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
 import { api } from '../services/api';
@@ -35,6 +37,9 @@ interface SplitCompareViewportProps {
   lumenStatus?: LumenStatus;
   /** 按分组取当前生效的调色（宿主传 `toneMap[id] ?? group.tone`）；缺失 → 不套 CSS 滤镜。 */
   getTone?: (group: PhotoGroupInfo) => ToneAdjustments | undefined;
+  /** 翻页回调（C7）：仅当传入时渲染左右翻页覆盖层按钮；由宿主接线。 */
+  onPrev?: () => void;
+  onNext?: () => void;
 }
 
 const MIN_SCALE = 0.2;
@@ -42,6 +47,9 @@ const MAX_SCALE = 10;
 const ZOOM_STEP = 1.25;
 /** 窗格级 LUMEN 渲染宽边（与单图视图一致）。 */
 const LUMEN_PANE_WIDTH = 1600;
+
+/** C6：scale=1 实为适应窗口，读数显示「适应」而非误导性的 100%。 */
+const scaleLabel = (s: number) => (Math.abs(s - 1) < 0.001 ? '适应' : `${Math.round(s * 100)}%`);
 
 export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
   leftGroup,
@@ -55,6 +63,8 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
   onFlag,
   lumenStatus,
   getTone,
+  onPrev,
+  onNext,
 }) => {
   const [syncZoom, setSyncZoom] = useState(true);
   const [leftScale, setLeftScale] = useState(1);
@@ -67,6 +77,16 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
   // 最近一次交互的窗格：独立模式下 ± / 滚轮 / 拖拽的作用目标（M-01）。
   // 不再在 mouseup 置空 —— 拖拽门控由 isDragging 负责。
   const [focusedPane, setFocusedPane] = useState<'left' | 'right'>('left');
+
+  // C8：拖拽夹紧需要量测各栏容器与图像的渲染尺寸。
+  const paneRefs = useRef<{ left: HTMLDivElement | null; right: HTMLDivElement | null }>({
+    left: null,
+    right: null,
+  });
+  const imgRefs = useRef<{ left: HTMLImageElement | null; right: HTMLImageElement | null }>({
+    left: null,
+    right: null,
+  });
 
   // 两个窗格各自持有 LUMEN 解码实例（有 JPG 时 hook 内短路 → 零请求、零额外成本）。
   const leftLumen = useLumenPreview(leftGroup, lumenStatus ?? LUMEN_UNAVAILABLE, LUMEN_PANE_WIDTH);
@@ -142,34 +162,66 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
     }
   };
 
-  // Left-click mouse drag pan
-  const handleMouseDown = (isLeft: boolean, e: React.MouseEvent) => {
-    if (e.button === 0) {
-      setIsDragging(true);
-      setFocusedPane(isLeft ? 'left' : 'right');
-      setDragStart({ x: e.clientX, y: e.clientY });
-    }
+  // 单栏允许的最大平移量（C8）：缩放后图像超出该栏容器的半边尺寸。
+  const paneMaxPan = (side: 'left' | 'right', s: number) => {
+    const pane = paneRefs.current[side];
+    const img = imgRefs.current[side];
+    if (!pane || !img) return { x: Number.POSITIVE_INFINITY, y: Number.POSITIVE_INFINITY };
+    return {
+      x: Math.max(0, (img.offsetWidth * s - pane.clientWidth) / 2),
+      y: Math.max(0, (img.offsetHeight * s - pane.clientHeight) / 2),
+    };
+  };
+  const clampTo = (
+    p: { x: number; y: number },
+    dx: number,
+    dy: number,
+    maxX: number,
+    maxY: number,
+  ) => ({
+    x: Math.min(Math.max(p.x + dx, -maxX), maxX),
+    y: Math.min(Math.max(p.y + dy, -maxY), maxY),
+  });
+
+  // Left-click pan drag（C8：Pointer 事件 + 捕获，拖出容器不丢拽）
+  const handlePointerDown = (isLeft: boolean, e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    // 覆盖层交互元素（设为基准、评分等）不进入拖拽。
+    if (e.target !== e.currentTarget) return;
+    setIsDragging(true);
+    setFocusedPane(isLeft ? 'left' : 'right');
+    setDragStart({ x: e.clientX, y: e.clientY });
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
+  const handlePointerMove = (e: React.PointerEvent) => {
     if (!isDragging) return;
     const dx = e.clientX - dragStart.x;
     const dy = e.clientY - dragStart.y;
     setDragStart({ x: e.clientX, y: e.clientY });
 
     if (syncZoom) {
-      // Synchronously pan both viewports
-      setLeftPos((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
-      setRightPos((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
+      // 联动平移两栏：夹紧取两栏的公共边界，避免任一栏露空。
+      const lm = paneMaxPan('left', leftScale);
+      const rm = paneMaxPan('right', rightScale);
+      const mx = Math.min(lm.x, rm.x);
+      const my = Math.min(lm.y, rm.y);
+      setLeftPos((prev) => clampTo(prev, dx, dy, mx, my));
+      setRightPos((prev) => clampTo(prev, dx, dy, mx, my));
     } else if (focusedPane === 'left') {
-      setLeftPos((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
+      const m = paneMaxPan('left', leftScale);
+      setLeftPos((prev) => clampTo(prev, dx, dy, m.x, m.y));
     } else {
-      setRightPos((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
+      const m = paneMaxPan('right', rightScale);
+      setRightPos((prev) => clampTo(prev, dx, dy, m.x, m.y));
     }
   };
 
-  const handleMouseUp = () => {
+  const handlePointerUp = (e: React.PointerEvent) => {
+    if (!isDragging) return;
     setIsDragging(false);
+    const host = e.currentTarget as HTMLElement;
+    if (host.hasPointerCapture(e.pointerId)) host.releasePointerCapture(e.pointerId);
   };
 
   // Double click to toggle fit (1.0x) / 250% and recentre
@@ -200,24 +252,48 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
     lumenBroken: boolean,
     markLumenBroken: () => void,
   ) => {
+    const hasJpg = Boolean(group?.jpg?.path);
+    const hasRaw = Boolean(group?.raw?.path);
+    const lumenActive = Boolean(lumen.url && !lumenBroken);
+    // RAW-only（无 JPG）分组：引擎不可用时不再回落 .NEF 资产 URL（C2，会永久破图）。
+    const rawOnly = !hasJpg && hasRaw;
     const legacySrc = group?.jpg?.path
       ? api.toAssetUrl(group.jpg.path)
       : group?.raw?.path
       ? api.toAssetUrl(group.raw.path)
       : null;
-    const lumenActive = Boolean(lumen.url && !lumenBroken);
-    const src = lumenActive ? lumen.url : legacySrc;
+    const src = rawOnly ? (lumenActive ? lumen.url : null) : legacySrc;
 
-    if (!group || !src) {
+    if (!group) {
       return (
         <ViewportEmptyStateView
           variant="pane"
           emptyState={{
             title: isLeft ? '左侧未选择' : '右侧未选择',
-            description: isLeft
-              ? '从右侧宫格选一张作为基准'
-              : '从右侧宫格选一张进行对比',
+            description: isLeft ? '从右侧宫格选一张作为基准' : '从右侧宫格选一张进行对比',
           }}
+        />
+      );
+    }
+
+    // RAW-only：解码中 → 渲染窗格并显示横幅；失败/未启用 → 明确占位而非破图（C2）。
+    if (!src && !(rawOnly && lumen.loading)) {
+      return (
+        <ViewportEmptyStateView
+          variant="pane"
+          emptyState={
+            rawOnly
+              ? {
+                  title: '该 RAW 需启用 LUMEN RAW 引擎',
+                  description: '启用 LUMEN RAW 引擎后即可在此实时预览。',
+                }
+              : {
+                  title: isLeft ? '左侧未选择' : '右侧未选择',
+                  description: isLeft
+                    ? '从右侧宫格选一张作为基准'
+                    : '从右侧宫格选一张进行对比',
+                }
+          }
         />
       );
     }
@@ -232,11 +308,14 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
 
     return (
       <div
+        ref={(el) => {
+          paneRefs.current[isLeft ? 'left' : 'right'] = el;
+        }}
         onWheel={(e) => handleWheel(isLeft, e)}
-        onMouseDown={(e) => handleMouseDown(isLeft, e)}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
+        onPointerDown={(e) => handlePointerDown(isLeft, e)}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
         onDoubleClick={() => handleDoubleClick(isLeft)}
         className={`relative flex-1 bg-background-surface overflow-hidden flex items-center justify-center border-r border-border-subtle last:border-r-0 select-none ${
           isDragging ? 'cursor-grabbing' : 'cursor-grab'
@@ -251,22 +330,27 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
           />
         )}
 
-        <img
-          src={src}
-          alt={group.baseName}
-          draggable={false}
-          onError={() => {
-            // 陈旧的 LUMEN 预览不能把窗格变空。
-            if (lumen.url && !lumenBroken) markLumenBroken();
-          }}
-          style={{
-            transform: `translate(${pos.x}px, ${pos.y}px) scale(${scale})`,
-            transition: isDragging ? 'none' : 'transform 0.05s ease-out',
-            imageOrientation: 'from-image',
-            filter: toneFilter,
-          }}
-          className="max-h-full max-w-full object-contain pointer-events-none origin-center"
-        />
+        {src && (
+          <img
+            ref={(el) => {
+              imgRefs.current[isLeft ? 'left' : 'right'] = el;
+            }}
+            src={src}
+            alt={group.baseName}
+            draggable={false}
+            onError={() => {
+              // 陈旧的 LUMEN 预览不能把窗格变空。
+              if (lumen.url && !lumenBroken) markLumenBroken();
+            }}
+            style={{
+              transform: `translate(${pos.x}px, ${pos.y}px) scale(${scale})`,
+              transition: isDragging ? 'none' : 'transform 0.05s ease-out',
+              imageOrientation: 'from-image',
+              filter: toneFilter,
+            }}
+            className="max-h-full max-w-full object-contain pointer-events-none origin-center"
+          />
+        )}
 
         {/* RAW-only 首次进入时的轻提示（与单图视图一致，不弹窗） */}
         {lumen.loading && (
@@ -453,23 +537,23 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             {syncZoom ? (
               <span
                 className="font-mono tabular-nums text-white/80 w-10 text-center"
-                aria-label={`当前缩放 ${Math.round(leftScale * 100)}%`}
+                aria-label={`当前缩放 ${scaleLabel(leftScale)}`}
               >
-                {Math.round(leftScale * 100)}%
+                {scaleLabel(leftScale)}
               </span>
             ) : (
               <span
                 className="font-mono tabular-nums text-white/80 px-1 text-center flex items-center gap-1"
-                aria-label={`当前缩放：左 ${Math.round(leftScale * 100)}%，右 ${Math.round(
-                  rightScale * 100,
+                aria-label={`当前缩放：左 ${scaleLabel(leftScale)}，右 ${scaleLabel(
+                  rightScale,
                 )}%（聚焦${focusedPane === 'left' ? '左' : '右'}图）`}
               >
-                <span className={focusedPane === 'left' ? 'text-white' : 'text-white/45'}>
-                  L {Math.round(leftScale * 100)}%
+                <span className={focusedPane === 'left' ? 'text-white' : 'text-white/60'}>
+                  L {scaleLabel(leftScale)}
                 </span>
                 <span className="text-white/25">/</span>
-                <span className={focusedPane === 'right' ? 'text-white' : 'text-white/45'}>
-                  R {Math.round(rightScale * 100)}%
+                <span className={focusedPane === 'right' ? 'text-white' : 'text-white/60'}>
+                  R {scaleLabel(rightScale)}
                 </span>
               </span>
             )}
@@ -485,8 +569,8 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             <button
               onClick={resetView}
               className="focus-ring p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-r active:scale-[0.96] transition-colors"
-              title="复位缩放与平移（亦可直接双击照片）"
-              aria-label="复位缩放与平移"
+              title={`重置缩放与平移（当前 ${scaleLabel(effectiveScale)}）`}
+              aria-label="重置缩放与平移"
             >
               <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
             </button>
@@ -537,6 +621,34 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
           () => setRightLumenBroken(true),
         )}
       </div>
+
+      {/* 翻页覆盖层（C7）：仅当宿主传入回调时渲染，复用单图视图的样式与图标。 */}
+      {onPrev && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onPrev();
+          }}
+          className="focus-ring absolute left-3 top-1/2 -translate-y-1/2 p-3 z-20 bg-background-base/70 hover:bg-background-base/90 active:scale-[0.96] text-white rounded-full transition-colors backdrop-blur-sm pointer-events-auto"
+          title="上一张 (A / ←)"
+          aria-label="上一张照片（快捷键 A 或 ←）"
+        >
+          <ChevronLeft className="w-6 h-6" aria-hidden="true" />
+        </button>
+      )}
+      {onNext && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onNext();
+          }}
+          className="focus-ring absolute right-3 top-1/2 -translate-y-1/2 p-3 z-20 bg-background-base/70 hover:bg-background-base/90 active:scale-[0.96] text-white rounded-full transition-colors backdrop-blur-sm pointer-events-auto"
+          title="下一张 (D / →)"
+          aria-label="下一张照片（快捷键 D 或 →）"
+        >
+          <ChevronRight className="w-6 h-6" aria-hidden="true" />
+        </button>
+      )}
     </div>
   );
 };

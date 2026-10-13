@@ -8,10 +8,14 @@
     --color-bg-panel: rgb(255 255 255 / 6%);
     --color-bg-input: rgb(255 255 255 / 8%);
     
-    /* Borders */
+    /* Borders
+       E6：结构性边框原 10%/15% 与 #0A0A0A 仅约 1.26/1.48:1，弱视/强光下不可见。
+       subtle 保持很低（纯装饰性分隔），default/strong 提升到可感知水平：
+       default 20% ≈1.8:1（输入框/面板描边明显可见），strong 35% ≈3.1:1（达 WCAG 1.4.11）。
+       刻意不过度提亮，避免破坏暗色主题质感。 */
     --color-border-subtle: rgb(255 255 255 / 6%);
-    --color-border-default: rgb(255 255 255 / 10%);
-    --color-border-strong: rgb(255 255 255 / 15%);
+    --color-border-default: rgb(255 255 255 / 20%);
+    --color-border-strong: rgb(255 255 255 / 35%);
     
     /* Interactivity */
     --color-bg-button: rgb(255 255 255 / 9%);

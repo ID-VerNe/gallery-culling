@@ -128,4 +128,48 @@
   .hover\:scale-125:hover {
     transform: none !important;
   }
+
+  /* E4：不确定进度条在降级（无动画）后，用静态斜纹 + 半透明区分于"卡住的确定进度"。
+     该规则只在 reduced-motion 下生效，正常动效时仍由 animate-pulse 表达。 */
+  .progress-indeterminate {
+    background-color: transparent !important;
+    background-image: repeating-linear-gradient(
+      45deg,
+      rgb(255 255 255 / 55%) 0,
+      rgb(255 255 255 / 55%) 6px,
+      rgb(255 255 255 / 22%) 6px,
+      rgb(255 255 255 / 22%) 12px
+    );
+  }
+}
+
+/* ---------------------------------------------------------------
+   Forced colors / High contrast (WCAG 1.4.3 / 1.4.11, E8)
+   Windows 高对比度模式下浏览器会强制系统色；这里保证自定义的
+   焦点环、进度条、结构线在强制色下依然可辨识。
+   --------------------------------------------------------------- */
+@media (forced-colors: active) {
+  .focus-ring:focus-visible,
+  .tone-slider:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  /* 进度条：轨道加系统色描边、填充改用 Highlight，避免 bg-white/xx 被强制后消失。 */
+  [role='progressbar'] {
+    border: 1px solid CanvasText;
+  }
+  [role='progressbar'] > * {
+    background-color: Highlight;
+  }
+}
+
+/* 提高对比度偏好（E8）：在既有令牌基础上进一步抬高结构性边框与次要分隔线。 */
+@media (prefers-contrast: more) {
+  :root {
+    --color-border-subtle: rgb(255 255 255 / 22%);
+    --color-border-default: rgb(255 255 255 / 45%);
+    --color-border-strong: rgb(255 255 255 / 70%);
+    --color-scrollbar-thumb: rgb(255 255 255 / 40%);
+  }
 }

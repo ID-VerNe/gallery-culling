@@ -21,6 +21,12 @@ export interface UseRatingUndoResult {
 }
 
 /**
+ * 撤销栈深度上限。原先只保留**一步**且对不同照片互相覆盖：给 A 打星 → 切到 B
+ * 打星，`Ctrl+Z` 只回退 B，A 的误改再也回不去（B5）。改为最多 5 步的小栈。
+ */
+const MAX_UNDO_STEPS = 5;
+
+/**
  * 星级/旗标的**单步撤销**（L-11）。
  *
  * 背景：`1..5` / `p` / `x` / `0` 都是"按下即写 `.xmp`"，且没有任何撤销入口 ——
@@ -28,37 +34,39 @@ export interface UseRatingUndoResult {
  * `.xmp` 或回 Lightroom 改回来。这里提供一步回退。
  *
  * 关键语义（不是"最近一次写入"，而是"这轮操作的起点"）：
- * `remember` 对**同一张照片**的连续改动**不覆盖**已有快照。否则连按 `1..5`
+ * `remember` 对**同一张照片**的连续改动**不覆盖**栈顶快照。否则连按 `1..5`
  * 会把快照刷成"上一步的值"，撤销只回退一格，与用户预期的"撤销这轮改动"
- * 不符。换到另一张照片时快照被替换（单步 = 只撤销最近操作的那一张）。
+ * 不符。换到另一张照片时在栈顶新增一层（最多 5 步，先进先出淘汰最旧的）。
  *
- * 明确不做（与方案一致）：不做多步栈、不新增后端命令、不改既有写盘错误语义。
+ * 明确不做（与方案一致）：不新增后端命令、不改既有写盘错误语义。
  */
 export function useRatingUndo(): UseRatingUndoResult {
-  const snapshotRef = useRef<RatingSnapshot | null>(null);
+  const stackRef = useRef<RatingSnapshot[]>([]);
   const [canUndo, setCanUndo] = useState(false);
 
   const remember = useCallback((snapshot: RatingSnapshot) => {
-    const existing = snapshotRef.current;
+    const stack = stackRef.current;
+    const top = stack[stack.length - 1];
     // 同一张照片：保留这轮最早的旧值，撤销才能回到"改之前"。
-    if (existing && existing.id === snapshot.id) {
-      // 但若期间已经被撤销过（快照已清空），existing 为 null，会正常写入。
+    if (top && top.id === snapshot.id) {
       setCanUndo(true);
       return;
     }
-    snapshotRef.current = snapshot;
+    stack.push(snapshot);
+    // 超过上限时淘汰最旧的一步，避免长会话里无限增长。
+    if (stack.length > MAX_UNDO_STEPS) stack.shift();
     setCanUndo(true);
   }, []);
 
   const take = useCallback((): RatingSnapshot | null => {
-    const snapshot = snapshotRef.current;
-    snapshotRef.current = null;
-    setCanUndo(false);
+    const stack = stackRef.current;
+    const snapshot = stack.length > 0 ? stack.pop()! : null;
+    setCanUndo(stack.length > 0);
     return snapshot;
   }, []);
 
   const clear = useCallback(() => {
-    snapshotRef.current = null;
+    stackRef.current = [];
     setCanUndo(false);
   }, []);
 

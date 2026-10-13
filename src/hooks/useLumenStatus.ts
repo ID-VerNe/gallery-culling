@@ -12,6 +12,17 @@ export const LUMEN_UNAVAILABLE: LumenStatus = {
 };
 
 /**
+ * E7：握手前的过渡态。开关已存为"启用"、但 1500ms 探测尚未返回时，不能沿用
+ * `LUMEN_UNAVAILABLE.detail`（"未启用…"），否则状态行与勾选框自相矛盾。
+ * 这里给出"正在探测引擎…"，让 UI 在探测窗口内呈现中性的进行中状态。
+ */
+const probingStatus = (): LumenStatus => ({
+  ...LUMEN_UNAVAILABLE,
+  enabled: true,
+  detail: '正在探测引擎…',
+});
+
+/**
  * LUMEN RAW 引擎握手状态。
  *
  * - 延迟 1500ms 再握手：不阻塞首屏，且给 sidecar 冷启动留出时间；
@@ -28,13 +39,19 @@ export const useLumenStatus = (
   cliPath: string = '',
   refreshToken: number = 0,
 ): LumenStatus => {
-  const [status, setStatus] = useState<LumenStatus>(LUMEN_UNAVAILABLE);
+  // E7：初始态即反映"是否正在探测"——enabled 为真时先给过渡态，避免前 1.5s
+  // 显示"未启用…"与勾选框矛盾。
+  const [status, setStatus] = useState<LumenStatus>(() =>
+    enabled ? probingStatus() : LUMEN_UNAVAILABLE,
+  );
 
   useEffect(() => {
     if (!enabled) {
       setStatus(LUMEN_UNAVAILABLE);
       return;
     }
+    // 重探（改路径 / refreshToken）时先回到过渡态，避免短暂显示上一次的旧状态。
+    setStatus(probingStatus());
     let cancelled = false;
     const timer = setTimeout(() => {
       api

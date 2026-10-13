@@ -47,6 +47,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   /** 「测试连接」的结果（null = 尚未测试）。ok 决定配色，text 是给用户看的一行结论。 */
   const [probe, setProbe] = useState<{ ok: boolean; text: string } | null>(null);
   const [isProbing, setIsProbing] = useState(false);
+  /** D3：读取设置失败的原始错误；非 null 时渲染错误态 + 「重试」。 */
+  const [loadError, setLoadError] = useState<string | null>(null);
+  /** D9：缩略图宽度越界时的失焦提示。 */
+  const [widthHint, setWidthHint] = useState<string | null>(null);
 
   const handleSyncRatings = async () => {
     if (!onSyncRatings) return;
@@ -65,19 +69,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  /** 读取设置：成功 → 载入表单；失败 → 记录错误，交由 UI 渲染「重试」。 */
+  const loadSettings = () => {
+    setLoadError(null);
+    setSettings(null);
+    api
+      .getSettings()
+      .then((s) => {
+        setSettings(s);
+        // 基线快照：AppSettings 九个字段全是原始类型，浅拷贝即可用于逐键比较。
+        loadedRef.current = { ...s };
+      })
+      .catch((e) => {
+        // D3：失败必须可重试 —— 不能永远停在「正在读取设置…」。
+        setLoadError(String(e));
+        onError?.(`读取设置失败：${String(e)}`);
+      });
+  };
+
   useEffect(() => {
-    if (isOpen) {
-      api
-        .getSettings()
-        .then((s) => {
-          setSettings(s);
-          // 基线快照：AppSettings 九个字段全是原始类型，浅拷贝即可用于逐键比较。
-          loadedRef.current = { ...s };
-        })
-        .catch((e) => {
-          onError?.(`读取设置失败：${String(e)}`);
-        });
-    }
+    if (isOpen) loadSettings();
     // `onError` is a toast callback and intentionally not a dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
@@ -160,6 +171,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  /** D9：缩略图宽度失焦时夹取到合法范围 [100,600] 并给出提示，避免越界值静默保留。 */
+  const commitThumbnailWidth = () => {
+    if (!settings) return;
+    const { thumbnailWidth } = settings;
+    const clamped = Math.min(600, Math.max(100, thumbnailWidth));
+    if (clamped !== thumbnailWidth) {
+      setSettings({ ...settings, thumbnailWidth: clamped });
+      setWidthHint(`已调整到允许范围 100–600 px（你输入的是 ${thumbnailWidth}）。`);
+    } else {
+      setWidthHint(null);
+    }
+  };
+
   // M-06：状态行的「门控」与「数据源」统一到同一份真值。
   // `savedLumenEnabled` 缺省时退回本地值（向后兼容）。
   const effectiveSavedLumenEnabled =
@@ -182,7 +206,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     <Modal
       isOpen={isOpen}
       onClose={requestClose}
-      title="首选项与工具设置"
+      title="设置"
       maxWidth="max-w-md"
       icon={<Settings className="w-4 h-4" aria-hidden="true" />}
       footer={
@@ -204,7 +228,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </>
       }
     >
-      {!settings ? (
+      {loadError !== null ? (
+        // D3：读取失败 → 可读错误 + 「重试」，不再永久停在加载态。
+        <div
+          role="alert"
+          className="flex flex-col items-start gap-3 rounded-lg border border-rose-800/50 bg-rose-950/30 p-3 text-rose-200/90"
+        >
+          <p className="text-xs leading-relaxed">读取设置失败：{loadError}</p>
+          <button
+            type="button"
+            onClick={loadSettings}
+            className="focus-ring px-3 py-1.5 rounded-md bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white/80 transition-colors"
+          >
+            重试
+          </button>
+        </div>
+      ) : !settings ? (
         <p className="text-white/60 text-xs" role="status">
           正在读取设置…
         </p>
@@ -291,9 +330,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <FolderOpen className="w-3.5 h-3.5" aria-hidden="true" />
               </button>
             </div>
-            <p className="text-[10px] leading-relaxed text-white/60">
-              开启后，RAW 预览会通过 LUMEN RAW 解码并应用显影曲线；引擎不可用时
-              自动回退到相机内嵌预览，不影响选片。
+            <p
+              className="text-[10px] leading-relaxed text-white/60"
+              title="RAW 预览会通过 LUMEN RAW 解码并应用显影曲线；引擎不可用时自动回退到相机内嵌预览，不影响选片。"
+            >
+              开启后 RAW 预览走 LUMEN 解码；不可用时自动回退相机内嵌预览。
             </p>
 
             {/* M-15：「测试连接」用输入框里的路径实测（未保存也生效）。 */}
@@ -353,9 +394,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 />
                 宫格缩略图也用 LUMEN RAW 渲染
               </label>
-              <p className="text-[10px] leading-relaxed text-white/60">
-                关闭时宫格用相机内嵌缩略图（近乎零成本）；开启后每张约 0.3 秒，
-                好处是宫格与大图显影一致。
+              <p
+                className="text-[10px] leading-relaxed text-white/60"
+                title="关闭时宫格用相机内嵌缩略图（近乎零成本）；开启后每张约 0.3 秒，好处是宫格与大图显影一致。"
+              >
+                关闭用内嵌缩略图（快）；开启与大图显影一致（每张约 0.3 秒）。
               </p>
             </div>
 
@@ -377,9 +420,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 />
                 我指向的是 GPU / AI 版（启用 AI 蒙版）
               </label>
-              <p className="text-[10px] leading-relaxed text-white/60">
+              <p
+                className="text-[10px] leading-relaxed text-white/60"
+                title="勾选后若当前路径是 CPU 版，这里会直接提示，不会让你在保存调色时才发现。"
+              >
                 AI 蒙版需要带 onnxruntime 与模型的构建（体积约 487MB）。
-                勾选后若当前路径是 CPU 版，这里会直接提示，不会让你在保存调色时才发现。
               </p>
               {settings.lumenExpectAi &&
                 effectiveSavedLumenEnabled &&
@@ -405,9 +450,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 >
                   {isSyncing ? '同步中…' : '从 LUMEN RAW 同步评级'}
                 </button>
-                <p className="text-[10px] leading-relaxed text-white/60">
-                  你在 LUMEN RAW 里改过的星级/旗标会写回侧边栏；本机改动不会被
-                  静默覆盖（两侧都改过时会跳过并提示）。
+                <p
+                  className="text-[10px] leading-relaxed text-white/60"
+                  title="你在 LUMEN RAW 里改过的星级/旗标会写回侧边栏；本机改动不会被静默覆盖（两侧都改过时会跳过并提示）。"
+                >
+                  两侧都改过时会跳过并提示，不会被静默覆盖。
                 </p>
               </div>
             )}
@@ -429,16 +476,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 max={600}
                 step={50}
                 value={settings.thumbnailWidth}
-                onChange={(e) =>
+                onChange={(e) => {
+                  setWidthHint(null);
                   setSettings({
                     ...settings,
                     thumbnailWidth: parseInt(e.target.value, 10) || 200,
-                  })
-                }
+                  });
+                }}
+                onBlur={commitThumbnailWidth}
                 className="focus-ring w-28 bg-background-base border border-border-default rounded-md px-3 py-1.5 text-white outline-none font-mono text-[11px] focus:border-white/40"
               />
               <span className="text-[11px] text-white/60">100 – 600 px</span>
             </div>
+            {widthHint && (
+              <p className="text-[10px] leading-relaxed text-amber-200/80" role="status">
+                {widthHint}
+              </p>
+            )}
             <p className="text-[10px] leading-relaxed text-white/60">
               数值越大越清晰，首次扫描时生成越慢。
             </p>

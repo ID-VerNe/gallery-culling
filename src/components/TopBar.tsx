@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  Aperture,
   FolderOpen,
   RefreshCw,
   SlidersHorizontal,
@@ -7,10 +8,8 @@ import {
   Columns2,
   Maximize2,
   Settings,
-  Sliders,
   Split,
   Sparkles,
-  Search,
 } from 'lucide-react';
 import { FilterMode, SortOrder, ViewMode } from '../types';
 import { FILTER_OPTIONS } from '../utils/filterMatch';
@@ -37,7 +36,6 @@ interface TopBarProps {
   onViewModeChange: (val: ViewMode) => void;
   onOpenExportModal: () => void;
   onOpenSettingsModal: () => void;
-  onOpenMetadataModal?: () => void;
   onToggleTonalAdjuster?: () => void;
   showTonalPanel?: boolean;
   /**
@@ -49,9 +47,6 @@ interface TopBarProps {
   tonalToggleDisabled?: boolean;
   onOpenLuminar?: () => void;
   isLuminarRunning?: boolean;
-  /** True while the grid search field is open. */
-  isGridSearchOpen?: boolean;
-  onToggleGridSearch?: () => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -72,15 +67,12 @@ export const TopBar: React.FC<TopBarProps> = ({
   onViewModeChange,
   onOpenExportModal,
   onOpenSettingsModal,
-  onOpenMetadataModal,
   onToggleTonalAdjuster,
   showTonalPanel,
   tonalPanelVisible,
   tonalToggleDisabled,
   onOpenLuminar,
   isLuminarRunning,
-  isGridSearchOpen,
-  onToggleGridSearch,
 }) => {
   const viewModes: Array<{
     mode: ViewMode;
@@ -122,6 +114,18 @@ export const TopBar: React.FC<TopBarProps> = ({
           stacked its text vertically (F-01).
           ----------------------------------------------------------- */}
       <div className="flex items-center gap-2 min-w-0">
+        {/* 应用标识（A11）：截图 / 切窗时能一眼答出"这是什么应用"。
+            图标常显，应用名在窄窗口下让位给路径输入框。 */}
+        <div
+          className="flex items-center gap-1.5 pl-1 pr-0.5 shrink-0 select-none"
+          title="Gallery Culling — 摄影选片工具"
+        >
+          <Aperture className="w-4 h-4 text-white/80" aria-hidden="true" />
+          <span className="text-[11px] font-semibold text-white/90 whitespace-nowrap hidden xl:inline">
+            Gallery Culling
+          </span>
+        </div>
+
         {/* JPG Folder */}
         <div className="flex items-center gap-1.5 flex-1 min-w-0 bg-white/5 rounded-md px-2.5 py-1 focus-within:bg-white/10 transition-colors">
           <label
@@ -182,6 +186,13 @@ export const TopBar: React.FC<TopBarProps> = ({
           disabled={isLoading || !jpgFolder.trim()}
           className="focus-ring flex items-center gap-1.5 px-3.5 py-1 bg-white hover:bg-white/90 text-black active:scale-[0.96] disabled:bg-white/10 disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-transform shadow-sm shrink-0 whitespace-nowrap"
           aria-label={isLoading ? '正在扫描照片目录' : '扫描照片目录'}
+          title={
+            isLoading
+              ? '正在扫描照片目录…'
+              : !jpgFolder.trim()
+                ? '请先选择或输入 JPG 文件夹'
+                : '扫描照片目录'
+          }
         >
           <RefreshCw
             className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`}
@@ -196,8 +207,8 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button
           onClick={onOpenSettingsModal}
           className="focus-ring p-1.5 text-white/60 hover:text-white hover:bg-white/5 rounded-md active:scale-[0.96] transition-transform shrink-0"
-          title="首选项与工具设置"
-          aria-label="首选项与工具设置"
+          title="设置"
+          aria-label="设置"
         >
           <Settings className="w-4 h-4" aria-hidden="true" />
         </button>
@@ -218,7 +229,8 @@ export const TopBar: React.FC<TopBarProps> = ({
             value={filterMode}
             onChange={(e) => onFilterChange(e.target.value as FilterMode)}
             aria-label="照片筛选过滤"
-            className="focus-ring bg-transparent border-none outline-none text-white cursor-pointer text-xs max-w-[8.5rem]"
+            title="按保留 / 淘汰 / 星级筛选照片"
+            className="focus-ring bg-transparent border-none outline-none text-white cursor-pointer text-xs max-w-[12rem]"
           >
             {FILTER_OPTIONS.map(({ mode, label }) => {
               // 计数缺省时不显示 `(N)`（优雅降级）；有计数时即使是 0 也显示，
@@ -253,23 +265,8 @@ export const TopBar: React.FC<TopBarProps> = ({
           </select>
         </div>
 
-        {/* Search (progressive disclosure — the grid keeps its full width) */}
-        {onToggleGridSearch && (
-          <button
-            onClick={onToggleGridSearch}
-            className={`focus-ring flex items-center gap-1.5 px-2.5 py-1 rounded-md active:scale-[0.96] transition-colors font-medium ${
-              isGridSearchOpen
-                ? 'bg-white text-black shadow-sm'
-                : 'bg-white/5 hover:bg-white/10 text-white'
-            }`}
-            title="在宫格列表中按文件名搜索 (快捷键 /)"
-            aria-label="在宫格列表中按文件名搜索"
-            aria-pressed={isGridSearchOpen}
-          >
-            <Search className="w-3.5 h-3.5" aria-hidden="true" />
-            <span className="pb-[1px]">搜索</span>
-          </button>
-        )}
+        {/* A3：搜索只作用于宫格，入口唯一收敛到宫格表头（+ `/` 快捷键），
+            不再在全局顶栏再放一个同名按钮导致"两处同名、作用域错位"。 */}
 
         <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
           {/* View mode segmented control — text labels, not mystery meat */}
@@ -310,7 +307,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                   : 'bg-white/5 hover:bg-white/10 text-white'
               }`}
               title={tonalDisabled ? '当前筛选没有照片' : '调色 (快捷键 E)'}
-              aria-label="轻量调色预检面板"
+              aria-label="调色面板"
               aria-pressed={tonalVisible}
               aria-expanded={tonalVisible}
               aria-controls="tonal-adjuster-panel"
@@ -339,16 +336,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             </button>
           )}
 
-          {/* Manual Lens / Metadata Editor */}
-          <button
-            onClick={onOpenMetadataModal}
-            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-white/5 hover:bg-white/10 text-white rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap"
-            title="编辑镜头元数据 (快捷键 M)"
-            aria-label="手动镜头与元数据批量编辑"
-          >
-            <Sliders className="w-3.5 h-3.5" aria-hidden="true" />
-            <span className="pb-[1px]">镜头信息</span>
-          </button>
+          {/* A6：镜头元数据入口唯一收敛到底栏，撤掉顶栏这处第三入口。 */}
 
           {/* Batch Export */}
           <button

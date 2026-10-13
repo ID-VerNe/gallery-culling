@@ -98,22 +98,15 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         <Separator />
         <KeyHint keys="X" label="淘汰" tone="rose" />
         <Separator />
-        <KeyHint keys="A / D" label="切片" />
+        {/* A2：与帮助弹窗统一叫法 —— "切片"含义不明，实为上一张/下一张。 */}
+        <KeyHint keys="A / D" label="上一张 / 下一张" />
         <Separator />
         <KeyHint keys="C" label="对比" />
         <Separator />
         <KeyHint keys="Y" label="前后" />
         <Separator />
         <KeyHint keys="E" label="调色" />
-        <Separator />
-        <button
-          onClick={onOpenMetadataModal}
-          className="focus-ring flex items-center gap-1 hover:text-white transition-colors rounded px-0.5"
-          title="编辑镜头元数据 (M)"
-        >
-          <KeyCap>M</KeyCap>
-          <span>镜头信息</span>
-        </button>
+        {/* A6：镜头元数据入口只保留底栏右侧那一处，撤掉此处重复入口。 */}
         <Separator />
         <button
           onClick={onOpenShortcutHelp}
@@ -170,7 +163,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         <button
           onClick={onOpenExternal}
           disabled={!currentGroup}
-          className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-white hover:bg-white/90 text-black active:scale-[0.96] disabled:bg-white/10 disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-transform shadow-sm"
+          className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/15 border border-white/20 text-white active:scale-[0.96] disabled:bg-white/5 disabled:border-white/10 disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-transform"
           aria-label="在修图或外部程序中打开当前照片"
         >
           <ExternalLink className="w-3 h-3" aria-hidden="true" />

@@ -5,6 +5,14 @@ interface KeyboardShortcutsProps {
   onNext: () => void;
   onRate: (rating: number) => void;
   onFlag: (flag: 'pick' | 'reject' | 'none') => void;
+  /**
+   * B2：清除评级与旗标（绑定 `0` / `U`）。
+   *
+   * 提供时走这一个回调（宿主把"清零 + 清旗标"合并成**单次写盘**，避免两次 IPC
+   * 各写一遍 XMP 造成闪烁与两次磁盘写入）；未提供时退回旧的 `onRate(0)` +
+   * `onFlag('none')` 两次调用，保证独立使用本 hook 的调用方向后兼容。
+   */
+  onClear?: () => void;
   onOpenExternal: () => void;
   onToggleCompare: () => void;
   onSwapCompare?: () => void;
@@ -32,6 +40,7 @@ export function useKeyboardShortcuts({
   onNext,
   onRate,
   onFlag,
+  onClear,
   onOpenExternal,
   onToggleCompare,
   onSwapCompare,
@@ -211,8 +220,12 @@ export function useKeyboardShortcuts({
         case 'u':
         case 'U':
           e.preventDefault();
-          onRate(0);
-          onFlag('none');
+          // B2：优先走合并后的单次清除（一次写盘）；未接线时保留旧的双回调。
+          if (onClear) onClear();
+          else {
+            onRate(0);
+            onFlag('none');
+          }
           break;
 
         // Pick / Reject
@@ -355,6 +368,7 @@ export function useKeyboardShortcuts({
     onNext,
     onRate,
     onFlag,
+    onClear,
     onOpenExternal,
     onToggleCompare,
     onSwapCompare,

@@ -141,6 +141,9 @@ describe('TonalAdjuster —— LUMEN RAW 预设', () => {
     const { user } = renderAdjuster({ lumenPresets: presets, onApplyPreset });
 
     await user.selectOptions(screen.getByLabelText('LUMEN RAW 预设'), 'Clarity Boost');
+    // C4：写工程前有二次确认（下拉已复位到占位项）
+    expect(screen.getByLabelText('LUMEN RAW 预设')).toHaveValue('');
+    await user.click(screen.getByRole('button', { name: '套用并保存' }));
 
     expect(onApplyPreset).toHaveBeenCalledTimes(1);
     expect(onApplyPreset).toHaveBeenCalledWith('Clarity Boost');

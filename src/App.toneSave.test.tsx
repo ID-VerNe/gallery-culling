@@ -77,7 +77,7 @@ async function openTonalPanelWithPhoto() {
   // 扫描完成 → 当前照片就位，调色面板可打开
   await screen.findByText(/扫描完成/);
   fireEvent.click(
-    screen.getByRole('button', { name: '轻量调色预检面板' }),
+    screen.getAllByRole('button', { name: '调色面板' })[0],
   );
 
   await screen.findByRole('button', { name: '保存调色' });

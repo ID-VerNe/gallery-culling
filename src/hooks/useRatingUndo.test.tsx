@@ -54,7 +54,7 @@ describe('useRatingUndo —— 单步撤销', () => {
     expect(taken).toMatchObject({ rating: 0, flag: 'none' });
   });
 
-  it('换到另一张照片时快照被替换（单步 = 只撤销最近操作的那张）', () => {
+  it('换到另一张照片时压入新的一层（后进先出：先撤销最近的那张）', () => {
     const { result } = renderHook(() => useRatingUndo());
 
     act(() => result.current.remember(snap({ id: 'a', rating: 0 })));
@@ -65,6 +65,31 @@ describe('useRatingUndo —— 单步撤销', () => {
       taken = result.current.take();
     });
     expect(taken).toMatchObject({ id: 'b', rating: 2 });
+  });
+
+  it('B5：多步撤销栈 —— 连续改多张可逐层回退，最多保留 5 步', () => {
+    const { result } = renderHook(() => useRatingUndo());
+
+    // 改 6 张不同照片：只有最后 5 步留在栈里（最旧的 a 被淘汰）。
+    act(() => result.current.remember(snap({ id: 'a', rating: 0 })));
+    act(() => result.current.remember(snap({ id: 'b', path: 'D:/b.jpg', rating: 1 })));
+    act(() => result.current.remember(snap({ id: 'c', path: 'D:/c.jpg', rating: 2 })));
+    act(() => result.current.remember(snap({ id: 'd', path: 'D:/d.jpg', rating: 3 })));
+    act(() => result.current.remember(snap({ id: 'e', path: 'D:/e.jpg', rating: 4 })));
+    act(() => result.current.remember(snap({ id: 'f', path: 'D:/f.jpg', rating: 5 })));
+
+    const order: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      let taken: RatingSnapshot | null = null;
+      act(() => {
+        taken = result.current.take();
+      });
+      if (taken) order.push((taken as RatingSnapshot).id);
+    }
+
+    // 后进先出：f → b，最旧的 a 因超过 5 步上限已被淘汰。
+    expect(order).toEqual(['f', 'e', 'd', 'c', 'b']);
+    expect(result.current.canUndo).toBe(false);
   });
 
   it('撤销后再改同一张：新的一轮重新取快照（不是旧的）', () => {

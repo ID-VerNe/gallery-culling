@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Star,
@@ -27,6 +27,9 @@ const GRID_CELL_HEIGHT: Record<3 | 4, number> = { 3: 132, 4: 110 };
 
 /** 行容器 `pb-1.5` = 0.375rem = 6px（Tailwind 类无法被 JS 读取，只能写死并注释）。 */
 const GRID_ROW_GAP_BOTTOM = 6;
+
+/** 稳定的空集合引用：避免每次渲染新建 Set 让依赖抖动。 */
+const EMPTY_ID_SET: ReadonlySet<string> = new Set<string>();
 
 /**
  * 虚拟化的精确估算行高 = 子格子高度 + 行容器底部内边距（3 列 138 / 4 列 116）。
@@ -62,6 +65,17 @@ interface ThumbnailGridProps {
    * 只在引擎握手成功时为 true —— 不可用时保持 EXIF 内嵌缩略图这条零成本路径。
    */
   lumenThumbnails?: boolean;
+  /**
+   * B1 多选：当前选中的照片 id 集合（受控）。
+   * 未提供 `onSelectionChange` 时退回既有单选行为（独立编译/测试仍可用）。
+   */
+  selectedIds?: Set<string>;
+  /** B1 多选变化回调（Ctrl/Cmd 点选、Shift 范围、Ctrl+A、方向键重置为单选）。 */
+  onSelectionChange?: (ids: Set<string>) => void;
+  /** B6 写盘失败、尚未同步到 XMP 的照片 id（持久角标 + 重试入口）。 */
+  unsyncedIds?: Set<string>;
+  /** B6 点击"未同步"角标时的重试回调。 */
+  onRetrySync?: (group: PhotoGroupInfo) => void;
 }
 
 export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
@@ -77,10 +91,19 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   onSearchOpenChange,
   totalLoaded,
   lumenThumbnails = false,
+  selectedIds,
+  onSelectionChange,
+  unsyncedIds,
+  onRetrySync,
 }) => {
   const [columns, setColumns] = useState<3 | 4>(3);
   const parentRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  /** B1：Shift 范围选择用的锚点（最近一次非 Shift 点选的格子下标）。 */
+  const anchorIndexRef = useRef<number>(-1);
+  // 多选受控：宿主提供了回调才启用；否则保持既有单选语义。
+  const multiSelectEnabled = !!onSelectionChange;
+  const activeIds = selectedIds ?? EMPTY_ID_SET;
 
   // 每个宫格实例持有一份缩略图去重/缓存（滚动回来命中、并发共享），卸载即释放。
   // 用惰性初始化的 ref 而不是 useState：不需要触发重渲染，且实例稳定。
@@ -110,6 +133,48 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
       onSearchOpenChange?.(false);
     }
   };
+
+  /**
+   * B1：多选点击模型（仅当宿主启用多选时）。
+   * - 普通点击：单选，并把"当前照片"移过去（中心视口跟随）。
+   * - Ctrl/Cmd 点击：切换该格，不移动当前照片（便于原地组选区）。
+   * - Shift 点击：从锚点做范围选择。
+   */
+  const handleCellClick = useCallback(
+    (e: React.MouseEvent, index: number) => {
+      if (!multiSelectEnabled || !onSelectionChange) {
+        onSelect(index);
+        return;
+      }
+      const clicked = groups[index];
+      if (!clicked) return;
+
+      if (e.shiftKey && anchorIndexRef.current >= 0) {
+        const a = Math.min(anchorIndexRef.current, index);
+        const b = Math.max(anchorIndexRef.current, index);
+        const next = new Set<string>();
+        for (let i = a; i <= b; i++) next.add(groups[i].id);
+        onSelectionChange(next);
+        onSelect(index);
+        return;
+      }
+
+      if (e.ctrlKey || e.metaKey) {
+        const next = new Set(activeIds);
+        if (next.has(clicked.id)) next.delete(clicked.id);
+        else next.add(clicked.id);
+        if (next.size === 0) next.add(clicked.id);
+        anchorIndexRef.current = index;
+        onSelectionChange(next);
+        return;
+      }
+
+      anchorIndexRef.current = index;
+      onSelectionChange(new Set([clicked.id]));
+      onSelect(index);
+    },
+    [multiSelectEnabled, onSelectionChange, onSelect, groups, activeIds],
+  );
 
   // Split groups into rows for multi-column layout
   const rows = useMemo(() => {
@@ -146,15 +211,29 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   // selection, Left/Right stay bound to the global prev/next photo.
   const handleListKeyDown = (e: React.KeyboardEvent) => {
     if (groups.length === 0) return;
+
+    // B1：Ctrl/Cmd+A 全选（仅多选启用时）。
+    if (
+      (e.ctrlKey || e.metaKey) &&
+      (e.key === 'a' || e.key === 'A') &&
+      onSelectionChange
+    ) {
+      e.preventDefault();
+      onSelectionChange(new Set(groups.map((g) => g.id)));
+      return;
+    }
+
     const last = groups.length - 1;
     let next = selectedIndex;
 
     switch (e.key) {
+      // B3：宫格是"按行"排列的，上下键应跨行（±columns），与视觉行列一致；
+      // 左右键由全局 handler 绑到上/下一张照片。
       case 'ArrowDown':
-        next = Math.min(selectedIndex + 1, last);
+        next = Math.min(selectedIndex + columns, last);
         break;
       case 'ArrowUp':
-        next = Math.max(selectedIndex - 1, 0);
+        next = Math.max(selectedIndex - columns, 0);
         break;
       case 'Home':
         next = 0;
@@ -173,17 +252,39 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
     }
 
     e.preventDefault();
+    // 键盘移动把选区收拢为单张（roving），保持"当前照片"与高亮一致。
+    anchorIndexRef.current = next;
+    onSelectionChange?.(new Set([groups[next].id]));
     onSelect(next);
   };
 
   const isSearchFiltering = searchQuery.trim().length > 0;
   const isEmpty = groups.length === 0;
 
+  // B7：虚拟化会把滚出窗口的行整行卸载，`aria-activedescendant` 随即指向不存在
+  // 的节点、读屏静默。这里在选中行未被渲染时补一个视觉隐藏的 `role="option"`
+  // 幽灵节点，保证引用始终可解析（比改成 roving tabindex 改动面小得多）。
+  const virtualRows = gridVirtualizer.getVirtualItems();
+  const selectedRowIndex =
+    selectedIndex >= 0 ? Math.floor(selectedIndex / columns) : -1;
+  const selectedRowRendered =
+    selectedRowIndex < 0 ||
+    virtualRows.some((v) => v.index === selectedRowIndex);
+  const activeGroup =
+    selectedIndex >= 0 && selectedIndex < groups.length
+      ? groups[selectedIndex]
+      : undefined;
+
   return (
     <div className="h-full w-full flex flex-col bg-background-base border-l border-white/10 select-none">
       {/* Top Header & Column Switcher */}
       <div className="px-2.5 py-1 bg-background-base border-b border-white/10 flex items-center justify-between text-xs text-white/80 shrink-0 gap-2 min-h-9">
-        <span className="font-medium text-[11px] text-white/80 font-mono whitespace-nowrap">
+        {/* B8：命中数是"状态"，加 role=status/aria-live 让读屏在搜索收窄时播报。 */}
+        <span
+          role="status"
+          aria-live="polite"
+          className="font-medium text-[11px] text-white/80 font-mono whitespace-nowrap"
+        >
           宫格列表{' '}
           <span className="tabular-nums">
             ({isSearchFiltering ? `${groups.length}/${totalLoaded ?? groups.length}` : groups.length})
@@ -195,7 +296,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
           {onSearchOpenChange && (
             <button
               onClick={() => onSearchOpenChange(!searchOpen)}
-              className={`focus-ring flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors ${
+              className={`focus-ring flex items-center gap-1 px-1.5 min-h-7 rounded text-[10px] transition-colors ${
                 searchOpen
                   ? 'bg-white text-black font-medium'
                   : 'text-white/60 hover:text-white hover:bg-white/10'
@@ -212,7 +313,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
           <div className="flex items-center bg-background-base p-0.5 rounded-lg border border-white/10">
             <button
               onClick={() => setColumns(3)}
-              className={`focus-ring flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-colors ${
+              className={`focus-ring flex items-center gap-1 px-2 min-h-7 rounded text-[10px] transition-colors ${
                 columns === 3
                   ? 'bg-white text-black font-medium shadow-sm'
                   : 'text-white/60 hover:text-white'
@@ -226,7 +327,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
             </button>
             <button
               onClick={() => setColumns(4)}
-              className={`focus-ring flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-colors ${
+              className={`focus-ring flex items-center gap-1 px-2 min-h-7 rounded text-[10px] transition-colors ${
                 columns === 4
                   ? 'bg-white text-black font-medium shadow-sm'
                   : 'text-white/60 hover:text-white'
@@ -253,8 +354,8 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
               value={searchQuery}
               onChange={(e) => onSearchQueryChange?.(e.target.value)}
               onKeyDown={handleSearchKeyDown}
-              placeholder="输入文件名片段…"
-              aria-label="按文件名搜索照片"
+              placeholder="在宫格中按文件名搜索…"
+              aria-label="在宫格中按文件名搜索照片"
               className="focus-ring bg-transparent border-none outline-none text-white w-full min-w-0 text-[11px]"
             />
             {searchQuery && (
@@ -319,7 +420,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
               position: 'relative',
             }}
           >
-            {gridVirtualizer.getVirtualItems().map((virtualRow) => {
+            {virtualRows.map((virtualRow) => {
               const rowGroups = rows[virtualRow.index] || [];
 
               return (
@@ -345,7 +446,11 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
                 >
                   {rowGroups.map((group, colIdx) => {
                     const itemIndex = virtualRow.index * columns + colIdx;
-                    const isSelected = itemIndex === selectedIndex;
+                    // 多选启用时以集合为准（集合为空时退回单选高亮）。
+                    const isSelected =
+                      activeIds.size > 0
+                        ? activeIds.has(group.id)
+                        : itemIndex === selectedIndex;
                     const isPinned = pinnedId === group.id;
                     const isCandidate =
                       candidateId != null && candidateId === group.id;
@@ -360,7 +465,9 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
                         isSelected={isSelected}
                         isPinned={isPinned}
                         isCandidate={isCandidate}
-                        onSelect={() => onSelect(itemIndex)}
+                        onClick={(e) => handleCellClick(e, itemIndex)}
+                        isUnsynced={unsyncedIds?.has(group.id) ?? false}
+                        onRetrySync={onRetrySync}
                         lumenThumbnails={lumenThumbnails}
                         loader={loader}
                       />
@@ -370,6 +477,16 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
               );
             })}
           </div>
+          {/* B7 幽灵 option：选中行滚出虚拟窗口时，保证 aria-activedescendant 仍可解析 */}
+          {!selectedRowRendered && activeGroup && (
+            <div
+              role="option"
+              id={makeOptionId(activeGroup.id)}
+              aria-selected="true"
+              aria-label={`第 ${selectedIndex + 1} / ${groups.length} 张，${activeGroup.baseName}`}
+              className="sr-only"
+            />
+          )}
         </div>
       )}
     </div>
@@ -496,7 +613,12 @@ interface GridPhotoCellProps {
   isPinned: boolean;
   /** 该格是否是对比候选（钉左基准时的右视口照片）。 */
   isCandidate?: boolean;
-  onSelect: () => void;
+  /** B1：点击回调，携带事件以便识别 Ctrl/Shift 修饰键。 */
+  onClick: (e: React.MouseEvent) => void;
+  /** B6：该格写盘失败、尚未同步到 XMP。 */
+  isUnsynced?: boolean;
+  /** B6：点击"未同步"角标重试。 */
+  onRetrySync?: (group: PhotoGroupInfo) => void;
   /** 见 ThumbnailGridProps.lumenThumbnails */
   lumenThumbnails?: boolean;
   /** 缩略图加载器（去重 + 缓存），由 ThumbnailGrid 实例持有。 */
@@ -511,7 +633,9 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
   isSelected,
   isPinned,
   isCandidate = false,
-  onSelect,
+  onClick,
+  isUnsynced = false,
+  onRetrySync,
   lumenThumbnails = false,
   loader,
 }) => {
@@ -591,7 +715,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
       // activedescendant 契约失效）；同时在 mousedown 上 preventDefault，
       // 阻止点击把焦点从容器移走 —— 点击后方向键仍能继续导航。
       onMouseDown={(e) => e.preventDefault()}
-      onClick={onSelect}
+      onClick={onClick}
       className={`relative rounded-lg flex flex-col overflow-hidden cursor-pointer transition-[border-color,transform] border text-left bg-white/5 hover:bg-white/10 ${
         isPinned
           ? 'border-white/90 ring-1 ring-inset ring-white/90'
@@ -632,6 +756,22 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
         <div className="absolute top-1 right-1 bg-background-base/75 backdrop-blur px-1 py-[2px] rounded text-[9px] font-mono text-white/80 tabular-nums">
           #{index + 1}
         </div>
+
+        {/* B6：写盘失败 = 持久「未同步」角标（不随 toast 消失），点击可重试 */}
+        {isUnsynced && onRetrySync && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRetrySync(group);
+            }}
+            className="absolute top-6 right-1 bg-rose-500/90 hover:bg-rose-500 text-white rounded px-1 py-[2px] text-[8px] font-medium shadow-sm"
+            title="未同步到 XMP 侧边栏，点击重试"
+            aria-label="未同步到 XMP 侧边栏，点击重试同步"
+          >
+            未同步
+          </button>
+        )}
 
         {/* Top-Left: Pinned / Pick / Reject badge */}
         {isPinned ? (

@@ -78,10 +78,11 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
   lumenPreviewWidth = 1600,
   emptyState = {
     title: '未加载照片',
-    description: '选择 JPG 或 RAW 文件夹，即可开始极速选片。',
+    description: '请选择存放 JPG 的文件夹用于浏览与选片；RAW 文件夹可选。',
   },
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -102,6 +103,29 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
     setPosition({ x: 0, y: 0 });
   }, []);
 
+  // 同时把 <img> 交给宿主（直方图采样）并保留本地引用（拖拽夹紧要量测其渲染尺寸）。
+  const setImageRef = useCallback(
+    (el: HTMLImageElement | null) => {
+      imgRef.current = el;
+      onImageElement?.(el);
+    },
+    [onImageElement],
+  );
+
+  // C8：把平移夹紧到「照片不露出视口」的范围。缩放后图像超出容器的半边宽度
+  // 即为最大可平移量；不超出（适应窗口）则锁死居中。
+  const clampPosition = useCallback((next: { x: number; y: number }, s: number) => {
+    const container = containerRef.current;
+    const img = imgRef.current;
+    if (!container || !img) return next;
+    const maxX = Math.max(0, (img.offsetWidth * s - container.clientWidth) / 2);
+    const maxY = Math.max(0, (img.offsetHeight * s - container.clientHeight) / 2);
+    return {
+      x: Math.min(Math.max(next.x, -maxX), maxX),
+      y: Math.min(Math.max(next.y, -maxY), maxY),
+    };
+  }, []);
+
   // Handle Wheel Zoom —— 命中光标（M-08）：改 scale 的同时按光标反算 pos，
   // 光标下的图像点保持在指针下。与快捷键说明「滚轮 · 以指针为中心缩放」一致。
   const handleWheel = useCallback(
@@ -119,25 +143,28 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
     [scale, position],
   );
 
-  // Handle Pan Dragging
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button === 0) {
-      setIsDragging(true);
-      setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
-    }
+  // Handle Pan Dragging（C8：Pointer 事件 + 指针捕获，快速拖到容器外也不丢拽）
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    // 覆盖层按钮 / EXIF 胶囊等交互元素不进入拖拽，避免抢走点击。
+    if (e.target !== e.currentTarget) return;
+    setIsDragging(true);
+    setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (isDragging) {
-      setPosition({
-        x: e.clientX - dragStart.x,
-        y: e.clientY - dragStart.y,
-      });
-    }
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!isDragging) return;
+    setPosition(
+      clampPosition({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y }, scale),
+    );
   };
 
-  const handleMouseUp = () => {
+  const handlePointerUp = (e: React.PointerEvent) => {
+    if (!isDragging) return;
     setIsDragging(false);
+    const host = e.currentTarget as HTMLElement;
+    if (host.hasPointerCapture(e.pointerId)) host.releasePointerCapture(e.pointerId);
   };
 
   // Double click to toggle fit / 250%
@@ -155,40 +182,67 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
     setLumenBroken(false);
   }, [group?.id]);
 
-  const legacySrc = group?.jpg?.path
-    ? api.toAssetUrl(group.jpg.path)
-    : group?.raw?.path
-    ? api.toAssetUrl(group.raw.path)
-    : null;
-  const imageSrc = lumenPreview.url && !lumenBroken ? lumenPreview.url : legacySrc;
-  // A LUMEN render is already tone-mapped: never stack the CSS tone filter on it
-  // (that would develop the image twice).
-  const toneFilter =
-    lumenPreview.url && !lumenBroken
-      ? 'none'
-      : getToneFilterString(isHoldOriginal ? undefined : tone);
-
-  if (!group || !imageSrc) {
+  if (!group) {
     return <ViewportEmptyStateView emptyState={emptyState} />;
   }
 
+  const hasJpg = Boolean(group.jpg?.path);
+  const hasRaw = Boolean(group.raw?.path);
+  const lumenActive = Boolean(lumenPreview.url && !lumenBroken);
+  // RAW-only（无 JPG）分组：引擎不可用时不再回落到 .NEF 资产 URL（C2，会永久破图）。
+  const rawOnly = !hasJpg && hasRaw;
+  const legacySrc = hasJpg
+    ? api.toAssetUrl(group.jpg!.path)
+    : hasRaw
+    ? api.toAssetUrl(group.raw!.path)
+    : null;
+  const imageSrc = rawOnly ? (lumenActive ? lumenPreview.url : null) : legacySrc;
+  // A LUMEN render is already tone-mapped: never stack the CSS tone filter on it
+  // (that would develop the image twice).
+  const toneFilter = lumenActive ? 'none' : getToneFilterString(isHoldOriginal ? undefined : tone);
+
+  // C1/C2：RAW-only 解码中 → 走主视图显示「正在渲染 RAW…」横幅；失败/未启用 → 明确占位而非破图。
+  if (!imageSrc && !(rawOnly && lumenPreview.loading)) {
+    const engineAvailable = lumenStatus?.available === true;
+    return (
+      <ViewportEmptyStateView
+        emptyState={
+          rawOnly
+            ? engineAvailable
+              ? {
+                  title: 'RAW 预览暂不可用',
+                  description: 'LUMEN RAW 引擎未能解码该照片，请稍后重试或改用其它视图。',
+                }
+              : {
+                  title: '该 RAW 需启用 LUMEN RAW 引擎',
+                  description:
+                    '当前为 RAW-only 照片，启用 LUMEN RAW 引擎后即可实时预览；JPG 照片不受影响。',
+                }
+            : emptyState
+        }
+      />
+    );
+  }
+
   const zoomPercent = `${Math.round(scale * 100)}%`;
+  // C6：scale=1 实为「适应窗口」，并非 1:1 像素，别显示误导性的 100%。
+  const zoomLabel = Math.abs(scale - 1) < 0.001 ? '适应' : zoomPercent;
 
   return (
     <div
       ref={containerRef}
       onWheel={handleWheel}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
       onDoubleClick={handleDoubleClick}
       className={`relative flex-1 bg-background-base overflow-hidden flex items-center justify-center select-none ${
         isDragging ? 'cursor-grabbing' : 'cursor-grab'
       }`}
     >
       {/* Zoomable Image */}
-      {lumenPreview.loading && !imageSrc && (
+      {lumenPreview.loading && !lumenPreview.url && (
         <div
           role="status"
           className="absolute top-4 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3.5 py-1.5 rounded-md text-xs font-semibold text-white/80 border border-white/10 pointer-events-none"
@@ -197,22 +251,25 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
         </div>
       )}
 
-      <img
-        ref={onImageElement}
-        src={imageSrc}
-        alt={group.baseName}
-        draggable={false}
-        onError={() => {
-          // A stale/invalid cached preview must never blank the viewport.
-          if (lumenPreview.url && !lumenBroken) setLumenBroken(true);
-        }}
-        style={{
-          transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
-          transition: isDragging ? 'none' : 'transform 0.08s ease-out',
-          filter: toneFilter,
-        }}
-        className="max-h-full max-w-full object-contain pointer-events-none origin-center"
-      />
+      {imageSrc && (
+        <img
+          ref={setImageRef}
+          src={imageSrc}
+          alt={group.baseName}
+          draggable={false}
+          onError={() => {
+            // A stale/invalid cached preview must never blank the viewport.
+            if (lumenPreview.url && !lumenBroken) setLumenBroken(true);
+          }}
+          style={{
+            transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
+            transition: isDragging ? 'none' : 'transform 0.08s ease-out',
+            imageOrientation: 'from-image',
+            filter: toneFilter,
+          }}
+          className="max-h-full max-w-full object-contain pointer-events-none origin-center"
+        />
+      )}
 
       {/* 含成品提示：该分组存在 edited（Luminar 成果）。
           主图口径仍是工作版（jpg/raw + LUMEN 调色）——这里只提示、不改显示内容，
@@ -375,9 +432,9 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           </button>
           <span
             className="text-[11px] font-mono tabular-nums text-white/80 w-11 text-center select-none"
-            aria-label={`当前缩放 ${zoomPercent}`}
+            aria-label={`当前缩放 ${zoomLabel}`}
           >
-            {zoomPercent}
+            {zoomLabel}
           </span>
           <button
             onClick={() => zoomBy(ZOOM_STEP)}
@@ -391,8 +448,8 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           <button
             onClick={resetView}
             className="focus-ring p-1.5 text-white/60 hover:text-white hover:bg-white/10 active:scale-[0.96] rounded-md transition-colors"
-            title={`重置缩放与平移（当前 ${zoomPercent}）`}
-            aria-label={`重置图片缩放与平移，当前 ${zoomPercent}`}
+            title={`重置缩放与平移（当前 ${zoomLabel}）`}
+            aria-label={`重置缩放与平移，当前 ${zoomLabel}`}
           >
             <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
@@ -404,7 +461,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
             onClick={onToggleTonalAdjuster}
             className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-white/10 hover:bg-white/20 active:scale-[0.96] text-white rounded-md text-xs font-medium transition-colors"
             title="调色面板 (E)"
-            aria-label="打开调色面板"
+            aria-label="调色面板"
             aria-pressed={isTonalPanelOpen}
             aria-expanded={isTonalPanelOpen}
             aria-controls="tonal-adjuster-panel"

@@ -26,6 +26,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { api } from '../services/api';
+import { useToast } from '../components/Toast';
 
 /** 需要持久化的会话快照。字段名对齐 `api.saveSession` 的四元组。 */
 export interface SessionSnapshot {
@@ -64,6 +65,13 @@ export const useSessionDebounce = (
   const sessionRef = useRef(snapshot);
   sessionRef.current = snapshot;
 
+  const toast = useToast();
+  /**
+   * E9：会话写盘失败此前只 `console.error`，对用户完全静默。这里首次失败给一次性
+   * 提示（节流），避免每次 flush 都刷屏；写盘恢复成功后允许再次提醒。
+   */
+  const saveErrorNotifiedRef = useRef(false);
+
   const timerRef = useRef<number | null>(null);
 
   const clearTimer = useCallback(() => {
@@ -79,11 +87,18 @@ export const useSessionDebounce = (
       if (!s.jpgFolder || s.lastIndex < 0) return;
       try {
         await api.saveSession(s.jpgFolder, s.rawFolder, s.lastIndex, s.sortOrder);
+        // 写盘恢复成功 → 允许下一次失败再次提醒（而非整个会话只提醒一次）。
+        saveErrorNotifiedRef.current = false;
       } catch (e) {
         console.error('Failed to save session:', e);
+        // E9：首次失败给一次性提示；后续失败静默，避免刷屏。
+        if (!saveErrorNotifiedRef.current) {
+          saveErrorNotifiedRef.current = true;
+          toast.info('会话进度保存失败，稍后会自动重试');
+        }
       }
     },
-    [clearTimer],
+    [clearTimer, toast],
   );
 
   // 防抖写入 + 目录切换 flush。

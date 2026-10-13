@@ -191,7 +191,7 @@ describe('SettingsModal —— 保存', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('读取设置失败时提示且不渲染表单', async () => {
+  it('读取设置失败时渲染错误 + 重试，且不渲染表单', async () => {
     mockInvokeError('get_settings_cmd', new Error('no db'));
 
     const onError = vi.fn();
@@ -199,8 +199,29 @@ describe('SettingsModal —— 保存', () => {
 
     await waitFor(() => expect(onError).toHaveBeenCalled());
     expect(onError.mock.calls[0][0]).toContain('读取设置失败');
-    expect(screen.getByText('正在读取设置…')).toBeInTheDocument();
+    // D3：失败不再永久停在「正在读取设置…」，而是可读错误 + 重试入口。
+    expect(screen.queryByText('正在读取设置…')).toBeNull();
+    expect(screen.getByRole('alert')).toHaveTextContent('读取设置失败');
+    expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument();
+    // 表单未渲染，保存按钮保持禁用。
+    expect(screen.queryByLabelText(/启用 LUMEN RAW 引擎/)).toBeNull();
     expect(screen.getByRole('button', { name: /保存设置/ })).toBeDisabled();
+  });
+
+  it('读取失败后点「重试」重新拉取并渲染表单 (D3)', async () => {
+    mockInvokeError('get_settings_cmd', new Error('no db'));
+    const user = userEvent.setup();
+    render(<SettingsModal isOpen onClose={vi.fn()} onSettingsSaved={vi.fn()} onError={vi.fn()} />);
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument(),
+    );
+
+    // 后端恢复后，重试应成功载入表单。
+    mockInvokeCommand('get_settings_cmd', { ...baseSettings, lumenEnabled: true });
+    await user.click(screen.getByRole('button', { name: '重试' }));
+
+    await waitFor(() => expect(engineToggle()).toBeEnabled());
   });
 
   it('取消按钮不保存', async () => {

@@ -143,8 +143,10 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="手动镜头元数据编辑与批量同步"
+      title="镜头元数据批量编辑"
       maxWidth="max-w-lg"
+      // D6：写盘进行中禁用 X / Esc，避免误关后失去写入反馈。
+      disableClose={isSaving}
       icon={<Sliders className="w-4 h-4" aria-hidden="true" />}
       footer={
         <>
@@ -157,7 +159,8 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
           </span>
           <button
             onClick={onClose}
-            className="focus-ring px-4 py-2 text-xs font-medium text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+            disabled={isSaving}
+            className="focus-ring px-4 py-2 text-xs font-medium text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/10 disabled:hover:text-white/80"
           >
             取消
           </button>
@@ -166,7 +169,10 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
             disabled={isSaving || targetGroups.length === 0}
             className="focus-ring px-5 py-2 text-xs font-medium bg-white hover:bg-white/90 text-black active:scale-95 disabled:opacity-50 disabled:pointer-events-none rounded-lg transition-transform shadow-md"
           >
-            {isSaving ? '正在写入 XMP…' : `确认并同步「${scopeLabel}」`}
+            {/* D7：批量写 XMP 可能上千张，至少给出待写张数。 */}
+            {isSaving
+              ? `正在写入 ${targetGroups.length} 张…`
+              : `确认并同步「${scopeLabel}」`}
           </button>
         </>
       }
@@ -204,7 +210,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
         <legend className="sr-only">镜头元数据</legend>
         <div>
           <label htmlFor={lensId} className="block text-white/80 font-medium mb-1">
-            镜头型号 (Lens Model)
+            镜头型号
           </label>
           <input
             id={lensId}
@@ -222,7 +228,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
               htmlFor={focalId}
               className="block text-white/80 font-medium mb-1"
             >
-              焦段 / 焦距 (Focal Length)
+              焦段 / 焦距
             </label>
             <input
               id={focalId}
@@ -239,7 +245,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
               htmlFor={apertureId}
               className="block text-white/80 font-medium mb-1"
             >
-              光圈值 (Aperture / F-Number)
+              光圈值
             </label>
             <input
               id={apertureId}

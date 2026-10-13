@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useId } from 'react';
 import { FolderOpen, Download, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { ExportItem, PhotoGroupInfo } from '../types';
 import { api } from '../services/api';
@@ -71,6 +71,8 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
   onSuccess,
 }) => {
   const [targetFolder, setTargetFolder] = useState('');
+  /** D8：把错误文案与输入框关联，读屏聚焦输入时也能读到。 */
+  const folderErrorId = useId();
   const [includeRaw, setIncludeRaw] = useState(true);
   const [includeJpg, setIncludeJpg] = useState(true);
   const [exportFilter, setExportFilter] =
@@ -218,8 +220,11 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="批量挑选导出 (Culling Export)"
+      title="批量挑选导出"
       maxWidth="max-w-lg"
+      // D2：导出进行中拦截关闭路径（X / Esc），配合下方禁用的「关闭」按钮，
+      // 避免用户误以为「关闭 = 取消导出」。
+      disableClose={isExporting}
       icon={<Download className="w-4 h-4" aria-hidden="true" />}
       footer={
         <>
@@ -232,7 +237,13 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
           </span>
           <button
             onClick={onClose}
-            className="focus-ring px-3.5 py-1.5 rounded-md bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white/80 transition-colors"
+            disabled={isExporting}
+            title={
+              isExporting
+                ? '导出进行中：请等待完成或点击「取消」，关闭不会停止导出'
+                : undefined
+            }
+            className="focus-ring px-3.5 py-1.5 rounded-md bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/5"
           >
             关闭
           </button>
@@ -268,6 +279,8 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
             value={targetFolder}
             onChange={(e) => setTargetFolder(e.target.value)}
             placeholder="请选择或粘贴保存挑选照片的文件夹…"
+            aria-describedby={targetIsSourceDir ? folderErrorId : undefined}
+            aria-invalid={targetIsSourceDir || undefined}
             className="focus-ring flex-1 min-w-0 bg-background-base border border-border-default rounded-md px-3 py-1.5 text-white outline-none font-mono text-[11px] focus:border-white/40"
           />
           <button
@@ -279,7 +292,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
           </button>
         </div>
         {targetIsSourceDir && (
-          <p role="alert" className="text-[11px] text-red-300/90">
+          <p id={folderErrorId} role="alert" className="text-[11px] text-red-300/90">
             {TARGET_IS_SOURCE_MESSAGE}
           </p>
         )}

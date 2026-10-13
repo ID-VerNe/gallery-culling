@@ -132,7 +132,7 @@ describe('WP7 接线 —— L-08 调色面板的 Esc 出口', () => {
     mockStartup();
     await scanFive();
 
-    fireEvent.click(screen.getByRole('button', { name: '轻量调色预检面板' }));
+    fireEvent.click(screen.getAllByRole('button', { name: '调色面板' })[0]);
     await waitFor(() => expect(panel()).not.toBeNull());
 
     fireEvent.keyDown(window, { key: 'Escape' });
@@ -144,7 +144,7 @@ describe('WP7 接线 —— L-08 调色面板的 Esc 出口', () => {
     mockStartup();
     await scanFive();
 
-    fireEvent.click(screen.getByRole('button', { name: '轻量调色预检面板' }));
+    fireEvent.click(screen.getAllByRole('button', { name: '调色面板' })[0]);
     await waitFor(() => expect(panel()).not.toBeNull());
 
     // 打开一个真正的模态弹窗（role=dialog + aria-modal），Esc 归它处理

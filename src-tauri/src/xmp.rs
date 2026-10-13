@@ -149,6 +149,23 @@ const OURS_NAMESPACES: [&str; 4] = [
     "http://ns.adobe.com/camera-raw-settings/1.0/",
 ];
 
+/// 本方模板**从不**声明的第三方命名空间前缀。
+///
+/// 旧模板（只有 xmp → aux → exif 三个核心命名空间）的护栏：认到顺序一致还不够，
+/// 还得确认它没夹带第三方命名空间——否则可能吞掉 Lightroom 的 develop 数据。
+/// 两个模板都不含下列前缀，命中即判第三方块（保持追加，对第三方零风险）。
+const FOREIGN_NS_PREFIXES: [&str; 9] = [
+    "xmlns:lr=",
+    "xmlns:dc=",
+    "xmlns:xmpRights=",
+    "xmlns:tiff=",
+    "xmlns:photoshop=",
+    "xmlns:Iptc4xmpCore=",
+    "xmlns:stEvt=",
+    "xmlns:stRef=",
+    "xmlns:xmpMM=",
+];
+
 /// 构造本方 `rdf:Description` 块文本（与历史写出的字节完全一致）。
 fn build_our_description(meta: &XmpMetadata) -> String {
     // reject 用 -1（Lightroom 惯例）；LUMEN RAW 与 Lightroom 都按此读回
@@ -280,16 +297,33 @@ fn splice_our_block(existing: &str, our_block: &str) -> Option<String> {
         let close_rel = existing[start..].find("</rdf:Description>")?;
         let end = start + close_rel + "</rdf:Description>".len();
         let desc = &existing[start..end];
-        // 归属判定：本方模板固定按 xmp → aux → exif → crs 顺序声明 4 个命名空间。
-        // **只看集合是不够的**：Lightroom 的主块也常同时声明 xmp/exif/crs/aux，
-        // 那样会把它的 develop 数据一起吞掉。按顺序判定才安全；
-        // 认不出来就 append（对第三方数据零风险）。
-        let positions: Vec<usize> = OURS_NAMESPACES
-            .iter()
-            .filter_map(|ns| desc.find(&format!("xmlns:{}=\"{}\"", short_prefix(ns), ns)))
-            .collect();
-        let is_ours =
-            positions.len() == OURS_NAMESPACES.len() && positions.windows(2).all(|w| w[0] < w[1]);
+
+        // 归属判定基于 xmlns 声明（而非标签名）——第三方也可能写 `xmp:Rating`，
+        // 那时必须**不动**它的块。
+        //
+        // 本方模板固定按 xmp → aux → exif → crs 顺序声明。**只看集合是不够的**：
+        // Lightroom 的主块也常同时声明 xmp/exif/crs/aux，那样会把它的 develop 数据
+        // 一起吞掉。按顺序判定才安全；认不出来就 append（对第三方数据零风险）。
+        let ns_at = |i: usize| -> Option<usize> {
+            let ns = OURS_NAMESPACES[i];
+            desc.find(&format!("xmlns:{}=\"{}\"", short_prefix(ns), ns))
+        };
+        let xmp = ns_at(0);
+        let aux = ns_at(1);
+        let exif = ns_at(2);
+        let crs = ns_at(3);
+
+        let is_ours = match (xmp, aux, exif, crs) {
+            // 当前模板：xmp → aux → exif → crs
+            (Some(a), Some(b), Some(c), Some(d)) => a < b && b < c && c < d,
+            // 旧模板（crs 尚未引入）：xmp → aux → exif，且不得夹带第三方命名空间
+            (Some(a), Some(b), Some(c), None) => {
+                a < b && b < c && !FOREIGN_NS_PREFIXES.iter().any(|p| desc.contains(p))
+            }
+            // 命名空间齐全但顺序不符，或缺少中间某个 → 一律当第三方，追加而非替换
+            _ => false,
+        };
+
         if is_ours {
             let mut out = String::with_capacity(existing.len() + our_block.len());
             out.push_str(&existing[..start]);
@@ -392,6 +426,14 @@ pub fn write_xmp(image_path: &Path, rating: u8, flag: &str) -> Result<PathBuf, S
         meta.rating = 0;
         return write_xmp_rating_minus_one(image_path);
     }
+    // 非 reject 分支必须显式清掉 `rejected`。
+    //
+    // `read_xmp_full` 见到 Rating=-1 会把 `rejected` 置真，而
+    // `build_our_description` 只看 `rejected`、不看 `rating`：
+    // 不清就会把 -1 原样写回去，**淘汰状态一旦落盘就再也解除不掉**
+    // （界面显示 0 星，磁盘仍是 -1，Lightroom 里也仍是"已淘汰"）。
+    // 调用方已经用 `flag` 显式声明了旗标意图，这里以它为准。
+    meta.rejected = false;
     write_xmp_full(image_path, &meta)
 }
 
@@ -571,6 +613,136 @@ mod tests {
         assert!(after.contains("<crs:Exposure2012>+0.65</crs:Exposure2012>"));
         // 单个 rdf:Description（本方块）
         assert_eq!(after.matches("<rdf:Description").count(), 1);
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    /// 旧模板侧边栏：只有 xmp → aux → exif 三个命名空间（`crs` 尚未引入时写出的）。
+    const LEGACY_XMP: &str = concat!(
+        "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n",
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"GalleryCulling\">\n",
+        "  <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n",
+        "    <rdf:Description rdf:about=\"\"\n",
+        "        xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\"\n",
+        "        xmlns:aux=\"http://ns.adobe.com/exif/1.0/aux/\"\n",
+        "        xmlns:exif=\"http://ns.adobe.com/exif/1.0/\">\n",
+        "      <xmp:Rating>1</xmp:Rating>\n",
+        "    </rdf:Description>\n",
+        "  </rdf:RDF>\n",
+        "</x:xmpmeta>\n",
+        "<?xpacket end=\"w\"?>\n",
+    );
+
+    /// P0-1 回归护栏：淘汰（-1）落盘后，清除/重新打分必须能覆盖它。
+    ///
+    /// 缺陷：`read_xmp_full` 见到 -1 会置 `rejected`，而 `write_xmp` 非 reject
+    /// 分支不清它 → `build_our_description` 永远输出 -1，淘汰状态无法解除。
+    #[test]
+    fn clearing_a_rejected_photo_writes_zero_not_minus_one() {
+        let img = std::env::temp_dir().join(format!("xmp_clear_reject_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        let _ = fs::remove_file(&xmp);
+
+        write_xmp(&img, 0, "reject").expect("写 reject 应成功");
+        assert!(fs::read_to_string(&xmp).unwrap().contains("<xmp:Rating>-1</xmp:Rating>"));
+
+        // 按 0 / U 清除 → 必须是 0，不能还是 -1
+        write_xmp(&img, 0, "none").expect("清除应成功");
+        let after = fs::read_to_string(&xmp).unwrap();
+        assert!(
+            after.contains("<xmp:Rating>0</xmp:Rating>"),
+            "淘汰后按 0 必须写 0 而不是 -1: {}",
+            after
+        );
+
+        // 被淘汰的照片重新打分 → 必须能覆盖 -1
+        write_xmp(&img, 5, "none").expect("重打分应成功");
+        let after = fs::read_to_string(&xmp).unwrap();
+        assert!(
+            after.contains("<xmp:Rating>5</xmp:Rating>"),
+            "淘汰后打 5 星必须能覆盖 -1: {}",
+            after
+        );
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    /// P0-2 回归护栏：旧模板（3 命名空间）必须被**原地替换**，而不是追加重复块。
+    ///
+    /// 缺陷：`splice_our_block` 要求 4 个命名空间齐全 → 旧块被判成第三方 →
+    /// 每次写入都追加一个 `rdf:Description`，同文件出现两个冲突的 `xmp:Rating`，
+    /// 读侧取先出现的那个，用户新打的星级静默回退。
+    #[test]
+    fn legacy_three_namespace_block_is_replaced_in_place() {
+        let img = std::env::temp_dir().join(format!("xmp_legacy_ns_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        fs::write(&xmp, LEGACY_XMP).unwrap();
+
+        write_xmp(&img, 5, "pick").expect("写应成功");
+        let after = fs::read_to_string(&xmp).unwrap();
+
+        assert_eq!(
+            after.matches("<rdf:Description").count(),
+            1,
+            "旧模板必须原地替换，不得追加重复块: {}",
+            after
+        );
+        assert_eq!(
+            after.matches("<xmp:Rating>").count(),
+            1,
+            "同文件不得有两个冲突的 xmp:Rating: {}",
+            after
+        );
+        assert!(after.contains("<xmp:Rating>5</xmp:Rating>"), "新值未写入");
+        assert!(after.contains("<xmp:Label>Green</xmp:Label>"), "旗标未写入");
+
+        // 再读回来必须是 5（而不是陈旧的 1）
+        assert_eq!(read_xmp_full(&xmp).unwrap().rating, 5, "回读必须是新星级");
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    /// P0-2 的护栏之二：放宽到 3 命名空间后，仍不得吞掉第三方块。
+    ///
+    /// 构造一个"顺序恰好是 xmp→aux→exif、但夹带 lr:/dc:"的块（Lightroom 风格），
+    /// 必须判成第三方 → 追加而非替换。
+    #[test]
+    fn legacy_match_still_refuses_third_party_block() {
+        let third_party = concat!(
+            "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n",
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n",
+            "  <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n",
+            "    <rdf:Description rdf:about=\"\"\n",
+            "        xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\"\n",
+            "        xmlns:aux=\"http://ns.adobe.com/exif/1.0/aux/\"\n",
+            "        xmlns:exif=\"http://ns.adobe.com/exif/1.0/\"\n",
+            "        xmlns:lr=\"http://ns.adobe.com/lightroom/1.0/\"\n",
+            "        xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n",
+            "      <xmp:Rating>2</xmp:Rating>\n",
+            "      <lr:hierarchicalSubject>keep-me</lr:hierarchicalSubject>\n",
+            "    </rdf:Description>\n",
+            "  </rdf:RDF>\n",
+            "</x:xmpmeta>\n",
+            "<?xpacket end=\"w\"?>\n",
+        );
+        let img = std::env::temp_dir().join(format!("xmp_thirdparty_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        fs::write(&xmp, third_party).unwrap();
+
+        write_xmp(&img, 4, "none").expect("写应成功");
+        let after = fs::read_to_string(&xmp).unwrap();
+
+        assert_eq!(
+            after.matches("<rdf:Description").count(),
+            2,
+            "第三方块必须保留（追加而非替换）: {}",
+            after
+        );
+        assert!(
+            after.contains("keep-me"),
+            "第三方内容不得丢失: {}",
+            after
+        );
 
         let _ = fs::remove_file(&xmp);
     }

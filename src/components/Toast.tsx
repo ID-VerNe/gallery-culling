@@ -68,7 +68,10 @@ const VARIANT_STYLES: Record<
     label: '错误',
   },
   info: {
-    wrap: 'border-white/15 bg-[#141414]/95 text-white',
+    // E5：原 `border-white/15` + `#141414/95` 与背景 #0A0A0A 仅约 1.48:1 / 1.07:1，
+    // 面板几乎与页面同色。提升边框到 white/35（≈3.1:1）并略提亮面板底色，
+    // 使通知边界可辨；error/success 的既有视觉保持不变。
+    wrap: 'border-white/35 bg-[#1c1c1c]/95 text-white',
     icon: <Info className="w-4 h-4 shrink-0 text-white/70" />,
     label: '提示',
   },
@@ -255,10 +258,12 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({
     <ToastContext.Provider value={api}>
       {children}
       <div className="fixed bottom-16 left-1/2 -translate-x-1/2 z-[60] flex flex-col items-center gap-2 pointer-events-none px-4 w-full max-w-md">
-        {/* 通知区：polite，可自动消失。常驻（空数组时也在 DOM 里）。 */}
+        {/* 通知区：polite，可自动消失。常驻（空数组时也在 DOM 里）。
+            E10：显式 aria-atomic="false" —— 否则隐式 atomic=true，任一通知更新会整区重播。 */}
         <div
           role="status"
           aria-live="polite"
+          aria-atomic="false"
           className="w-full flex flex-col items-center gap-2"
         >
           {noticeToasts.map(renderToast)}
@@ -267,6 +272,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({
         <div
           role="alert"
           aria-live="assertive"
+          aria-atomic="false"
           className="w-full flex flex-col items-center gap-2"
         >
           {errorToasts.map(renderToast)}
