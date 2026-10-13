@@ -780,29 +780,6 @@ pub fn load_session_cmd(
 }
 
 #[tauri::command]
-pub async fn update_tone_adjustments_cmd(
-    file_path: String,
-    tone: crate::models::ToneAdjustments,
-) -> Result<bool, String> {
-    // 兼容入口：旧调用点只需要 XMP 写入。**不要**在这里加引擎写入 ——
-    // 统一管线走 apply_tone_cmd，避免两条写入路径再次分叉。
-    blocking("写入调色参数任务异常", move || {
-        let path = Path::new(&file_path);
-        crate::xmp::update_xmp_tone(
-            path,
-            Some(tone.exposure),
-            Some(tone.highlights),
-            Some(tone.shadows),
-            Some(tone.temperature),
-            Some(tone.tint),
-            Some(tone.contrast),
-        )?;
-        Ok::<_, String>(true)
-    })
-    .await
-}
-
-#[tauri::command]
 pub async fn open_in_luminar_roundtrip_cmd(file_path: String) -> Result<String, String> {
     let path = std::path::PathBuf::from(file_path);
     let edited_path = crate::luminar::edit_in_luminar(&path).await?;

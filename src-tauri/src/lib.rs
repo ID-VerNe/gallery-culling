@@ -46,7 +46,6 @@ pub fn run() {
             save_settings_cmd,
             save_session_cmd,
             load_session_cmd,
-            update_tone_adjustments_cmd,
             open_in_luminar_roundtrip_cmd,
             lumen_status_cmd,
             probe_lumen_cmd,

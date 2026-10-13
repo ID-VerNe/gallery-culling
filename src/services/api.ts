@@ -85,19 +85,6 @@ export const api = {
   },
 
   /**
-   * Save tone adjustments to XMP sidecar for Adobe Camera Raw compatibility
-   */
-  updateToneAdjustments: async (
-    filePath: string,
-    tone: ToneAdjustments,
-  ): Promise<boolean> => {
-    return await invoke<boolean>('update_tone_adjustments_cmd', {
-      filePath,
-      tone,
-    });
-  },
-
-  /**
    * Open image in Luminar AI using Photoshop Plugin mode and return edited image path
    */
   openInLuminarRoundtrip: async (filePath: string): Promise<string> => {
