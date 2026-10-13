@@ -337,12 +337,12 @@ export function useKeyboardShortcuts({
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (isDialogOpen()) return;
-
       const el = e.target as Element | null;
 
-      // '\' 同样必须早于通用守卫：keydown 已让 range 触发按住查看，若这里被
-      // isFormControlOrEditing 拦掉，则松手无法复位 → 预览横幅常亮（M-09）。
+      // 反斜杠复位必须早于 isDialogOpen 守卫（S-03）。按住期间若打开了任何
+      // 弹窗，松键会被守卫整段吞掉 -> holdActiveRef 复位不了 -> 预览横幅常亮。
+      // 原注释自称「必须早于通用守卫」，但 isDialogOpen() 就在它上面 ——
+      // 注释与实现不符。松键复位是幂等的，故上提到守卫之前是安全的。
       if (e.key === '\\') {
         if (isTextEntry(el)) return;
         e.preventDefault();
@@ -351,6 +351,7 @@ export function useKeyboardShortcuts({
         return;
       }
 
+      if (isDialogOpen()) return;
       if (isFormControlOrEditing(el)) return;
     };
 

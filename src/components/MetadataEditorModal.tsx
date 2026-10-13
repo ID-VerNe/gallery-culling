@@ -162,7 +162,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
             disabled={isSaving}
             className="focus-ring px-4 py-2 text-xs font-medium text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/10 disabled:hover:text-white/80"
           >
-            取消
+            {saveResult ? '关闭' : '取消'}
           </button>
           <button
             onClick={handleSave}
@@ -326,7 +326,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
 
       {/* Info note */}
       <div className="p-3 bg-blue-950/30 border border-blue-800/40 rounded-xl text-blue-100 text-[11px] leading-relaxed">
-        💡 保存后将自动为所选照片写入符合 Adobe 标准的 aux:Lens 和 exif:FocalLength
+        保存后将自动为所选照片写入符合 Adobe 标准的 aux:Lens 和 exif:FocalLength
         侧边栏，保留现有星标与标记，导入 Lightroom Classic 或 Photoshop ACR
         即刻识别。
       </div>

@@ -81,5 +81,17 @@ export const useLumenPreview = (
     };
   }, [groupId, hasJpg, available, rawPath, width]);
 
+  // UX-31：attemptsRef 只增不删 —— MAX_ATTEMPTS 只是阻止同一张反复重试，
+  // 但 Map 每浏览一张新照片就多一个条目。万张规模的浏览会话会让它无界增长，
+  // 而键（group id）在会话内早已失去意义。按分组切换时驱逐旧条目。
+  useEffect(() => {
+    const attempts = attemptsRef.current;
+    return () => {
+      // 卸载/切换后清理本分组累积的计数，避免长会话无限堆积。
+      // 只清当前 groupId 的键，不碰其它分组正在进行的重试状态。
+      if (groupId) attempts.delete(groupId);
+    };
+  }, [groupId]);
+
   return { url, loading, failed };
 };
