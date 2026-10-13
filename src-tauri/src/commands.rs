@@ -124,6 +124,29 @@ where
         .map_err(|e| format!("{}: {}", msg, e))
 }
 
+/// Lumen 引擎「可用性」判定，**不可用即 Err**，两条错误文案逐字保留。
+///
+/// 与 `lumen_exe` 的区别只在于"说什么"：本函数用于必须走引擎路径的命令
+/// （写 recipe / 探测能力 / 应用预设 / 应用蒙版），不可用就是调用失败。
+fn require_lumen(settings: &AppSettings) -> Result<PathBuf, String> {
+    if !settings.lumen_enabled {
+        return Err("未启用 LUMEN RAW 引擎".to_string());
+    }
+    lumen::find_lumen_cli(&settings.lumen_cli_path).ok_or_else(|| "未找到 lumen-cli".to_string())
+}
+
+/// Lumen 引擎「可用性」判定，**不可用即 None**，降级语义由调用方自己决定。
+///
+/// 「引擎未启用」与「未找到 lumen-cli」在全部调用点都导向同一个后续动作
+/// （放弃引擎路径），差异仅在降级文案，因此可安全合并为一次判定。
+/// 调用方返回各自的 `Ok(降级值)`（status / preview / recipe / 蒙版…）。
+fn lumen_exe(settings: &AppSettings) -> Option<PathBuf> {
+    if !settings.lumen_enabled {
+        return None;
+    }
+    lumen::find_lumen_cli(&settings.lumen_cli_path)
+}
+
 /// 请求取消正在进行的扫描（幂等：没有进行中的任务时调用也安全）。
 #[tauri::command]
 pub fn cancel_scan_cmd(state: State<'_, AppState>) -> Result<(), String> {
@@ -927,12 +950,8 @@ pub async fn lumen_preview_cmd(
         cached: false,
     };
 
-    if !settings.lumen_enabled {
+    let Some(exe) = lumen_exe(&settings) else {
         return Ok(unavailable());
-    }
-    let exe = match lumen::find_lumen_cli(&settings.lumen_cli_path) {
-        Some(e) => e,
-        None => return Ok(unavailable()),
     };
 
     let src = PathBuf::from(&file_path);
@@ -1013,12 +1032,8 @@ pub async fn lumen_sync_ratings_cmd(
     folder: String,
 ) -> Result<LumenRatingSync, String> {
     let settings = state.db.load_settings()?;
-    if !settings.lumen_enabled {
-        return Ok(LumenRatingSync::default()); // 引擎关闭 → 零请求
-    }
-    let exe = match lumen::find_lumen_cli(&settings.lumen_cli_path) {
-        Some(e) => e,
-        None => return Ok(LumenRatingSync::default()), // 未安装 → 静默降级
+    let Some(exe) = lumen_exe(&settings) else {
+        return Ok(LumenRatingSync::default()); // 不可用 → 静默降级，零请求
     };
     let runtime = state.lumen.clone();
     let db = state.db.clone();
@@ -1104,12 +1119,8 @@ pub async fn lumen_get_recipe_cmd(
         tone: ToneAdjustments::default(),
         monochrome: false,
     };
-    if !settings.lumen_enabled {
+    let Some(exe) = lumen_exe(&settings) else {
         return Ok(unavailable());
-    }
-    let exe = match lumen::find_lumen_cli(&settings.lumen_cli_path) {
-        Some(e) => e,
-        None => return Ok(unavailable()),
     };
 
     blocking("读取 recipe 任务异常", move || {
@@ -1140,11 +1151,7 @@ pub async fn lumen_apply_recipe_cmd(
     recipe_json: String,
 ) -> Result<(), String> {
     let settings = state.db.load_settings()?;
-    if !settings.lumen_enabled {
-        return Err("未启用 LUMEN RAW 引擎".to_string());
-    }
-    let exe = lumen::find_lumen_cli(&settings.lumen_cli_path)
-        .ok_or_else(|| "未找到 lumen-cli".to_string())?;
+    let exe = require_lumen(&settings)?;
     let runtime = state.lumen.clone();
 
     blocking("应用 recipe 任务异常", move || {
@@ -1167,11 +1174,7 @@ pub async fn lumen_capabilities_cmd(
     state: State<'_, AppState>,
 ) -> Result<lumen::LumenCapabilities, String> {
     let settings = state.db.load_settings()?;
-    if !settings.lumen_enabled {
-        return Err("未启用 LUMEN RAW 引擎".to_string());
-    }
-    let exe = lumen::find_lumen_cli(&settings.lumen_cli_path)
-        .ok_or_else(|| "未找到 lumen-cli".to_string())?;
+    let exe = require_lumen(&settings)?;
     let runtime = state.lumen.clone();
     blocking("能力探测任务异常", move || {
         runtime.capabilities(&exe).map_err(|e| e.to_string())
@@ -1188,11 +1191,7 @@ pub async fn lumen_apply_preset_cmd(
     amount: Option<u8>,
 ) -> Result<(), String> {
     let settings = state.db.load_settings()?;
-    if !settings.lumen_enabled {
-        return Err("未启用 LUMEN RAW 引擎".to_string());
-    }
-    let exe = lumen::find_lumen_cli(&settings.lumen_cli_path)
-        .ok_or_else(|| "未找到 lumen-cli".to_string())?;
+    let exe = require_lumen(&settings)?;
     let runtime = state.lumen.clone();
     blocking("应用预设任务异常", move || {
         runtime
@@ -1309,12 +1308,8 @@ pub async fn get_tone_state_cmd(
         ..Default::default()
     };
 
-    if !settings.lumen_enabled {
-        return Ok(result); // 引擎关闭 → 零请求
-    }
-    let exe = match lumen::find_lumen_cli(&settings.lumen_cli_path) {
-        Some(e) => e,
-        None => return Ok(result),
+    let Some(exe) = lumen_exe(&settings) else {
+        return Ok(result); // 不可用 → 零请求，沿用 XMP 读回的状态
     };
     let runtime = state.lumen.clone();
     let lumen_tone = blocking_value("读取调色状态任务异常", move || {
@@ -1361,11 +1356,7 @@ pub async fn lumen_apply_mask_cmd(
     adjustments: MaskAdjustments,
 ) -> Result<LumenMaskResult, String> {
     let settings = state.db.load_settings()?;
-    if !settings.lumen_enabled {
-        return Err("未启用 LUMEN RAW 引擎".to_string());
-    }
-    let exe = lumen::find_lumen_cli(&settings.lumen_cli_path)
-        .ok_or_else(|| "未找到 lumen-cli".to_string())?;
+    let exe = require_lumen(&settings)?;
     if !lumen::detect_ai_flavor(&exe) {
         return Err(
             "当前 LUMEN RAW 是 CPU 版，不含 AI 蒙版模型。请改用 GPU 版路径（设置里指定）。"
@@ -1400,12 +1391,8 @@ pub async fn lumen_list_masks_cmd(
     file_path: String,
 ) -> Result<Vec<serde_json::Value>, String> {
     let settings = state.db.load_settings()?;
-    if !settings.lumen_enabled {
+    let Some(exe) = lumen_exe(&settings) else {
         return Ok(Vec::new());
-    }
-    let exe = match lumen::find_lumen_cli(&settings.lumen_cli_path) {
-        Some(e) => e,
-        None => return Ok(Vec::new()),
     };
     let runtime = state.lumen.clone();
     blocking_value("读取蒙版任务异常", move || {
