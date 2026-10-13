@@ -1,6 +1,4 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { check } from '@tauri-apps/plugin-updater';
-import { relaunch } from '@tauri-apps/plugin-process';
 import { TopBar } from './components/TopBar';
 import { ThumbnailGrid } from './components/ThumbnailGrid';
 import { PreviewViewport } from './components/PreviewViewport';
@@ -16,6 +14,7 @@ import { ConfirmDialog } from './components/ConfirmDialog';
 import { ToastProvider, useToast } from './components/Toast';
 import { TaskProgressBar } from './components/TaskProgressBar';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { useAutoUpdate } from './hooks/useAutoUpdate';
 import { useSessionDebounce } from './hooks/useSessionDebounce';
 import { useTaskProgress } from './hooks/useTaskProgress';
 import { isTaskCancelled } from './services/taskApi';
@@ -49,6 +48,7 @@ const FLAG_LABELS: Record<CullFlag, string> = {
 
 function AppShell() {
   const toast = useToast();
+  const { dialog: updateDialog } = useAutoUpdate();
 
   // 扫描的进度与取消（M-05）。解构出**稳定引用**的成员：`start/finish/
   // isCancelRequested` 都不随进度变化，因此 `handleScan` 的 identity 不会
@@ -134,8 +134,6 @@ function AppShell() {
     { run: () => void } | null
   >(null);
   /** A1：更新下载/安装进行中（弹窗保持可见并显示进度）。 */
-  const [updateBusy, setUpdateBusy] = useState(false);
-  const [updateStatus, setUpdateStatus] = useState('');
 
   // Grid search (progressive disclosure; owned here so the TopBar toggle and
   // the grid can share it across the tonal-panel swap).
@@ -154,12 +152,6 @@ function AppShell() {
   const [isLuminarRunning, setIsLuminarRunning] = useState(false);
   const [isHoldOriginal, setIsHoldOriginal] = useState(false);
 
-  // Updater prompt
-  const [pendingUpdate, setPendingUpdate] = useState<{
-    version: string;
-    body: string;
-    install: () => Promise<void>;
-  } | null>(null);
 
   // The <img> currently rendered in the single-view viewport, so auto-tone can
   // sample the histogram without a fragile DOM query (F-15).
@@ -222,60 +214,6 @@ function AppShell() {
           '无法读取本地设置，将使用默认值。\n如果你的默认文件夹没有自动填充，请到「设置」中重新指定。',
         );
       });
-
-    // Check for updates
-    const checkForUpdates = async () => {
-      try {
-        const update = await check();
-        if (!update) return;
-        setPendingUpdate({
-          version: update.version,
-          body: update.body || '修复已知问题，优化体验。',
-          install: async () => {
-            // A1：安装期间保持弹窗可见并显示进度，避免"点了没反应以为死机"。
-            setUpdateBusy(true);
-            setUpdateStatus('正在准备下载…');
-            let downloaded = 0;
-            let total: number | null = null;
-            try {
-              await update.downloadAndInstall((event) => {
-                if (event.event === 'Started') {
-                  total = event.data.contentLength ?? null;
-                  setUpdateStatus('正在下载…');
-                } else if (event.event === 'Progress') {
-                  downloaded += event.data.chunkLength;
-                  setUpdateStatus(
-                    total
-                      ? `正在下载 ${Math.min(
-                          100,
-                          Math.round((downloaded / total) * 100),
-                        )}%`
-                      : '正在下载…',
-                  );
-                } else if (event.event === 'Finished') {
-                  setUpdateStatus('正在安装，即将重启…');
-                }
-              });
-              await relaunch();
-            } catch (err) {
-              console.error('Failed to install update:', err);
-              setUpdateBusy(false);
-              setUpdateStatus('');
-              setPendingUpdate(null);
-              toast.error(
-                `升级失败：${String(err)}\n请检查网络后重试，或到发布页手动下载安装包。`,
-              );
-            }
-          },
-        });
-      } catch (err) {
-        // Silent by design: a failed update check is not actionable for the user.
-        console.error('Failed to check for updates:', err);
-      }
-    };
-    // small delay to not block initial render
-    const timer = window.setTimeout(checkForUpdates, 1500);
-    return () => window.clearTimeout(timer);
   }, [toast]);
 
   // Filtered list of groups — the app's current working set.
@@ -1742,27 +1680,7 @@ function AppShell() {
         onClose={() => setIsShortcutHelpOpen(false)}
       />
 
-      {/* Update prompt — a real decision with release notes, not a toast */}
-      <ConfirmDialog
-        isOpen={pendingUpdate !== null}
-        onClose={() => {
-          // A1：下载/安装进行中不许关窗（否则进度无从查看，用户以为卡死）。
-          if (!updateBusy) setPendingUpdate(null);
-        }}
-        onConfirm={() => void pendingUpdate?.install()}
-        title={`发现新版本 ${pendingUpdate?.version ?? ''}`}
-        message={
-          <>
-            {`更新内容：\n${pendingUpdate?.body ?? ''}`}
-            {'\n\n是否立即下载并升级？升级完成后应用会自动重启。'}
-          </>
-        }
-        confirmLabel="下载并升级"
-        cancelLabel="稍后再说"
-        busy={updateBusy}
-        busyLabel={updateStatus || '正在更新…'}
-        closeOnConfirm={false}
-      />
+      {updateDialog}
 
       {/* B1：批量写盘前的确认（≥2 张才进入这里，写盘不可轻易回退） */}
       <ConfirmDialog
