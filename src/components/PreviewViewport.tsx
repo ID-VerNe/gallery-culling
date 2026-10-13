@@ -245,7 +245,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
       {lumenPreview.loading && !lumenPreview.url && (
         <div
           role="status"
-          className="absolute top-4 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3.5 py-1.5 rounded-md text-xs font-semibold text-white/80 border border-white/10 pointer-events-none"
+          className="absolute top-4 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3.5 py-1.5 rounded-md text-xs font-semibold text-white/80 border border-default pointer-events-none"
         >
           正在渲染 RAW…
         </div>
@@ -296,7 +296,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
 
       {/* Floating EXIF capsule at Top-Right (Text selectable) */}
       {group.exif && (
-        <div className="absolute top-3 right-3 bg-background-base/75 backdrop-blur-md px-3.5 py-2.5 rounded-lg text-xs text-white/80 flex flex-col gap-1 border border-white/10 pointer-events-auto select-text max-w-[16rem]">
+        <div className="absolute top-3 right-3 bg-background-base/75 backdrop-blur-md px-3.5 py-2.5 rounded-lg text-xs text-white/80 flex flex-col gap-1 border border-default pointer-events-auto select-text max-w-[16rem]">
           <div className="font-semibold text-white truncate">
             {group.exif.cameraModel || group.exif.cameraMake || '未知相机'}
           </div>
@@ -360,7 +360,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
             <button
               key={star}
               onClick={() => onRate(group.rating === star ? 0 : star)}
-              className="focus-ring p-1 hover:scale-125 active:scale-95 rounded-sm transition-transform"
+              className="focus-ring tap-target p-1 hover:scale-125 active:scale-95 rounded-sm transition-transform"
               title={`评 ${star} 星（${star}）`}
               aria-label={`评 ${star} 星`}
               aria-pressed={group.rating >= star}
@@ -424,7 +424,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           <button
             onClick={() => zoomBy(1 / ZOOM_STEP)}
             disabled={scale <= MIN_SCALE}
-            className="focus-ring p-1.5 text-white/60 hover:text-white hover:bg-white/10 active:scale-[0.96] disabled:opacity-40 disabled:cursor-not-allowed rounded-md transition-colors"
+            className="focus-ring tap-target p-1.5 text-white/60 hover:text-white hover:bg-white/10 active:scale-[0.96] disabled:opacity-40 disabled:cursor-not-allowed rounded-md transition-colors"
             title="缩小"
             aria-label="缩小"
           >
@@ -439,7 +439,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           <button
             onClick={() => zoomBy(ZOOM_STEP)}
             disabled={scale >= MAX_SCALE}
-            className="focus-ring p-1.5 text-white/60 hover:text-white hover:bg-white/10 active:scale-[0.96] disabled:opacity-40 disabled:cursor-not-allowed rounded-md transition-colors"
+            className="focus-ring tap-target p-1.5 text-white/60 hover:text-white hover:bg-white/10 active:scale-[0.96] disabled:opacity-40 disabled:cursor-not-allowed rounded-md transition-colors"
             title="放大"
             aria-label="放大"
           >
@@ -447,7 +447,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           </button>
           <button
             onClick={resetView}
-            className="focus-ring p-1.5 text-white/60 hover:text-white hover:bg-white/10 active:scale-[0.96] rounded-md transition-colors"
+            className="focus-ring tap-target p-1.5 text-white/60 hover:text-white hover:bg-white/10 active:scale-[0.96] rounded-md transition-colors"
             title={`重置缩放与平移（当前 ${zoomLabel}）`}
             aria-label={`重置缩放与平移，当前 ${zoomLabel}`}
           >
@@ -476,7 +476,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           <button
             onClick={onOpenLuminar}
             disabled={isLuminarRunning}
-            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-white/10 hover:bg-white/20 text-white border border-white/10 active:scale-[0.96] disabled:opacity-50 disabled:cursor-not-allowed rounded-md text-xs font-medium transition-colors"
+            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-white/10 hover:bg-white/20 text-white border border-default active:scale-[0.96] disabled:opacity-50 disabled:cursor-not-allowed rounded-md text-xs font-medium transition-colors"
             title="Luminar AI 修图"
             aria-label="在 Luminar AI 中修图"
           >

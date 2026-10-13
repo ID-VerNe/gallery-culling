@@ -213,7 +213,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <>
           <button
             onClick={requestClose}
-            className="focus-ring px-3.5 py-1.5 rounded-md bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white/80 transition-colors"
+            className="focus-ring px-3.5 py-1.5 rounded-md bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white/80 transition-colors"
           >
             取消
           </button>
@@ -238,7 +238,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <button
             type="button"
             onClick={loadSettings}
-            className="focus-ring px-3 py-1.5 rounded-md bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white/80 transition-colors"
+            className="focus-ring px-3 py-1.5 rounded-md bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white/80 transition-colors"
           >
             重试
           </button>
@@ -270,7 +270,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               />
               <button
                 onClick={handleBrowsePhotoshop}
-                className="focus-ring px-3 py-1.5 bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white rounded-md flex items-center gap-1 transition-colors shrink-0"
+                className="focus-ring px-3 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white rounded-md flex items-center gap-1 transition-colors shrink-0"
                 title="选择 Photoshop 路径"
                 aria-label="选择 Photoshop 路径"
               >
@@ -323,7 +323,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               />
               <button
                 onClick={handleBrowseLumen}
-                className="focus-ring px-3 py-1.5 bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white rounded-md flex items-center gap-1 transition-colors shrink-0"
+                className="focus-ring px-3 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white rounded-md flex items-center gap-1 transition-colors shrink-0"
                 title="选择 lumen-cli 路径"
                 aria-label="选择 lumen-cli 路径"
               >
@@ -342,7 +342,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <button
                 onClick={handleTestLumen}
                 disabled={isProbing}
-                className="focus-ring flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white rounded-md text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="focus-ring flex items-center gap-1.5 px-3 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white rounded-md text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 title="用当前输入框里的路径探测引擎是否可用"
                 aria-label="测试 LUMEN RAW 连接"
               >
@@ -445,7 +445,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <button
                   onClick={handleSyncRatings}
                   disabled={isSyncing}
-                  className="focus-ring flex items-center justify-center gap-1.5 py-2 px-3 bg-white/5 hover:bg-white/10 active:scale-[0.98] text-white rounded-md text-xs transition-colors disabled:opacity-50"
+                  className="focus-ring flex items-center justify-center gap-1.5 py-2 px-3 bg-background-surface-hover hover:bg-white/10 active:scale-[0.98] text-white rounded-md text-xs transition-colors disabled:opacity-50"
                   title="从 LUMEN RAW 拉取该文件夹的星级/旗标并写回 .xmp"
                 >
                   {isSyncing ? '同步中…' : '从 LUMEN RAW 同步评级'}

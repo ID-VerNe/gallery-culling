@@ -196,7 +196,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
               key={preset.name}
               type="button"
               onClick={() => handleApplyPreset(preset)}
-              className="focus-ring px-2.5 py-1 bg-white/5 hover:bg-white/10 border border-white/15 text-white/80 hover:text-white rounded-md text-[11px] transition-colors text-left"
+              className="focus-ring px-2.5 py-1 bg-background-surface-hover hover:bg-white/10 border border-white/15 text-white/80 hover:text-white rounded-md text-[11px] transition-colors text-left"
               aria-label={`套用预设 ${preset.name}，${preset.focal}，${preset.aperture}`}
             >
               {preset.name}
@@ -298,7 +298,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
                 className={`focus-ring flex flex-col items-center justify-center gap-1 p-2.5 rounded-xl border text-center cursor-pointer transition-colors ${
                   checked
                     ? 'border-white/60 bg-white/15 text-white font-medium'
-                    : 'border-white/10 bg-white/5 text-white/70 hover:text-white hover:bg-white/10'
+                    : 'border-default bg-background-surface-hover text-white/70 hover:text-white hover:bg-white/10'
                 }`}
               >
                 <input

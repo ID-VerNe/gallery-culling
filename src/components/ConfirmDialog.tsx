@@ -59,7 +59,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
           <button
             onClick={onClose}
             disabled={busy}
-            className="focus-ring px-3.5 py-1.5 rounded-md bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white/80 transition-transform disabled:opacity-40 disabled:cursor-not-allowed"
+            className="focus-ring px-3.5 py-1.5 rounded-md bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white/80 transition-transform disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {cancelLabel}
           </button>

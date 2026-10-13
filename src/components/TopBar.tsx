@@ -105,7 +105,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   const tonalDisabled = !!tonalToggleDisabled;
 
   return (
-    <header className="bg-background-base/80 backdrop-blur-md border-b border-white/10 flex flex-col gap-1 px-3 py-1.5 shrink-0 text-xs">
+    <header className="bg-background-base/80 backdrop-blur-md border-b border-default flex flex-col gap-1 px-3 py-1.5 shrink-0 text-xs">
       {/* -----------------------------------------------------------
           Row 1 — where the photos come from.
           Two independent rows instead of one 56px bar: the previous
@@ -127,7 +127,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
 
         {/* JPG Folder */}
-        <div className="flex items-center gap-1.5 flex-1 min-w-0 bg-white/5 rounded-md px-2.5 py-1 focus-within:bg-white/10 transition-colors">
+        <div className="flex items-center gap-1.5 flex-1 min-w-0 bg-background-surface-hover rounded-md px-2.5 py-1 focus-within:bg-white/10 transition-colors">
           <label
             htmlFor="topbar-jpg-input"
             className="text-white/60 font-semibold whitespace-nowrap cursor-pointer"
@@ -154,7 +154,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
 
         {/* RAW Folder (optional) */}
-        <div className="flex items-center gap-1.5 flex-1 min-w-0 bg-white/5 rounded-md px-2.5 py-1 focus-within:bg-white/10 transition-colors">
+        <div className="flex items-center gap-1.5 flex-1 min-w-0 bg-background-surface-hover rounded-md px-2.5 py-1 focus-within:bg-white/10 transition-colors">
           <label
             htmlFor="topbar-raw-input"
             className="text-white/60 font-semibold whitespace-nowrap cursor-pointer"
@@ -206,7 +206,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         {/* Settings */}
         <button
           onClick={onOpenSettingsModal}
-          className="focus-ring p-1.5 text-white/60 hover:text-white hover:bg-white/5 rounded-md active:scale-[0.96] transition-transform shrink-0"
+          className="focus-ring p-1.5 text-white/60 hover:text-white hover:bg-background-surface-hover rounded-md active:scale-[0.96] transition-transform shrink-0"
           title="设置"
           aria-label="设置"
         >
@@ -220,7 +220,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           ----------------------------------------------------------- */}
       <div className="flex items-center gap-2 flex-wrap min-w-0">
         {/* Filter */}
-        <div className="flex items-center gap-1.5 bg-background-base border border-white/10 rounded-md px-2 py-1 text-white/80">
+        <div className="flex items-center gap-1.5 bg-background-base border border-default rounded-md px-2 py-1 text-white/80">
           <SlidersHorizontal
             className="w-3.5 h-3.5 text-white/60"
             aria-hidden="true"
@@ -246,7 +246,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
 
         {/* Sort */}
-        <div className="bg-background-base border border-white/10 rounded-md px-2 py-1 text-white/80">
+        <div className="bg-background-base border border-default rounded-md px-2 py-1 text-white/80">
           <select
             value={sortOrder}
             onChange={(e) => onSortChange(e.target.value as SortOrder)}
@@ -271,7 +271,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
           {/* View mode segmented control — text labels, not mystery meat */}
           <div
-            className="flex items-center bg-white/5 rounded-md p-0.5"
+            className="flex items-center bg-background-surface-hover rounded-md p-0.5"
             role="group"
             aria-label="视图检视模式"
           >
@@ -301,10 +301,10 @@ export const TopBar: React.FC<TopBarProps> = ({
               disabled={tonalDisabled}
               className={`focus-ring flex items-center gap-1.5 px-3 py-1 rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap ${
                 tonalDisabled
-                  ? 'bg-white/5 text-white/40 cursor-not-allowed'
+                  ? 'bg-background-surface-hover text-white/40 cursor-not-allowed'
                   : tonalVisible
                   ? 'bg-white text-black shadow-sm'
-                  : 'bg-white/5 hover:bg-white/10 text-white'
+                  : 'bg-background-surface-hover hover:bg-white/10 text-white'
               }`}
               title={tonalDisabled ? '当前筛选没有照片' : '调色 (快捷键 E)'}
               aria-label="调色面板"
@@ -322,7 +322,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             <button
               onClick={onOpenLuminar}
               disabled={isLuminarRunning}
-              className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-white/5 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap"
+              className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap"
               title="在 Luminar AI 中精修当前照片"
               aria-label="Luminar AI 精修"
             >
@@ -341,7 +341,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           {/* Batch Export */}
           <button
             onClick={onOpenExportModal}
-            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-white/5 hover:bg-white/10 text-white rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap"
+            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 text-white rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap"
             title="批量挑选导出"
             aria-label="批量挑选导出照片"
           >

@@ -138,7 +138,7 @@ export const TaskProgressBar: React.FC<TaskProgressBarProps> = ({
             type="button"
             onClick={onCancel}
             disabled={cancelRequested}
-            className="focus-ring flex items-center gap-1 px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white/80 disabled:bg-white/5 disabled:text-white/40 disabled:cursor-not-allowed transition-colors"
+            className="focus-ring flex items-center gap-1 px-2.5 py-1 rounded-md bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white/80 disabled:bg-background-surface-hover disabled:text-white/40 disabled:cursor-not-allowed transition-colors"
           >
             <X className="w-3 h-3" aria-hidden="true" />
             <span>{cancelRequested ? '取消中…' : '取消'}</span>

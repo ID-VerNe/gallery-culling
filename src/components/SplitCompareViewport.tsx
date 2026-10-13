@@ -356,7 +356,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
         {lumen.loading && (
           <div
             role="status"
-            className="absolute top-3 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3 py-1 rounded-md text-[11px] font-semibold text-white/80 border border-white/10 pointer-events-none"
+            className="absolute top-3 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3 py-1 rounded-md text-[11px] font-semibold text-white/80 border border-default pointer-events-none"
           >
             正在渲染 RAW…
           </div>
@@ -376,7 +376,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
 
         {/* Top title, Reference status & Pin button */}
         <div className="absolute top-3 left-3 flex items-center gap-2 select-none pointer-events-auto flex-wrap max-w-[calc(100%-1.5rem)]">
-          <div className="bg-background-base/85 backdrop-blur px-3 py-1.5 rounded-lg text-xs text-white flex items-center gap-2 border border-white/10 select-text">
+          <div className="bg-background-base/85 backdrop-blur px-3 py-1.5 rounded-lg text-xs text-white flex items-center gap-2 border border-default select-text">
             <span className="font-mono font-medium">{group.baseName}</span>
             {group.exif && (
               <span className="text-[11px] text-white/70 font-mono tabular-nums">
@@ -438,7 +438,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
               <button
                 key={star}
                 onClick={() => onRate(group, group.rating === star ? 0 : star)}
-                className="focus-ring p-1 hover:scale-125 active:scale-95 rounded-sm transition-transform"
+                className="focus-ring tap-target p-1 hover:scale-125 active:scale-95 rounded-sm transition-transform"
                 title={`评 ${star} 星`}
                 aria-label={`为 ${group.baseName} 评 ${star} 星`}
                 aria-pressed={group.rating >= star}
@@ -498,7 +498,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
   return (
     <div className="flex-1 flex flex-col h-full w-full bg-background-surface relative">
       {/* Top Sync & Compare Control Bar */}
-      <div className="h-9 bg-background-base border-b border-white/10 flex items-center justify-between gap-2 px-3 text-xs text-white/80 select-none">
+      <div className="h-9 bg-background-base border-b border-default flex items-center justify-between gap-2 px-3 text-xs text-white/80 select-none">
         <div className="flex items-center gap-2 font-medium min-w-0">
           <Columns2 className="w-4 h-4 text-white shrink-0" aria-hidden="true" />
           <span className="whitespace-nowrap">双图对比视图</span>
@@ -528,7 +528,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             <button
               onClick={() => zoomBy(1 / ZOOM_STEP)}
               disabled={effectiveScale <= MIN_SCALE}
-              className="focus-ring p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-l active:scale-[0.96] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-l active:scale-[0.96] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               title="缩小"
               aria-label="缩小双图"
             >
@@ -560,7 +560,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             <button
               onClick={() => zoomBy(ZOOM_STEP)}
               disabled={effectiveScale >= MAX_SCALE}
-              className="focus-ring p-1 text-white/70 hover:text-white hover:bg-white/15 active:scale-[0.96] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 active:scale-[0.96] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               title="放大"
               aria-label="放大双图"
             >
@@ -568,7 +568,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             </button>
             <button
               onClick={resetView}
-              className="focus-ring p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-r active:scale-[0.96] transition-colors"
+              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-r active:scale-[0.96] transition-colors"
               title={`重置缩放与平移（当前 ${scaleLabel(effectiveScale)}）`}
               aria-label="重置缩放与平移"
             >
@@ -582,7 +582,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             className={`focus-ring flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium active:scale-[0.96] transition-colors ${
               syncZoom
                 ? 'bg-white text-black shadow-sm'
-                : 'bg-white/5 text-white/70 hover:text-white hover:bg-white/10'
+                : 'bg-background-surface-hover text-white/70 hover:text-white hover:bg-white/10'
             }`}
             title="开启后双图同步缩放和平移；关闭后滚轮/拖拽/± 只作用于聚焦窗格"
             aria-label="切换双图联动同步缩放"

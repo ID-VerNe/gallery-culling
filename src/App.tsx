@@ -1515,7 +1515,7 @@ function AppShell() {
 
       {/* Scan progress (M-05) — 空闲时不渲染，不留空白条 */}
       <TaskProgressBar
-        className="px-4 py-2 border-b border-white/10 bg-background-header shrink-0"
+        className="px-4 py-2 border-b border-default bg-background-header shrink-0"
         isRunning={scanTask.isRunning}
         processed={scanTask.progress?.processed ?? 0}
         total={scanTask.progress?.total ?? 0}
@@ -1528,7 +1528,7 @@ function AppShell() {
 
       {/* B1：批量写盘进度（逐张写 XMP，可跳过剩余） */}
       <TaskProgressBar
-        className="px-4 py-2 border-b border-white/10 bg-background-header shrink-0"
+        className="px-4 py-2 border-b border-default bg-background-header shrink-0"
         isRunning={batchProgress !== null}
         processed={batchProgress?.processed ?? 0}
         total={batchProgress?.total ?? 0}

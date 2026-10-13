@@ -243,7 +243,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
                 ? '导出进行中：请等待完成或点击「取消」，关闭不会停止导出'
                 : undefined
             }
-            className="focus-ring px-3.5 py-1.5 rounded-md bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/5"
+            className="focus-ring px-3.5 py-1.5 rounded-md bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-background-surface-hover"
           >
             关闭
           </button>
@@ -285,7 +285,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
           />
           <button
             onClick={handleBrowseTarget}
-            className="focus-ring px-3.5 py-1.5 bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white rounded-md flex items-center gap-1.5 transition-colors shrink-0"
+            className="focus-ring px-3.5 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white rounded-md flex items-center gap-1.5 transition-colors shrink-0"
           >
             <FolderOpen className="w-3.5 h-3.5" aria-hidden="true" />
             <span>浏览</span>
@@ -301,13 +301,13 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
       {/* Filter Range */}
       <fieldset>
         <legend className="text-white/80 font-medium mb-1.5">导出范围</legend>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-background-base p-2.5 rounded border border-white/10">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-background-base p-2.5 rounded border border-default">
           {FILTERS.map((filter) => {
             const count = groups.filter(filter.test).length;
             return (
               <label
                 key={filter.value}
-                className="focus-ring flex items-center gap-2 cursor-pointer rounded p-1 hover:bg-white/5 transition-colors"
+                className="focus-ring flex items-center gap-2 cursor-pointer rounded p-1 hover:bg-background-surface-hover transition-colors"
               >
                 <input
                   type="radio"
@@ -334,8 +334,8 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
         <legend className="text-white/80 font-medium mb-1.5">
           包含文件类型
         </legend>
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3 bg-background-base p-2.5 rounded border border-white/10">
-          <label className="focus-ring flex items-center gap-2 cursor-pointer rounded p-1 hover:bg-white/5 transition-colors">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 bg-background-base p-2.5 rounded border border-default">
+          <label className="focus-ring flex items-center gap-2 cursor-pointer rounded p-1 hover:bg-background-surface-hover transition-colors">
             <input
               type="checkbox"
               checked={includeRaw}
@@ -345,7 +345,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
             <span className="text-white/80">复制 RAW 原片及 XMP 侧边栏</span>
           </label>
 
-          <label className="focus-ring flex items-center gap-2 cursor-pointer rounded p-1 hover:bg-white/5 transition-colors">
+          <label className="focus-ring flex items-center gap-2 cursor-pointer rounded p-1 hover:bg-background-surface-hover transition-colors">
             <input
               type="checkbox"
               checked={includeJpg}
@@ -366,7 +366,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
         current={exportTask.progress?.current}
         onCancel={handleCancelExport}
         cancelRequested={exportTask.cancelRequested}
-        className="bg-background-base border border-white/10 rounded p-2.5"
+        className="bg-background-base border border-default rounded p-2.5"
       />
 
       {/* Result Message：成功走绿色 status，部分失败走琥珀色 alert（必须立即知晓） */}

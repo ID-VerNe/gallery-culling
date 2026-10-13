@@ -56,7 +56,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
     : `当前第 ${humanIndex} 张，共 ${totalCount} 张`;
 
   return (
-    <footer className="h-9 bg-background-base border-t border-white/10 flex items-center justify-between px-3 text-[11px] text-white/70 shrink-0 gap-3">
+    <footer className="h-9 bg-background-base border-t border-default flex items-center justify-between px-3 text-[11px] text-white/70 shrink-0 gap-3">
       {/* Left: Current File Info (Selectable text) */}
       <div className="flex items-center gap-3 select-text min-w-0">
         {currentGroup ? (
@@ -141,7 +141,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
 
         <button
           onClick={onOpenMetadataModal}
-          className="focus-ring hidden lg:flex items-center gap-1.5 px-2.5 py-1 bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white rounded-md font-medium transition-colors"
+          className="focus-ring hidden lg:flex items-center gap-1.5 px-2.5 py-1 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white rounded-md font-medium transition-colors"
           title="编辑镜头元数据 (M)"
           aria-label="编辑镜头元数据"
         >
@@ -152,7 +152,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         <button
           onClick={onUndo}
           disabled={!canUndo}
-          className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white disabled:bg-white/5 disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-colors"
+          className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white disabled:bg-background-surface-hover disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-colors"
           title={canUndo ? '撤销上一处星级/标记改动 (Ctrl+Z)' : '没有可撤销的改动'}
           aria-label="撤销上一处星级或标记改动"
         >
@@ -163,7 +163,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         <button
           onClick={onOpenExternal}
           disabled={!currentGroup}
-          className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/15 border border-white/20 text-white active:scale-[0.96] disabled:bg-white/5 disabled:border-white/10 disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-transform"
+          className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/15 border border-white/20 text-white active:scale-[0.96] disabled:bg-background-surface-hover disabled:border-default disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-transform"
           aria-label="在修图或外部程序中打开当前照片"
         >
           <ExternalLink className="w-3 h-3" aria-hidden="true" />
@@ -172,7 +172,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
 
         <button
           onClick={onOpenShortcutHelp}
-          className="focus-ring md:hidden p-1 text-white/60 hover:text-white hover:bg-white/5 rounded transition-colors"
+          className="focus-ring md:hidden p-1 text-white/60 hover:text-white hover:bg-background-surface-hover rounded transition-colors"
           title="查看全部快捷键 (?)"
           aria-label="查看全部快捷键"
         >

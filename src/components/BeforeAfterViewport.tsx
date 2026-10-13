@@ -291,7 +291,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
   return (
     <div className="flex-1 flex flex-col h-full w-full bg-background-surface relative select-none">
       {/* Top Header Control Bar */}
-      <div className="h-9 bg-background-base border-b border-white/10 flex items-center justify-between gap-2 px-3 text-xs text-white/80">
+      <div className="h-9 bg-background-base border-b border-default flex items-center justify-between gap-2 px-3 text-xs text-white/80">
         <div className="flex items-center gap-2 font-medium min-w-0">
           <Columns2 className="w-4 h-4 text-amber-400 shrink-0" aria-hidden="true" />
           <span className="whitespace-nowrap">本张照片前后对照 (Before / After)</span>
@@ -310,7 +310,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
             <button
               onClick={() => zoomBy(1 / ZOOM_STEP)}
               disabled={effectiveScale <= MIN_SCALE}
-              className="focus-ring p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-l active:scale-[0.96] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-l active:scale-[0.96] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               title="缩小"
               aria-label="缩小"
             >
@@ -342,7 +342,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
             <button
               onClick={() => zoomBy(ZOOM_STEP)}
               disabled={effectiveScale >= MAX_SCALE}
-              className="focus-ring p-1 text-white/70 hover:text-white hover:bg-white/15 active:scale-[0.96] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 active:scale-[0.96] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               title="放大"
               aria-label="放大"
             >
@@ -350,7 +350,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
             </button>
             <button
               onClick={resetView}
-              className="focus-ring p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-r active:scale-[0.96] transition-colors"
+              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-r active:scale-[0.96] transition-colors"
               title={`重置缩放与平移（当前 ${scaleLabel(effectiveScale)}）`}
               aria-label="重置缩放与平移"
             >
@@ -362,7 +362,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
           <button
             onClick={onOpenLuminar}
             disabled={isLuminarRunning}
-            className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/20 text-white border border-white/10 rounded text-[11px] font-semibold transition-colors active:scale-[0.96] disabled:opacity-50 disabled:cursor-not-allowed"
+            className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/20 text-white border border-default rounded text-[11px] font-semibold transition-colors active:scale-[0.96] disabled:opacity-50 disabled:cursor-not-allowed"
             title="Luminar AI 修图"
             aria-label="在 Luminar AI 中修图当前照片"
           >
@@ -393,7 +393,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
             className={`focus-ring flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium active:scale-[0.96] transition-colors border ${
               syncLock
                 ? 'bg-white/10 text-white border-white/25'
-                : 'bg-white/5 text-white/60 border-white/10 hover:text-white hover:bg-white/10'
+                : 'bg-background-surface-hover text-white/60 border-default hover:text-white hover:bg-white/10'
             }`}
             title={
               syncLock
@@ -461,7 +461,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
           {lumenPreview.loading && (
             <div
               role="status"
-              className="absolute top-3 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3 py-1 rounded-md text-[11px] font-semibold text-white/80 border border-white/10 pointer-events-none"
+              className="absolute top-3 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3 py-1 rounded-md text-[11px] font-semibold text-white/80 border border-default pointer-events-none"
             >
               正在渲染 RAW…
             </div>
@@ -522,7 +522,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
           {!hasLuminarEdit && !hasTone && (
             <div
               role="status"
-              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 bg-background-base/85 backdrop-blur-md px-3.5 py-1.5 rounded-md text-xs font-medium text-white/80 border border-white/10 pointer-events-none"
+              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 bg-background-base/85 backdrop-blur-md px-3.5 py-1.5 rounded-md text-xs font-medium text-white/80 border border-default pointer-events-none"
             >
               尚未调色，拖动滑杆查看效果
             </div>
@@ -574,7 +574,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
             <button
               key={star}
               onClick={() => onRate(group.rating === star ? 0 : star)}
-              className="focus-ring p-1 hover:scale-125 active:scale-95 rounded-sm transition-transform"
+              className="focus-ring tap-target p-1 hover:scale-125 active:scale-95 rounded-sm transition-transform"
               title={`评 ${star} 星（${star}）`}
               aria-label={`评 ${star} 星`}
               aria-pressed={group.rating >= star}

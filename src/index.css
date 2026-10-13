@@ -46,14 +46,18 @@
 
   /* ---------------------------------------------------------------
      Tone sliders
-     A 4px drawn track on a 20px hit area. The native `h-1` range is
+     A 4px drawn track on a 24px hit area. The native `h-1` range is
      only 4px tall — well under any comfortable pointer target.
+
+     T-06：命中区从 20px 提到 24px，达 WCAG 2.2 SC 2.5.8 的最低要求
+     （20px 是 F-17 修复时停下的位置，仍低于 24px 下限）。绘制轨道
+     仍是 4px，不改视觉重量，只扩大可点区域。
      --------------------------------------------------------------- */
   .tone-slider {
     -webkit-appearance: none;
     appearance: none;
     width: 100%;
-    height: 20px;
+    height: 24px;
     background: transparent;
     cursor: pointer;
     @apply outline-none;
@@ -161,6 +165,20 @@
   }
   [role='progressbar'] > * {
     background-color: Highlight;
+  }
+}
+
+/* ---------------------------------------------------------------
+   触控目标（WCAG 2.2 SC 2.5.8）
+   星标 / 缩放 / 图标小按钮在密集工具条里普遍只有 16-22px。SC 2.5.8
+   的最低要求是 24x24 CSS px（AAA 建议 44x44）；本项目是桌面端鼠标为主
+   的摄影工具，故按 24px 下限设工具类，把「实际可点区域」从视觉尺寸里解耦。
+   用 min-width/height 而非固定尺寸，不破坏既有布局。
+   --------------------------------------------------------------- */
+@layer components {
+  .tap-target {
+    min-width: 24px;
+    min-height: 24px;
   }
 }
 

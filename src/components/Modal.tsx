@@ -166,7 +166,7 @@ export const Modal: React.FC<ModalProps> = ({
         className={`relative bg-background-panel border border-border-default rounded-xl w-full ${maxWidth} max-h-[calc(100vh-2rem)] shadow-2xl flex flex-col overflow-hidden text-white text-xs outline-none`}
       >
         {/* Header */}
-        <div className="h-12 border-b border-white/10 px-4 flex items-center justify-between bg-background-header shrink-0">
+        <div className="h-12 border-b border-default px-4 flex items-center justify-between bg-background-header shrink-0">
           <div className="flex items-center gap-2 font-semibold text-sm text-white min-w-0">
             {icon}
             <h2 id={titleId} className="truncate">
@@ -177,7 +177,7 @@ export const Modal: React.FC<ModalProps> = ({
             onClick={onClose}
             disabled={disableClose}
             data-modal-close="true"
-            className="focus-ring text-white/60 hover:text-white p-1 rounded hover:bg-white/5 active:scale-[0.96] transition-transform shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-white/60"
+            className="focus-ring text-white/60 hover:text-white p-1 rounded hover:bg-background-surface-hover active:scale-[0.96] transition-transform shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-white/60"
             aria-label="关闭弹窗"
           >
             <X className="w-4 h-4" aria-hidden="true" />
@@ -197,7 +197,7 @@ export const Modal: React.FC<ModalProps> = ({
 
         {/* Footer */}
         {footer && (
-          <div className="border-t border-white/10 px-4 py-3 flex items-center justify-end gap-2 bg-background-header shrink-0">
+          <div className="border-t border-default px-4 py-3 flex items-center justify-end gap-2 bg-background-header shrink-0">
             {footer}
           </div>
         )}

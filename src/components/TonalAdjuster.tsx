@@ -229,12 +229,12 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
       id="tonal-adjuster-panel"
       tabIndex={-1}
       onClick={(e) => e.stopPropagation()}
-      className="bg-background-base border-l border-white/10 h-full w-full p-5 text-xs flex flex-col gap-4 overflow-y-auto"
+      className="bg-background-base border-l border-default h-full w-full p-5 text-xs flex flex-col gap-4 overflow-y-auto"
       role="region"
       aria-label="快速调色控制面板"
     >
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-white/10 pb-3">
+      <div className="flex items-center justify-between border-b border-default pb-3">
         <div className="flex items-center gap-2 font-medium text-white">
           <Sliders className="w-4 h-4 text-white/60" aria-hidden="true" />
           <span>调色</span>
@@ -250,7 +250,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
         </div>
         <button
           onClick={onClose}
-          className="focus-ring text-white/60 hover:text-white p-1 rounded-md hover:bg-white/5 transition-colors"
+          className="focus-ring text-white/60 hover:text-white p-1 rounded-md hover:bg-background-surface-hover transition-colors"
           title="关闭面板"
           aria-label="关闭面板"
         >
@@ -369,7 +369,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
             <button
               onClick={() => setPendingMask(true)}
               disabled={isMasking}
-              className="focus-ring shrink-0 px-2.5 py-1.5 bg-white/5 hover:bg-white/10 active:scale-[0.98] text-white rounded-md text-xs transition-colors disabled:opacity-50"
+              className="focus-ring shrink-0 px-2.5 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.98] text-white rounded-md text-xs transition-colors disabled:opacity-50"
               title="用 AI 检测该区域并只对它应用去薄雾"
             >
               {isMasking ? '检测中…' : '套用'}
@@ -418,11 +418,11 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
       )}
 
       {/* Action Buttons: Auto, Reset, Save to XMP */}
-      <div className="flex items-center gap-2 pt-3 mt-auto border-t border-white/10">
+      <div className="flex items-center gap-2 pt-3 mt-auto border-t border-default">
         {/* Auto Button */}
         <button
           onClick={triggerAutoTone}
-          className="focus-ring flex-1 flex items-center justify-center gap-1.5 py-2 px-2 bg-white/5 hover:bg-white/10 text-white font-medium rounded-lg text-xs active:scale-[0.98] transition-colors"
+          className="focus-ring flex-1 flex items-center justify-center gap-1.5 py-2 px-2 bg-background-surface-hover hover:bg-white/10 text-white font-medium rounded-lg text-xs active:scale-[0.98] transition-colors"
           title="基于直方图智能自适应计算"
           aria-label="智能自动调色"
         >
@@ -433,7 +433,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
         {/* Reset Button */}
         <button
           onClick={handleReset}
-          className="focus-ring p-2 text-white/60 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg active:scale-[0.98] transition-colors"
+          className="focus-ring p-2 text-white/60 hover:text-white bg-background-surface-hover hover:bg-white/10 rounded-lg active:scale-[0.98] transition-colors"
           title="重置所有参数"
           aria-label="重置调色滑块"
         >
