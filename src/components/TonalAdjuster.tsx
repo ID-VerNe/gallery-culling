@@ -163,6 +163,8 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
   // 先弹二次确认，确认后才真正下发，避免误点直接改到磁盘上。
   const [pendingPreset, setPendingPreset] = useState<string | null>(null);
   const [pendingMask, setPendingMask] = useState(false);
+  /** T-03：重置调色需二次确认（与预设/蒙版一致）。 */
+  const [pendingReset, setPendingReset] = useState(false);
 
   // 面板互换时（E 键 / 触发按钮）旧 DOM 被整棵卸载，焦点会退回 body。
   // 挂载时若焦点无主，就把焦点移入本面板容器，让读屏播报 region 名；
@@ -178,11 +180,20 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
   };
 
   const handleReset = () => {
+    // T-03：重置会一键抹掉 6 个调色值，且无 undo 栈可回退。同一面板里
+    // 「套用预设」「套用蒙版」都有 ConfirmDialog 保护，唯独重置没有 ——
+    // 一次误点就把刚调好的曝光/高光/阴影/色温/色调/对比度全部归零。
+    // 这里走二次确认，与预设/蒙版保持一致。
+    setPendingReset(true);
+  };
+
+  const confirmReset = () => {
     if (onReset) {
       onReset();
     } else {
       onChange({ ...DEFAULT_TONE });
     }
+    setPendingReset(false);
   };
 
   const triggerAutoTone = () => {
@@ -196,6 +207,8 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
     setMaskError(null);
     try {
       await onApplyMask(maskRegion, maskDehaze);
+      // 任务成功才关对话框（closeOnConfirm={false} 已阻止乐观关闭）。
+      setPendingMask(false);
     } catch (err) {
       console.error('AI 蒙版失败:', err);
       setMaskError(err instanceof Error ? err.message : String(err));
@@ -493,8 +506,30 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
           void handleApplyMaskClick();
         }}
         title="套用 AI 局部蒙版"
-        message={`AI 将在本地检测「${MASK_REGIONS.find((r) => r.id === maskRegion)?.label ?? maskRegion}」并应用去薄雾，结果会立即写入 LUMEN RAW 工程（约 4 秒），且无法在本应用内撤销。`}
+        message={`AI 将在本地检测「${MASK_REGIONS.find((r) => r.id === maskRegion)?.label ?? maskRegion}」并应用去薄雾，结果会立即写入 LUMEN RAW 工程（约 4 秒），且无法在本应用内撤销。${
+          // 失败后对话框不再自动关闭（closeOnConfirm={false}），若不把原因搬进
+          // 对话框，用户会盯着一个「什么都没发生」的弹窗 —— 真实错误信息在它
+          // 背后的面板里，被遮罩挡住看不见。
+          maskError ? `\n\n失败原因：${maskError}` : ''
+        }`}
         confirmLabel="检测并应用"
+        // T-05：默认 closeOnConfirm=true 会「点确认即关」，而检测要跑约 4s ——
+        // 于是对话框消失、面板回到待命态，4s 后 toast 才突然出现，中间是一段
+        // 反馈真空，用户无法判断到底有没有生效。
+        // closeOnConfirm={false} 让对话框留在原地并显示「处理中」，任务结束后再自行关闭。
+        closeOnConfirm={false}
+        busy={isMasking}
+      />
+
+      {/* T-03：重置会抹掉 6 个调色值且无 undo 可回退，故要二次确认。 */}
+      <ConfirmDialog
+        isOpen={pendingReset}
+        onClose={() => setPendingReset(false)}
+        onConfirm={confirmReset}
+        title="重置调色参数？"
+        message="曝光、高光、阴影、色温、色调、对比度将全部恢复默认值。此操作会覆盖当前已调好的效果，且无法在本应用内撤销。"
+        confirmLabel="重置"
+        destructive
       />
     </div>
   );

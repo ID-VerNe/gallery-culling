@@ -1221,19 +1221,27 @@ function AppShell() {
       if (!currentGroup) return;
       const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
       if (!targetPath) return;
-      const result = await api.applyLumenMask(targetPath, region, {
-        exposure: 0,
-        highlights: 0,
-        shadows: 0,
-        dehaze,
-        clarity: 0,
-        saturation: 0,
-        temperature: 0,
-      });
-      setLumenMasks(result.masks);
-      toast.success(
-        `已套用「${region}」蒙版（${(result.elapsedMs / 1000).toFixed(1)}s）。`,
-      );
+      // 后端拒绝（引擎未启用 / 非 GPU 版 / 区域非法）会走到这里。原实现没有
+      // try/catch，Promise 拒绝变成 unhandled rejection：用户看不到任何提示，
+      // 面板也停在半开状态。
+      try {
+        const result = await api.applyLumenMask(targetPath, region, {
+          exposure: 0,
+          highlights: 0,
+          shadows: 0,
+          dehaze,
+          clarity: 0,
+          saturation: 0,
+          temperature: 0,
+        });
+        setLumenMasks(result.masks);
+        toast.success(
+          `已套用「${region}」蒙版（${(result.elapsedMs / 1000).toFixed(1)}s）。`,
+        );
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        toast.error(`蒙版应用失败：${reason}。请确认使用 GPU 版 LUMEN RAW。`);
+      }
     },
     [currentGroup, toast],
   );
@@ -1250,7 +1258,10 @@ function AppShell() {
     api
       .listLumenMasks(targetPath)
       .then((m) => active && setLumenMasks(m))
-      .catch(() => undefined);
+      // 读回失败不要静默吞掉：至少留一条 console.warn，比兄弟 getLumenCapabilities
+      // /getToneState 都更不透明。完全静默会让「面板里没有蒙版」看起来像
+      // 「这张图本来就没蒙版」，无法区分。
+      .catch((e) => console.warn('listLumenMasks failed', e));
     return () => {
       active = false;
     };

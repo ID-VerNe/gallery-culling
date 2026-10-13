@@ -59,12 +59,17 @@ export const useLumenStatus = (
         .then((s) => {
           if (!cancelled) setStatus(s);
         })
-        .catch(() => {
+        .catch((err) => {
           if (!cancelled) {
+            // 原样透传失败原因，而不是硬编码一句「请检查路径」。用户真正需要知道
+            // 的是「路径不存在 / 权限不足 / 端口被占 / 进程找不到」中的哪一个 ——
+            // 丢弃 err 等于让用户自己去猜。这也是项目自身 lumenApi.ts 约定的
+            // 「原样透传不改写」。
+            const reason = err instanceof Error ? err.message : String(err);
             setStatus({
               ...LUMEN_UNAVAILABLE,
               enabled: true,
-              detail: '无法连接 LUMEN RAW（请检查设置中的路径）',
+              detail: `无法连接 LUMEN RAW：${reason}（请检查设置中的路径）`,
             });
           }
         });

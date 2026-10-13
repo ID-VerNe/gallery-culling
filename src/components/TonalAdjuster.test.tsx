@@ -6,7 +6,7 @@
  * 同时写 XMP 与 LUMEN RAW，引擎不可用时静默只写 XMP。
  */
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TonalAdjuster } from './TonalAdjuster';
 import { DEFAULT_TONE } from '../utils/autoTone';
@@ -202,21 +202,41 @@ describe('TonalAdjuster —— 滑杆与工具按钮', () => {
     );
   });
 
-  it('重置按钮回落到 DEFAULT_TONE（无 onReset 时）', async () => {
+  it('重置按钮先弹二次确认，确认后才回落到 DEFAULT_TONE（T-03）', async () => {
     const onChange = vi.fn();
     const { user } = renderAdjuster({ onChange });
 
     await user.click(screen.getByRole('button', { name: '重置调色滑块' }));
 
+    // 确认前不得有任何写入
+    expect(onChange).not.toHaveBeenCalled();
+    const dlg = await screen.findByRole('dialog');
+    expect(dlg).toHaveTextContent(/重置调色参数/);
+
+    await user.click(within(dlg).getByRole('button', { name: '重置' }));
+
     expect(onChange).toHaveBeenCalledWith({ ...DEFAULT_TONE });
   });
 
-  it('有 onReset 时优先走 onReset', async () => {
+  it('重置确认框可取消，取消后不写入', async () => {
+    const onChange = vi.fn();
+    const { user } = renderAdjuster({ onChange });
+
+    await user.click(screen.getByRole('button', { name: '重置调色滑块' }));
+    const dlg = await screen.findByRole('dialog');
+    await user.click(within(dlg).getByRole('button', { name: '取消' }));
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('有 onReset 时优先走 onReset（同样需确认）', async () => {
     const onChange = vi.fn();
     const onReset = vi.fn();
     const { user } = renderAdjuster({ onChange, onReset });
 
     await user.click(screen.getByRole('button', { name: '重置调色滑块' }));
+    const dlg = await screen.findByRole('dialog');
+    await user.click(within(dlg).getByRole('button', { name: '重置' }));
 
     expect(onReset).toHaveBeenCalledTimes(1);
     expect(onChange).not.toHaveBeenCalled();
