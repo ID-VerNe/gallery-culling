@@ -56,7 +56,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
     : `当前第 ${humanIndex} 张，共 ${totalCount} 张`;
 
   return (
-    <footer className="h-9 bg-background-base border-t border-default flex items-center justify-between px-3 text-[11px] text-white/70 shrink-0 gap-3">
+    <footer aria-label="状态栏：照片计数、快捷键提示与同步状态" className="h-9 bg-background-base border-t border-default flex items-center justify-between px-3 text-[11px] text-white/70 shrink-0 gap-3">
       {/* Left: Current File Info (Selectable text) */}
       <div className="flex items-center gap-3 select-text min-w-0">
         {currentGroup ? (

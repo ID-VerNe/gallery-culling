@@ -22,6 +22,7 @@ function renderTopBar(filterCounts?: Record<FilterMode, number>) {
   return render(
     <TopBar
       jpgFolder="D:/shoot/JPG"
+      tonalPanelVisible={false}
       rawFolder=""
       onJpgFolderChange={vi.fn()}
       onRawFolderChange={vi.fn()}

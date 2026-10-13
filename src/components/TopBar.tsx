@@ -37,12 +37,15 @@ interface TopBarProps {
   onOpenExportModal: () => void;
   onOpenSettingsModal: () => void;
   onToggleTonalAdjuster?: () => void;
-  showTonalPanel?: boolean;
   /**
    * 调色面板的**派生真值**（= 用户意图 && 当前有可调对象）。
-   * 缺省时退回 `showTonalPanel`（保持向后兼容）。
+   *
+   * 此前本组件同时接受 `showTonalPanel`（裸意图）与 `tonalPanelVisible`
+   * （派生真值），缺省时 `tonalPanelVisible ?? !!showTonalPanel` —— 一条
+   * 自承为「向后兼容」的双轨。违反 CLAUDE.md「不保留向后兼容，移除过时路径」。
+   * 现只保留派生真值一个来源，双轨已删。
    */
-  tonalPanelVisible?: boolean;
+  tonalPanelVisible: boolean;
   /** 当前筛选没有照片：按钮置灰并说明这是 no-op，而不是"按了没反应"。 */
   tonalToggleDisabled?: boolean;
   onOpenLuminar?: () => void;
@@ -68,7 +71,6 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenExportModal,
   onOpenSettingsModal,
   onToggleTonalAdjuster,
-  showTonalPanel,
   tonalPanelVisible,
   tonalToggleDisabled,
   onOpenLuminar,
@@ -100,12 +102,12 @@ export const TopBar: React.FC<TopBarProps> = ({
     },
   ];
 
-  // M-10：按下态由传入的派生真值决定，缺省退回用户意图（向后兼容）。
-  const tonalVisible = tonalPanelVisible ?? !!showTonalPanel;
+  // M-10：按下态由宿主传入的派生真值决定（用户意图 && 当前有可调对象）。
+  const tonalVisible = tonalPanelVisible;
   const tonalDisabled = !!tonalToggleDisabled;
 
   return (
-    <header className="bg-background-base/80 backdrop-blur-md border-b border-default flex flex-col gap-1 px-3 py-1.5 shrink-0 text-xs">
+    <header aria-label="Gallery Culling 应用工具栏" className="bg-background-base/80 backdrop-blur-md border-b border-default flex flex-col gap-1 px-3 py-1.5 shrink-0 text-xs">
       {/* -----------------------------------------------------------
           Row 1 — where the photos come from.
           Two independent rows instead of one 56px bar: the previous
@@ -117,6 +119,8 @@ export const TopBar: React.FC<TopBarProps> = ({
         {/* 应用标识（A11）：截图 / 切窗时能一眼答出"这是什么应用"。
             图标常显，应用名在窄窗口下让位给路径输入框。 */}
         <div
+          role="img"
+          aria-label="Gallery Culling — 摄影选片工具"
           className="flex items-center gap-1.5 pl-1 pr-0.5 shrink-0 select-none"
           title="Gallery Culling — 摄影选片工具"
         >

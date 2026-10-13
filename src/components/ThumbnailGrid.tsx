@@ -51,6 +51,8 @@ interface ThumbnailGridProps {
    */
   candidateId?: string | null;
   onSelect: (index: number) => void;
+  /** G-03：宿主重置筛选（筛选态非搜索态且结果为空时，空状态用它提供出口）。 */
+  onFilterReset?: () => void;
   /** Filter applied by the grid, owned by the app shell. */
   searchQuery?: string;
   searchOpen?: boolean;
@@ -88,6 +90,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   searchOpen = false,
   searchFocusToken = 0,
   onSearchQueryChange,
+  onFilterReset,
   onSearchOpenChange,
   totalLoaded,
   lumenThumbnails = false,
@@ -289,6 +292,12 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
           <span className="tabular-nums">
             ({isSearchFiltering ? `${groups.length}/${totalLoaded ?? groups.length}` : groups.length})
           </span>
+          {/* G-02：多选时选区规模此前**完全没有**可见呈现（selectedIds.size
+              从不渲染）—— 用户不知道"批量评级会作用到几张"，只能靠逐个高亮去数。
+              与命中数同处一个 live region，一起播报。 */}
+          {multiSelectEnabled && activeIds.size > 0 && (
+            <span className="ml-1.5 text-white/60">· 已选 {activeIds.size}</span>
+          )}
         </span>
 
         <div className="flex items-center gap-1">
@@ -371,9 +380,16 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
         </div>
       )}
 
-      {/* Badge legend — stated once, where the badges are */}
+      {/* Badge legend — stated once, where the badges are.
+          G-12：图例是给眼睛看的速查表。单元格级徽章已 aria-hidden，图例若不排除，
+          SR 会逐格重复播报「R RAW X XMP T 调色 E 精修」，噪音极大。
+          标 aria-label 让读屏把它当一整块说明，而不是逐个 span 念。 */}
       {!isEmpty && (
-        <div className="px-2.5 py-1 border-b border-default flex items-center gap-2 text-[9px] text-white/60 shrink-0 flex-wrap">
+        <div
+          role="note"
+          aria-label="角标图例：R 表示 RAW 原片，X 表示已有 XMP 侧边栏，T 表示已调色，E 表示有精修成果"
+          className="px-2.5 py-1 border-b border-default flex items-center gap-2 text-[9px] text-white/60 shrink-0 flex-wrap"
+        >
           <span className="flex items-center gap-0.5">
             <span className="font-medium text-white">R</span>RAW
           </span>
@@ -397,6 +413,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
             onSearchQueryChange?.('');
             onSearchOpenChange?.(false);
           }}
+          onResetFilter={onFilterReset}
         />
       ) : (
         <div
@@ -483,7 +500,11 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
               );
             })}
           </div>
-          {/* B7 幽灵 option：选中行滚出虚拟窗口时，保证 aria-activedescendant 仍可解析 */}
+          {/* B7 幽灵 option：选中行滚出虚拟窗口时，保证 aria-activedescendant 仍可解析。
+              aria-selected="true" 在高亮真值改为「selectedIndex ∪ selectedIds」并集
+              之后是**正确**的：幽灵代表的就是当前照片，而当前照片恒在高亮集合内。
+              （原审计担心的「ghost 说选中但实际未选中」是旧的互斥语义下的现象，
+              并集语义下不成立。） */}
           {!selectedRowRendered && activeGroup && (
             <div
               role="option"
@@ -504,8 +525,9 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
 const EmptyGridState: React.FC<{
   isSearchFiltering: boolean;
   onClearSearch: () => void;
-}> = ({ isSearchFiltering, onClearSearch }) => (
-  <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-10 gap-3">
+  onResetFilter?: () => void;
+}> = ({ isSearchFiltering, onClearSearch, onResetFilter }) => (
+  <div role="status" aria-live="polite" className="flex-1 flex flex-col items-center justify-center text-center px-6 py-10 gap-3">
     <div className="w-12 h-12 rounded-xl bg-background-surface-hover border border-default flex items-center justify-center">
       <Images className="w-6 h-6 text-white/50" aria-hidden="true" />
     </div>
@@ -519,13 +541,22 @@ const EmptyGridState: React.FC<{
           : '调整顶部筛选条件，或先给照片打星 / 标记保留。'}
       </p>
     </div>
-    {isSearchFiltering && (
+    {isSearchFiltering ? (
       <button
         onClick={onClearSearch}
         className="focus-ring px-3 py-1 rounded-md bg-background-surface-hover hover:bg-white/10 text-white text-[11px] transition-colors"
       >
         清空搜索
       </button>
+    ) : (
+      onResetFilter && (
+        <button
+          onClick={onResetFilter}
+          className="focus-ring px-3 py-1 rounded-md bg-background-surface-hover hover:bg-white/10 text-white text-[11px] transition-colors"
+        >
+          重置筛选
+        </button>
+      )
     )}
   </div>
 );
@@ -755,7 +786,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
             无预览
           </div>
         ) : (
-          <div className="text-[10px] text-white/60 font-mono">加载中</div>
+          <div role="status" aria-label="缩略图加载中" className="text-[10px] text-white/60 font-mono">加载中</div>
         )}
 
         {/* Top-Right Index */}

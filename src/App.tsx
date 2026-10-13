@@ -1640,6 +1640,7 @@ function AppShell() {
               searchOpen={gridSearchOpen}
               searchFocusToken={gridSearchFocusToken}
               onSearchQueryChange={setGridSearch}
+              onFilterReset={() => setFilterMode('all')}
               onSearchOpenChange={(open) => {
                 setGridSearchOpen(open);
                 if (!open) setGridSearch('');
