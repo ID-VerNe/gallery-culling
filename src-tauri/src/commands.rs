@@ -92,6 +92,38 @@ fn now_epoch_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// 把一次 `spawn_blocking` 收进统一的 JoinError→String 包装。
+///
+/// `msg` 是**任务描述前缀**，最终错误文本为 `"{msg}: {join_error}"` —— 与
+/// 重构前逐字一致（勿改文案）。闭包的错误类型 `E` 泛型化：`lumen_preview_cmd`
+/// 的闭包返回 `Result<_, LumenError>`，其余为 `Result<_, String>`。
+async fn blocking<F, T, E>(msg: &str, f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, E> + Send + 'static,
+    T: Send + 'static,
+    E: std::fmt::Display + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(r) => r.map_err(|e| e.to_string()),
+        Err(e) => Err(format!("{}: {}", msg, e)),
+    }
+}
+
+/// 闭包**本身不返回 Result**（只可能因 JoinError 失败）的专用。
+///
+/// 覆盖 `query_version -> Option<String>` / `read_project_tone -> Option<..>` /
+/// `list_masks -> Vec<Value>` —— 这三个 lumen 公开方法都不是 `Result`，
+/// 硬塞进 `blocking` 需要伪造错误类型，属于投机抽象。
+async fn blocking_value<F, T>(msg: &str, f: F) -> Result<T, String>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("{}: {}", msg, e))
+}
+
 /// 请求取消正在进行的扫描（幂等：没有进行中的任务时调用也安全）。
 #[tauri::command]
 pub fn cancel_scan_cmd(state: State<'_, AppState>) -> Result<(), String> {
@@ -129,7 +161,7 @@ pub async fn scan_folders_cmd(
     );
 
     let app_for_progress = app.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let result = blocking("扫描任务异常", move || {
         let mut throttle = ProgressThrottle::new();
         scan_folders(
             &jpg_folder,
@@ -150,8 +182,7 @@ pub async fn scan_folders_cmd(
             },
         )
     })
-    .await
-    .map_err(|e| format!("扫描任务异常: {}", e))??;
+    .await?;
 
     // 收尾进度：UI 据此把进度条推到 100%
     let _ = app.emit(
@@ -168,12 +199,11 @@ pub async fn scan_folders_cmd(
 #[tauri::command]
 pub async fn get_thumbnail_cmd(file_path: String, width: Option<u32>) -> Result<String, String> {
     let target_width = width.unwrap_or(200);
-    tokio::task::spawn_blocking(move || {
+    blocking("生成缩略图任务异常", move || {
         let path = Path::new(&file_path);
         get_or_create_thumbnail(path, target_width)
     })
     .await
-    .map_err(|e| format!("生成缩略图任务异常: {}", e))?
 }
 
 #[tauri::command]
@@ -188,7 +218,7 @@ pub async fn update_rating_flag_cmd(
     let settings = state.db.load_settings()?;
     let db = state.db.clone();
 
-    tokio::task::spawn_blocking(move || {
+    blocking("更新评级任务异常", move || {
         let path = Path::new(&file_path);
         if sync_xmp {
             write_xmp(path, rating, &flag)?;
@@ -215,10 +245,9 @@ pub async fn update_rating_flag_cmd(
                 }
             }
         }
-        Ok(true)
+        Ok::<_, String>(true)
     })
     .await
-    .map_err(|e| format!("更新评级任务异常: {}", e))?
 }
 
 #[tauri::command]
@@ -228,7 +257,7 @@ pub async fn batch_update_metadata_cmd(
     focal_length: Option<String>,
     aperture: Option<String>,
 ) -> Result<usize, String> {
-    tokio::task::spawn_blocking(move || {
+    blocking("批量更新元数据任务异常", move || {
         let mut count = 0;
         let lens = lens_model.as_deref();
         let focal = focal_length.as_deref();
@@ -240,10 +269,9 @@ pub async fn batch_update_metadata_cmd(
                 count += 1;
             }
         }
-        Ok(count)
+        Ok::<_, String>(count)
     })
     .await
-    .map_err(|e| format!("批量更新元数据任务异常: {}", e))?
 }
 
 #[tauri::command]
@@ -307,7 +335,7 @@ pub async fn open_in_default_app_cmd(file_path: String) -> Result<bool, String> 
 
 #[tauri::command]
 pub async fn trash_photos_cmd(file_paths: Vec<String>) -> Result<usize, String> {
-    tokio::task::spawn_blocking(move || {
+    blocking("移动至回收站失败", move || {
         let mut count = 0;
         for path_str in file_paths {
             let path = Path::new(&path_str);
@@ -315,10 +343,9 @@ pub async fn trash_photos_cmd(file_paths: Vec<String>) -> Result<usize, String> 
                 count += 1;
             }
         }
-        Ok(count)
+        Ok::<_, String>(count)
     })
     .await
-    .map_err(|e| format!("移动至回收站失败: {}", e))?
 }
 
 /// 单个文件复制失败的明细（替代原来 `.is_ok()` 静默吞掉的错误）。
@@ -476,8 +503,7 @@ impl ExportStaging {
         let staged = std::mem::take(&mut self.staged);
         for f in staged {
             self.manifest[f.manifest_idx].result = "cancelled".to_string();
-            self.manifest[f.manifest_idx].error =
-                Some("导出已取消，未搬迁到目标目录".to_string());
+            self.manifest[f.manifest_idx].error = Some("导出已取消，未搬迁到目标目录".to_string());
         }
     }
 }
@@ -523,7 +549,7 @@ pub async fn batch_export_cmd(
     cancel.store(false, Ordering::SeqCst); // 复位上一轮遗留的取消标志
     let app_for_progress = app.clone();
 
-    tokio::task::spawn_blocking(move || {
+    blocking("批量导出任务异常", move || {
         let mut throttle = ProgressThrottle::new();
         export_items(
             items,
@@ -546,7 +572,6 @@ pub async fn batch_export_cmd(
         )
     })
     .await
-    .map_err(|e| format!("批量导出任务异常: {}", e))?
 }
 
 /// 批量导出的**纯实现**（不含 tauri 命令属性，可直接被单测调用）。
@@ -571,13 +596,12 @@ pub fn export_items(
     cancel: &AtomicBool,
     mut on_progress: impl FnMut(usize, usize, &str),
 ) -> Result<ExportOutcome, String> {
-    fs::create_dir_all(target_folder)
-        .map_err(|e| format!("创建目标导出目录失败: {}", e))?;
+    fs::create_dir_all(target_folder).map_err(|e| format!("创建目标导出目录失败: {}", e))?;
 
     // 自检：canonicalize 归一化大小写 / 短名 / `..` / 尾斜杠后逐项比较，
     // 不自己写字符串比较（Windows 下路径规范化必须交给 OS）。
-    let target_canon = fs::canonicalize(target_folder)
-        .map_err(|e| format!("无法解析目标导出目录: {}", e))?;
+    let target_canon =
+        fs::canonicalize(target_folder).map_err(|e| format!("无法解析目标导出目录: {}", e))?;
     for item in &items {
         for src_str in [&item.jpg_path, &item.raw_path].into_iter().flatten() {
             let src = Path::new(src_str);
@@ -585,7 +609,7 @@ pub fn export_items(
                 if let Ok(parent_canon) = fs::canonicalize(parent) {
                     if parent_canon == target_canon {
                         return Err(
-                            "导出目标不能是源照片所在目录，请另选一个目标文件夹".to_string(),
+                            "导出目标不能是源照片所在目录，请另选一个目标文件夹".to_string()
                         );
                     }
                 }
@@ -739,7 +763,7 @@ pub async fn update_tone_adjustments_cmd(
 ) -> Result<bool, String> {
     // 兼容入口：旧调用点只需要 XMP 写入。**不要**在这里加引擎写入 ——
     // 统一管线走 apply_tone_cmd，避免两条写入路径再次分叉。
-    tokio::task::spawn_blocking(move || {
+    blocking("写入调色参数任务异常", move || {
         let path = Path::new(&file_path);
         crate::xmp::update_xmp_tone(
             path,
@@ -750,10 +774,9 @@ pub async fn update_tone_adjustments_cmd(
             Some(tone.tint),
             Some(tone.contrast),
         )?;
-        Ok(true)
+        Ok::<_, String>(true)
     })
     .await
-    .map_err(|e| format!("写入调色参数任务异常: {}", e))?
 }
 
 #[tauri::command]
@@ -784,9 +807,10 @@ pub async fn lumen_status_cmd(state: State<'_, AppState>) -> Result<LumenStatus,
     }
 
     let exe_for_version = exe.clone();
-    let version = tokio::task::spawn_blocking(move || lumen::query_version(&exe_for_version))
-        .await
-        .map_err(|e| format!("LUMEN 版本查询任务异常: {}", e))?;
+    let version = blocking_value("LUMEN 版本查询任务异常", move || {
+        lumen::query_version(&exe_for_version)
+    })
+    .await?;
 
     Ok(lumen::lumen_status_from(true, Some(exe), version))
 }
@@ -845,9 +869,10 @@ async fn probe_lumen_impl(cli_path: Option<String>) -> Result<LumenProbeResult, 
     };
 
     let exe_for_version = exe.clone();
-    let version = tokio::task::spawn_blocking(move || lumen::query_version(&exe_for_version))
-        .await
-        .map_err(|e| format!("LUMEN 版本查询任务异常: {}", e))?;
+    let version = blocking_value("LUMEN 版本查询任务异常", move || {
+        lumen::query_version(&exe_for_version)
+    })
+    .await?;
 
     match version {
         Some(v) => Ok(LumenProbeResult {
@@ -950,7 +975,7 @@ pub async fn lumen_preview_cmd(
         project_mtime,
         recipe: recipe.clone(),
     };
-    let rendered = tokio::task::spawn_blocking(move || {
+    let rendered = blocking("LUMEN 渲染任务异常", move || {
         lumen::ensure_preview(&src, &cache_root, inputs, |_tmp, args| {
             // 调色 recipe 必须**先** edit.apply 写进 .lumen 工程再渲染：
             // render.preview 不接受 recipe 参数（真实 sidecar 实测会报
@@ -965,9 +990,7 @@ pub async fn lumen_preview_cmd(
             runtime.render_preview(&exe, args).map(|_| ())
         })
     })
-    .await
-    .map_err(|e| format!("LUMEN 渲染任务异常: {}", e))?
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     Ok(LumenPreviewResult {
         preview_path: Some(rendered.to_string_lossy().to_string()),
@@ -1000,7 +1023,7 @@ pub async fn lumen_sync_ratings_cmd(
     let runtime = state.lumen.clone();
     let db = state.db.clone();
 
-    tokio::task::spawn_blocking(move || {
+    blocking("评级同步任务异常", move || {
         let folder_path = PathBuf::from(&folder);
         let entries = runtime
             .pull_ratings(&exe, &folder_path)
@@ -1064,10 +1087,9 @@ pub async fn lumen_sync_ratings_cmd(
                 }
             }
         }
-        Ok(result)
+        Ok::<_, String>(result)
     })
     .await
-    .map_err(|e| format!("评级同步任务异常: {}", e))?
 }
 
 /// 读取 LUMEN RAW 侧调色 recipe（宿主调色面板的初始态来源）。
@@ -1090,7 +1112,7 @@ pub async fn lumen_get_recipe_cmd(
         None => return Ok(unavailable()),
     };
 
-    tokio::task::spawn_blocking(move || {
+    blocking("读取 recipe 任务异常", move || {
         let out = lumen::run_lumen(
             &exe,
             "edit.get",
@@ -1098,7 +1120,7 @@ pub async fn lumen_get_recipe_cmd(
         )
         .map_err(|e| e.to_string())?;
         let state_obj = out.get("state").cloned().unwrap_or(serde_json::Value::Null);
-        Ok(LumenRecipe {
+        Ok::<_, String>(LumenRecipe {
             available: true,
             tone: lumen::recipe_to_tone(&state_obj),
             monochrome: state_obj
@@ -1108,7 +1130,6 @@ pub async fn lumen_get_recipe_cmd(
         })
     })
     .await
-    .map_err(|e| format!("读取 recipe 任务异常: {}", e))?
 }
 
 /// 把宿主调色面板的 6 个滑杆写入 LUMEN RAW recipe。
@@ -1126,16 +1147,15 @@ pub async fn lumen_apply_recipe_cmd(
         .ok_or_else(|| "未找到 lumen-cli".to_string())?;
     let runtime = state.lumen.clone();
 
-    tokio::task::spawn_blocking(move || {
+    blocking("应用 recipe 任务异常", move || {
         let changes: serde_json::Value =
             serde_json::from_str(&recipe_json).map_err(|e| format!("调色参数格式错误: {}", e))?;
         runtime
             .apply_recipe(&exe, &file_path, &changes)
             .map_err(|e| e.to_string())?;
-        Ok(())
+        Ok::<_, String>(())
     })
     .await
-    .map_err(|e| format!("应用 recipe 任务异常: {}", e))?
 }
 
 /// 探测 LUMEN RAW sidecar 的真实能力（命令表 + 内置预设 + AI 可用性）。
@@ -1153,9 +1173,10 @@ pub async fn lumen_capabilities_cmd(
     let exe = lumen::find_lumen_cli(&settings.lumen_cli_path)
         .ok_or_else(|| "未找到 lumen-cli".to_string())?;
     let runtime = state.lumen.clone();
-    tokio::task::spawn_blocking(move || runtime.capabilities(&exe).map_err(|e| e.to_string()))
-        .await
-        .map_err(|e| format!("能力探测任务异常: {}", e))?
+    blocking("能力探测任务异常", move || {
+        runtime.capabilities(&exe).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// 应用 LUMEN RAW 内置预设（编辑态是进程内 session，必须走 A 通道）。
@@ -1173,14 +1194,13 @@ pub async fn lumen_apply_preset_cmd(
     let exe = lumen::find_lumen_cli(&settings.lumen_cli_path)
         .ok_or_else(|| "未找到 lumen-cli".to_string())?;
     let runtime = state.lumen.clone();
-    tokio::task::spawn_blocking(move || {
+    blocking("应用预设任务异常", move || {
         runtime
             .apply_preset(&exe, &file_path, &name, amount.unwrap_or(100))
             .map(|_| ())
             .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| format!("应用预设任务异常: {}", e))?
 }
 
 /// 统一调色写入：**一条命令，两个落点**。
@@ -1208,7 +1228,7 @@ pub async fn apply_tone_cmd(
         tone.tint,
         tone.contrast,
     );
-    tokio::task::spawn_blocking(move || {
+    blocking("调色写入任务异常", move || {
         crate::xmp::update_xmp_tone(
             &path,
             Some(exposure),
@@ -1219,8 +1239,7 @@ pub async fn apply_tone_cmd(
             Some(contrast),
         )
     })
-    .await
-    .map_err(|e| format!("调色写入任务异常: {}", e))??;
+    .await?;
     let mut report = ToneWriteReport {
         xmp_written: true,
         ..Default::default()
@@ -1244,7 +1263,7 @@ pub async fn apply_tone_cmd(
     let runtime = state.lumen.clone();
 
     // 2) lumen：apply + save 必须同进程（编辑态是 session 态）
-    let applied = tokio::task::spawn_blocking(move || {
+    let applied = blocking("调色写入任务异常", move || {
         let changes = lumen::tone_to_recipe(&tone, true);
         let applied = runtime.apply_recipe(&exe, &file_path, &changes);
         let applied = match applied {
@@ -1257,10 +1276,9 @@ pub async fn apply_tone_cmd(
         let project = runtime
             .save_project(&exe, &file_path)
             .map_err(|e| format!("保存 LUMEN RAW 工程失败: {}", e))?;
-        Ok((applied, project))
+        Ok::<_, String>((applied, project))
     })
-    .await
-    .map_err(|e| format!("调色写入任务异常: {}", e))?;
+    .await;
 
     match applied {
         Ok((_state, project)) => {
@@ -1299,10 +1317,10 @@ pub async fn get_tone_state_cmd(
         None => return Ok(result),
     };
     let runtime = state.lumen.clone();
-    let lumen_tone =
-        tokio::task::spawn_blocking(move || runtime.read_project_tone(&exe, &file_path))
-            .await
-            .map_err(|e| format!("读取调色状态任务异常: {}", e))?;
+    let lumen_tone = blocking_value("读取调色状态任务异常", move || {
+        runtime.read_project_tone(&exe, &file_path)
+    })
+    .await?;
 
     match lumen_tone {
         Some(t) => {
@@ -1356,7 +1374,7 @@ pub async fn lumen_apply_mask_cmd(
     }
     let runtime = state.lumen.clone();
 
-    tokio::task::spawn_blocking(move || {
+    blocking("AI 蒙版任务异常", move || {
         let t0 = std::time::Instant::now();
         let applied = runtime
             .apply_mask(&exe, &file_path, &region, &adjustments)
@@ -1366,14 +1384,13 @@ pub async fn lumen_apply_mask_cmd(
             .get("applied")
             .cloned()
             .unwrap_or(serde_json::Value::Null);
-        Ok(LumenMaskResult {
+        Ok::<_, String>(LumenMaskResult {
             applied: applied_list,
             masks,
             elapsed_ms: t0.elapsed().as_millis() as u64,
         })
     })
     .await
-    .map_err(|e| format!("AI 蒙版任务异常: {}", e))?
 }
 
 /// 列出工程里现有的 AI 蒙版（跨进程可读，因为 .lumen 落盘了）。
@@ -1391,9 +1408,10 @@ pub async fn lumen_list_masks_cmd(
         None => return Ok(Vec::new()),
     };
     let runtime = state.lumen.clone();
-    tokio::task::spawn_blocking(move || runtime.list_masks(&exe, &file_path))
-        .await
-        .map_err(|e| format!("读取蒙版任务异常: {}", e))
+    blocking_value("读取蒙版任务异常", move || {
+        runtime.list_masks(&exe, &file_path)
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -1517,8 +1535,8 @@ mod tests {
 
         let items = vec![item_with_jpg(&bogus)];
         let no_cancel = AtomicBool::new(false);
-        let outcome =
-            export_items(items, &dst_dir, false, true, &no_cancel, |_, _, _| {}).expect("整体不应报错");
+        let outcome = export_items(items, &dst_dir, false, true, &no_cancel, |_, _, _| {})
+            .expect("整体不应报错");
 
         assert_eq!(outcome.exported, 0);
         assert!(!outcome.failed.is_empty(), "复制失败应计入 failed");
@@ -1560,7 +1578,10 @@ mod tests {
         assert_eq!(items_json[0]["src"], jpg.to_string_lossy().to_string());
 
         // 真正的目标文件也落地了
-        assert_eq!(fs::read(dst_dir.join("IMG_0007.jpg")).unwrap(), b"CONTENT-7");
+        assert_eq!(
+            fs::read(dst_dir.join("IMG_0007.jpg")).unwrap(),
+            b"CONTENT-7"
+        );
 
         let _ = fs::remove_dir_all(&src_dir);
         let _ = fs::remove_dir_all(&dst_dir);
