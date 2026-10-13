@@ -404,6 +404,9 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
           className="flex-1 overflow-y-auto p-2"
           role="listbox"
           aria-label={`宫格照片列表，共 ${groups.length} 张`}
+          // 多选能力必须对 AT 可见：SR 默认按单选播报，不声明这个属性，
+          // 用户根本不知道 Ctrl/Shift 点选与 Ctrl+A 可用。
+          aria-multiselectable={multiSelectEnabled}
           aria-activedescendant={
             selectedIndex >= 0 && groups[selectedIndex]
               ? makeOptionId(groups[selectedIndex].id)
