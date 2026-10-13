@@ -40,6 +40,43 @@ pub fn check_sidecar_exists(image_path: &Path) -> bool {
     acr.exists()
 }
 
+/// 解析 `xmp:Rating` -> `(是否淘汰, 星级)`。
+///
+/// **刻意不走 `extract_tag_value`**：那条按"标签缺失/值非数字即 None"处理，
+/// 而 Rating 需要区分 `-1`（Lightroom / LUMEN RAW 的 reject 约定）与 `0..5`，
+/// 且**不能**把 `-1` 的符号丢掉（旧实现用裸数字扫描，`-1` 被读成 1 星，
+/// 是一次静默数据损坏）。
+fn parse_rating(content: &str) -> (bool, u8) {
+    let Some(pos) = content.find("xmp:Rating") else {
+        return (false, 0);
+    };
+    let slice = &content[pos..content.len().min(pos + 40)];
+    let after = &slice["xmp:Rating".len()..];
+    let Some(gt) = after.find('>') else {
+        return (false, 0);
+    };
+    let raw: String = after[gt + 1..]
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '-')
+        .collect();
+    match raw.parse::<i32>() {
+        Ok(v) => (v < 0, v.clamp(0, 5) as u8),
+        Err(_) => (false, 0),
+    }
+}
+
+/// 取调色标签并解析为 f32。
+///
+/// 六个滑杆字段此前各写一遍 `extract_tag_value(...).and_then(|s| s.parse().ok())`。
+/// 「标签缺失」与「值不是数字」在这里统一塌成 `None` —— 对调色而言两者等价
+/// （都用默认值），分开处理只会让调用点多一个 match。
+///
+/// 需要区分「有值但超量程」的调用方（见 temperature 的回退）必须自己补 filter。
+fn extract_f32(content: &str, tag_name: &str) -> Option<f32> {
+    extract_tag_value(content, tag_name).and_then(|s| s.parse::<f32>().ok())
+}
+
 /// Extract tag value from XML string (handles both <tag>value</tag> and tag="value")
 fn extract_tag_value(content: &str, tag_name: &str) -> Option<String> {
     let open_tag = format!("<{}>", tag_name);
@@ -74,24 +111,8 @@ pub fn read_xmp_full(xmp_path: &Path) -> Option<XmpMetadata> {
     let content = fs::read_to_string(xmp_path).ok()?;
 
     // Parse xmp:Rating (0..5). Lightroom/LUMEN RAW use -1 for "reject";
-    let mut rejected = false;
     // the old bare digit scan turned -1 into 1 star (silent data corruption).
-    let mut rating = 0u8;
-    if let Some(pos) = content.find("xmp:Rating") {
-        let slice = &content[pos..content.len().min(pos + 40)];
-        let after = &slice["xmp:Rating".len()..];
-        if let Some(gt) = after.find('>') {
-            let raw: String = after[gt + 1..]
-                .trim_start()
-                .chars()
-                .take_while(|c| c.is_ascii_digit() || *c == '-')
-                .collect();
-            if let Ok(v) = raw.parse::<i32>() {
-                rejected = v < 0; // -1 = reject（Lightroom / LUMEN RAW 约定）
-                rating = v.clamp(0, 5) as u8;
-            }
-        }
-    }
+    let (rejected, rating) = parse_rating(&content);
 
     let label = extract_tag_value(&content, "xmp:Label").unwrap_or_default();
     let lens_model = extract_tag_value(&content, "aux:LensModel")
@@ -99,24 +120,17 @@ pub fn read_xmp_full(xmp_path: &Path) -> Option<XmpMetadata> {
     let focal_length = extract_tag_value(&content, "exif:FocalLength");
     let aperture = extract_tag_value(&content, "exif:FNumber");
 
-    let exposure =
-        extract_tag_value(&content, "crs:Exposure2012").and_then(|s| s.parse::<f32>().ok());
-    let highlights =
-        extract_tag_value(&content, "crs:Highlights2012").and_then(|s| s.parse::<f32>().ok());
-    let shadows =
-        extract_tag_value(&content, "crs:Shadows2012").and_then(|s| s.parse::<f32>().ok());
-    let temperature = extract_tag_value(&content, "crs:Temperature2012")
-        .and_then(|s| s.parse::<f32>().ok())
-        .or_else(|| {
-            // 回退旧标签时只接受已经在滑杆量程内的值：历史宿主写下的绝对色温
-            // （5350/5500）不是滑杆值，灌进去等于复现那个 bug。
-            extract_tag_value(&content, "crs:Temperature")
-                .and_then(|s| s.parse::<f32>().ok())
-                .filter(|v| (-100.0..=100.0).contains(v))
-        });
-    let tint = extract_tag_value(&content, "crs:Tint").and_then(|s| s.parse::<f32>().ok());
-    let contrast =
-        extract_tag_value(&content, "crs:Contrast2012").and_then(|s| s.parse::<f32>().ok());
+    let exposure = extract_f32(&content, "crs:Exposure2012");
+    let highlights = extract_f32(&content, "crs:Highlights2012");
+    let shadows = extract_f32(&content, "crs:Shadows2012");
+    let tint = extract_f32(&content, "crs:Tint");
+    let contrast = extract_f32(&content, "crs:Contrast2012");
+    // temperature 单独处理：2012 标签缺失时回退旧标签，且**必须**过滤量程。
+    // 历史宿主写下的绝对色温（5350/5500）不是滑杆值，灌进去等于复现那个 bug。
+    let temperature = extract_f32(&content, "crs:Temperature2012").or_else(|| {
+        extract_f32(&content, "crs:Temperature")
+            .filter(|v| (-100.0..=100.0).contains(v))
+    });
 
     Some(XmpMetadata {
         rating,
@@ -134,14 +148,29 @@ pub fn read_xmp_full(xmp_path: &Path) -> Option<XmpMetadata> {
     })
 }
 
-/// 本方（Gallery Culling）拥有的命名空间。写回时只替换本方块，
-/// 第三方命名空间（Lightroom 的 lr:*/dc:*/GPS、未来的 lumen:* 等）原样保留。
-const OURS_NAMESPACES: [&str; 4] = [
-    "http://ns.adobe.com/xap/1.0/",
-    "http://ns.adobe.com/exif/1.0/aux/",
-    "http://ns.adobe.com/exif/1.0/",
-    "http://ns.adobe.com/camera-raw-settings/1.0/",
+/// 本方（Gallery Culling）拥有的命名空间。
+///
+/// 这里是这四个 URI 的**唯一真值**：`build_our_description` 生成 xmlns 声明、
+/// `splice_our_block` 认本方块，两处都从这里取。此前三处各写一份字面量
+/// （含一个 `short_prefix` 反查表），改一处漏两处会让写出的块与认回的块对不上。
+/// 反查表随该重复一并删除 —— 有了成对的 (prefix, uri) 就不需要反查。
+const OURS_NAMESPACES: [(/* prefix */ &str, /* uri */ &str); 4] = [
+    ("xmp", "http://ns.adobe.com/xap/1.0/"),
+    ("aux", "http://ns.adobe.com/exif/1.0/aux/"),
+    ("exif", "http://ns.adobe.com/exif/1.0/"),
+    ("crs", "http://ns.adobe.com/camera-raw-settings/1.0/"),
 ];
+
+/// 本方块里 `xmlns:xxx="URI"` 声明行（顺序与 `OURS_NAMESPACES` 一致）。
+///
+/// 缩进与 `\x20` 转义沿用历史输出：写出的字节必须与既有侧边栏逐字节一致，
+/// 否则 Lightroom 会把文件当成模板更换，重写 develop 数据。
+fn xmlns_declarations() -> String {
+    OURS_NAMESPACES
+        .iter()
+        .map(|(prefix, uri)| format!("        xmlns:{}=\"{}\"\\n", prefix, uri))
+        .collect()
+}
 
 /// 本方模板**从不**声明的第三方命名空间前缀。
 ///
@@ -252,13 +281,10 @@ fn build_our_description(meta: &XmpMetadata) -> String {
 
     format!(
         "\x20   <rdf:Description rdf:about=\"\"\n\
-        \x20       xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\"\n\
-        \x20       xmlns:aux=\"http://ns.adobe.com/exif/1.0/aux/\"\n\
-        \x20       xmlns:exif=\"http://ns.adobe.com/exif/1.0/\"\n\
-        \x20       xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\">\n\
-        \x20     <xmp:Rating>{}</xmp:Rating>\n\
+        {}\x20     <xmp:Rating>{}</xmp:Rating>\n\
         {}{}{}{}{}\
         \x20   </rdf:Description>\n",
+        xmlns_declarations(),
         rating, label_tag, lens_tag, focal_tag, aperture_tag, crs_tags
     )
 }
@@ -299,8 +325,8 @@ fn splice_our_block(existing: &str, our_block: &str) -> Option<String> {
         // Lightroom 的主块也常同时声明 xmp/exif/crs/aux，那样会把它的 develop 数据
         // 一起吞掉。按顺序判定才安全；认不出来就 append（对第三方数据零风险）。
         let ns_at = |i: usize| -> Option<usize> {
-            let ns = OURS_NAMESPACES[i];
-            desc.find(&format!("xmlns:{}=\"{}\"", short_prefix(ns), ns))
+            let (prefix, uri) = OURS_NAMESPACES[i];
+            desc.find(&format!("xmlns:{}=\"{}\"", prefix, uri))
         };
         let xmp = ns_at(0);
         let aux = ns_at(1);
@@ -330,14 +356,7 @@ fn splice_our_block(existing: &str, our_block: &str) -> Option<String> {
     None
 }
 
-fn short_prefix(ns: &str) -> &'static str {
-    match ns {
-        "http://ns.adobe.com/xap/1.0/" => "xmp",
-        "http://ns.adobe.com/exif/1.0/aux/" => "aux",
-        "http://ns.adobe.com/exif/1.0/" => "exif",
-        _ => "crs",
-    }
-}
+
 
 /// 写 XMP：**保留第三方命名空间**，只替换本方拥有的块。
 ///
@@ -394,10 +413,23 @@ fn append_our_block(existing: &str, our_block: &str) -> Result<String, String> {
     Ok(out)
 }
 
+/// read-modify-write 骨架的「read」一半：定位侧边栏 + 读回现状。
+///
+/// 读不到就用默认值（不是错误）：宿主可以对一张没有侧边栏的照片首次评级，
+/// 那时它就是「从零开始写」。
+///
+/// 另一半的 `write_xmp_preserving` 保持显式调用，不做 `modify_xmp(image, f)`
+/// 这类闭包式封装 —— 三处调用的写入时机各不相同（`write_xmp` 的 reject 分支要
+/// 中途提前返回另走分支），套进闭包只会把控制流藏起来。
+fn read_sidecar(image_path: &Path) -> (PathBuf, XmpMetadata) {
+    let xmp_path = get_xmp_path(image_path);
+    let meta = read_xmp_full(&xmp_path).unwrap_or_default();
+    (xmp_path, meta)
+}
+
 /// Write Adobe Lightroom Classic & Capture One compatible XMP sidecar (preserving existing lens/metadata if present)
 pub fn write_xmp(image_path: &Path, rating: u8, flag: &str) -> Result<PathBuf, String> {
-    let xmp_path = get_xmp_path(image_path);
-    let mut meta = read_xmp_full(&xmp_path).unwrap_or_default();
+    let (_xmp_path, mut meta) = read_sidecar(image_path);
     meta.rating = rating;
     meta.label = match flag {
         "pick" => "Green".to_string(),
@@ -436,8 +468,7 @@ pub fn update_xmp_tone(
     tint: Option<f32>,
     contrast: Option<f32>,
 ) -> Result<PathBuf, String> {
-    let xmp_path = get_xmp_path(image_path);
-    let mut meta = read_xmp_full(&xmp_path).unwrap_or_default();
+    let (_xmp_path, mut meta) = read_sidecar(image_path);
     meta.exposure = exposure;
     meta.highlights = highlights;
     meta.shadows = shadows;
@@ -454,8 +485,7 @@ pub fn update_xmp_metadata(
     focal_length: Option<&str>,
     aperture: Option<&str>,
 ) -> Result<PathBuf, String> {
-    let xmp_path = get_xmp_path(image_path);
-    let mut meta = read_xmp_full(&xmp_path).unwrap_or_default();
+    let (_xmp_path, mut meta) = read_sidecar(image_path);
     if let Some(l) = lens_model {
         meta.lens_model = Some(l.to_string());
     }
