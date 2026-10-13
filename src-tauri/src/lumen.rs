@@ -7,26 +7,32 @@
 //! 与 `.plan/research/A-cli-bridge-comparison.md`。
 
 use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::process::Command;
 #[cfg(test)]
 use std::sync::Mutex as StdMutex;
 #[cfg(test)]
 use std::time::SystemTime;
 
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 mod cache;
+mod capabilities;
 mod transport;
 mod mcp;
+mod status;
+mod sync;
 mod tone;
 mod cli;
 mod discovery;
 mod error;
 
 pub use cache::*;
+pub use capabilities::*;
 pub use cli::*;
 pub use transport::*;
+pub use status::*;
+pub use sync::*;
 pub use tone::*;
 pub use discovery::*;
 pub use mcp::*;
@@ -124,75 +130,6 @@ pub fn project_masks(state: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-/// 同步动作：宿主评级 → lumen。
-///
-/// `rating = 0 且 flag = none` 不推：lumen 的 `Catalog.compact()` 会把全零条目压掉，
-/// 推过去等于"消失"（glue 报告 C §6.3）。
-pub fn should_push_rating(rating: u8, flag: &str) -> bool {
-    !(rating == 0 && (flag == "none" || flag.is_empty()))
-}
-
-/// 同步判定：把宿主侧边栏值、lumen 值与游标放在一起得出结论。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SyncDecision {
-    /// 无变化
-    InSync,
-    /// 宿主 → lumen（宿主改了，lumen 还没跟）
-    PushToLumen,
-    /// lumen → 宿主（lumen 改了，宿主还没跟）
-    PullFromLumen,
-    /// 两侧都改过 → 交给用户裁决（绝不静默覆盖）
-    Conflict,
-}
-
-/// 决定一次同步动作。
-///
-/// - 无游标（首次见到这张）→ 首次同步：以宿主值为准推给 lumen；
-/// - 值一致 → `InSync`；
-/// - 只有一侧变 → 推那一侧；
-/// - 两侧都变 → `Conflict`。
-pub fn decide_sync(
-    cursor: Option<(u8, String, i64)>, // (rating, flag, synced_at)
-    host_now: (u8, String, i64),       // 宿主侧边栏 (rating, flag, mtime)
-    lumen_now: Option<(u8, String)>,   // lumen catalog 值
-) -> SyncDecision {
-    let (host_rating, host_flag, host_mtime) = host_now;
-    let Some((cur_rating, cur_flag, _synced_at)) = cursor else {
-        // 首次：宿主是权威（用户刚在这台机器上打的星）
-        return if lumen_now.is_some() {
-            SyncDecision::PushToLumen
-        } else {
-            SyncDecision::InSync
-        };
-    };
-    let host_changed = host_rating != cur_rating || host_flag != cur_flag;
-    let Some((l_rating, l_flag)) = lumen_now else {
-        return if host_changed {
-            SyncDecision::PushToLumen
-        } else {
-            SyncDecision::InSync
-        };
-    };
-    let lumen_changed = l_rating != cur_rating || l_flag != cur_flag;
-    let same_now = host_rating == l_rating && host_flag == l_flag;
-
-    if same_now {
-        SyncDecision::InSync
-    } else if host_changed && lumen_changed {
-        SyncDecision::Conflict
-    } else if host_changed {
-        SyncDecision::PushToLumen
-    } else if lumen_changed {
-        SyncDecision::PullFromLumen
-    } else {
-        // 都没变但值不同（历史脏数据）：以侧边栏 mtime 为准
-        if host_mtime > 0 {
-            SyncDecision::PushToLumen
-        } else {
-            SyncDecision::PullFromLumen
-        }
-    }
-}
 
 /// A 通道常驻运行时：spawn 一次、握手、复用；失败自动降级 B 通道。
 ///
@@ -220,91 +157,6 @@ impl Default for LumenRuntime {
     }
 }
 
-/// sidecar 实际能力（由 `commands.list` 真实解析，不靠猜）。
-///
-/// 用途：AI 蒙版 / 增强只在 GPU flavor 里存在（CPU-only 包没有 `mask.*`/
-/// `photo.enhance`，因为 onnxruntime 不在包里）。前端据此**提前**说明不可用，
-/// 而不是等用户点下去再报错。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LumenCapabilities {
-    /// 27 条命令的 id（原始顺序，便于契约冻结比对）
-    pub commands: Vec<String>,
-    /// 内置预设（`edit.presets`），CPU-only 包也有
-    pub presets: Vec<String>,
-    /// AI 蒙版是否可用（需要 GPU flavor）
-    pub ai_masks: bool,
-    /// AI 增强（去噪/超分）是否可用（需要 GPU flavor）
-    pub ai_enhance: bool,
-    pub version: String,
-}
-
-/// AI 蒙版模型的文件名（存在即视为装了 AI flavor）。
-///
-/// **不能用命令表判断**：实测 GPU flavor 的 `commands` 与 CPU 版**逐字节相同**
-///（都是 27 条，都没有任何 `mask.*` / `photo.enhance`）。AI 是挂在既有
-/// `edit.apply` 的 `changes.masks[].region` 上的，`commands.describe()` 只是遍历
-/// import 时无条件填充的模块级 REGISTRY，而 onnxruntime 是懒加载的。所以判据必须
-/// 落到磁盘：PyInstaller 把 onnxruntime 放在 `_internal/onnxruntime/capi/`，模型放在
-/// `_internal/assets/models/`。
-const AI_MODELS: [&str; 4] = [
-    "skyseg.onnx",
-    "person-deeplab.onnx",
-    "ffdnet-color.onnx",
-    "u2netp.onnx",
-];
-
-/// 从 `commands.list` 的原始 JSON 解析**命令**能力。
-///
-/// AI 能力不在这里判定（见 `AI_MODELS` 的说明）：AI 版与 CPU 版的命令表完全相同。
-/// `ai_present` 由调用方按磁盘事实传入。
-pub fn parse_capabilities(
-    commands_json: &Value,
-    version: &str,
-    ai_present: bool,
-) -> LumenCapabilities {
-    let commands: Vec<String> = commands_json
-        .get("commands")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|c| c.get("id").and_then(Value::as_str))
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
-    LumenCapabilities {
-        // 蒙版（sky/person/subject…）与去噪/超分共用同一批模型，一起判定
-        ai_masks: ai_present,
-        ai_enhance: ai_present,
-        presets: Vec::new(), // 由调用方补（需要额外一次 edit.presets 调用）
-        version: version.to_string(),
-        commands,
-    }
-}
-
-/// 按磁盘事实探测 AI flavor：onnxruntime 运行时 + 至少一个 AI 模型都在才算。
-///
-/// 纯路径检查，不 spawn 进程 —— 探测失败只能说明"不是 AI 版"，不能拖慢/搞崩启动。
-pub fn detect_ai_flavor(exe: &Path) -> bool {
-    let Some(dir) = exe.parent() else {
-        return false;
-    };
-    let has_runtime = dir
-        .join("_internal")
-        .join("onnxruntime")
-        .join("capi")
-        .join("onnxruntime.dll")
-        .is_file();
-    has_runtime
-        && AI_MODELS.iter().any(|m| {
-            dir.join("_internal")
-                .join("assets")
-                .join("models")
-                .join(m)
-                .is_file()
-        })
-}
 
 impl Clone for LumenRuntime {
     fn clone(&self) -> Self {
@@ -701,89 +553,6 @@ impl LumenRuntime {
     }
 }
 
-/// 前端握手用的集成状态（`lumen_status_cmd` 的纯映射来源）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LumenStatus {
-    pub available: bool,
-    pub enabled: bool,
-    pub pinned_version: String,
-    pub found_version: Option<String>,
-    /// 面向用户的中文说明
-    pub detail: String,
-}
-
-/// 解析 `lumen-cli --version` 输出（如 `LUMEN RAW 1.6.0`）中的语义版本号。
-///
-/// 只取首行第一个 `\d+\.\d+\.\d+`；垃圾输出 → None。
-pub fn parse_lumen_version(stdout: &str) -> Option<String> {
-    let line = stdout.lines().next()?;
-    let bytes = line.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i].is_ascii_digit() {
-            let start = i;
-            let mut dots = 0;
-            let mut j = i;
-            while j < bytes.len() && (bytes[j].is_ascii_digit() || bytes[j] == b'.') {
-                if bytes[j] == b'.' {
-                    dots += 1;
-                }
-                j += 1;
-            }
-            if dots == 2 {
-                let candidate = &line[start..j];
-                let parts: Vec<&str> = candidate.split('.').collect();
-                if parts.len() == 3 && parts.iter().all(|p| !p.is_empty()) {
-                    return Some(candidate.to_string());
-                }
-            }
-            i = j;
-        } else {
-            i += 1;
-        }
-    }
-    None
-}
-
-/// 查询 sidecar 版本（真实 spawn `lumen-cli --version`，解析失败 = None）。
-pub fn query_version(exe: &Path) -> Option<String> {
-    let output = Command::new(exe).arg("--version").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    parse_lumen_version(&String::from_utf8_lossy(&output.stdout))
-}
-
-/// 握手状态纯映射：enabled × exe × version(==PINNED) → LumenStatus。
-pub fn lumen_status_from(
-    enabled: bool,
-    exe_found: Option<PathBuf>,
-    version: Option<String>,
-) -> LumenStatus {
-    let pinned = version.as_deref() == Some(PINNED_LUMEN_VERSION);
-    let available = enabled && exe_found.is_some() && pinned;
-    let detail = if !enabled {
-        "未启用 LUMEN RAW 引擎集成".to_string()
-    } else if exe_found.is_none() {
-        "未找到 lumen-cli.exe，请安装 LUMEN RAW 或在设置中指定路径".to_string()
-    } else if !pinned {
-        format!(
-            "LUMEN RAW 版本不匹配（需要 {}，当前 {}）",
-            PINNED_LUMEN_VERSION,
-            version.as_deref().unwrap_or("未知")
-        )
-    } else {
-        "LUMEN RAW 引擎就绪".to_string()
-    };
-    LumenStatus {
-        available,
-        enabled,
-        pinned_version: PINNED_LUMEN_VERSION.to_string(),
-        found_version: version,
-        detail,
-    }
-}
 
 #[cfg(test)]
 mod tests {
