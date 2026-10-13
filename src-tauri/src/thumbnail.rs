@@ -63,15 +63,25 @@ pub fn apply_orientation(img: DynamicImage, orientation: u32) -> DynamicImage {
 /// 因此索引键与缓存文件名同源 —— 文件一变，键与文件名同步失效。
 fn file_fingerprint(file_path: &Path) -> (PathBuf, u64) {
     let abs_path = fs::canonicalize(file_path).unwrap_or_else(|_| file_path.to_path_buf());
-    let mtime = fs::metadata(file_path)
+    let mtime = file_mtime_secs(file_path);
+    (abs_path, mtime)
+}
+
+/// 取文件 mtime 的 Unix 秒数（缺省 0）。
+///
+/// 缓存新鲜度判定的输入。**必须与 `scanner::secs_from_meta` 分开**：那边收
+/// 已经取好的 metadata，这边自己 stat；更重要的是缺省值语义不同 —— 这里 0
+/// 表示「取不到时间戳」，与真实的 epoch 0 无法区分，因此缓存判定逻辑不接受
+/// 「mtime == 0 就认为是最新的」这种写法。
+fn file_mtime_secs(file_path: &Path) -> u64 {
+    fs::metadata(file_path)
         .and_then(|m| m.modified())
         .map(|t| {
             t.duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs()
         })
-        .unwrap_or(0);
-    (abs_path, mtime)
+        .unwrap_or(0)
 }
 
 /// 用**已算好的**指纹拼出缓存文件路径（避免重复 `canonicalize`/`metadata`）。

@@ -31,11 +31,7 @@ fn find_edited_version(base_dir: &Path, stem: &str) -> Option<PhotoFileInfo> {
         if p.is_file() {
             let metadata = p.metadata().ok();
             let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
-            let mtime = metadata
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
+            let mtime = secs_from_meta(metadata.as_ref());
             let ext = p
                 .extension()
                 .and_then(|e| e.to_str())
@@ -131,55 +127,22 @@ pub fn read_exif_metadata(file_path: &Path) -> Option<ExifData> {
 
     // Capture Date / Time
     if let Some(field) = exif.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY) {
-        data.date_time = Some(
-            field
-                .display_value()
-                .to_string()
-                .trim_matches('"')
-                .to_string(),
-        );
+        data.date_time = Some(exif_clean(field));
     } else if let Some(field) = exif.get_field(exif::Tag::DateTime, exif::In::PRIMARY) {
-        data.date_time = Some(
-            field
-                .display_value()
-                .to_string()
-                .trim_matches('"')
-                .to_string(),
-        );
+        data.date_time = Some(exif_clean(field));
     }
 
     // Camera Make & Model
     if let Some(field) = exif.get_field(exif::Tag::Make, exif::In::PRIMARY) {
-        data.camera_make = Some(
-            field
-                .display_value()
-                .to_string()
-                .trim_matches('"')
-                .trim()
-                .to_string(),
-        );
+        data.camera_make = Some(exif_clean(field));
     }
     if let Some(field) = exif.get_field(exif::Tag::Model, exif::In::PRIMARY) {
-        data.camera_model = Some(
-            field
-                .display_value()
-                .to_string()
-                .trim_matches('"')
-                .trim()
-                .to_string(),
-        );
+        data.camera_model = Some(exif_clean(field));
     }
 
     // Lens Model
     if let Some(field) = exif.get_field(exif::Tag::LensModel, exif::In::PRIMARY) {
-        data.lens_model = Some(
-            field
-                .display_value()
-                .to_string()
-                .trim_matches('"')
-                .trim()
-                .to_string(),
-        );
+        data.lens_model = Some(exif_clean(field));
     }
 
     // Orientation (1..=8)
@@ -190,6 +153,37 @@ pub fn read_exif_metadata(file_path: &Path) -> Option<ExifData> {
     }
 
     Some(data)
+}
+
+/// EXIF 字段取文本值：剥掉 kam 引号再 trim 空白。
+///
+/// `exif` crate 的 `display_value()` 对字符串字段会返回带引号的形式
+/// (`"Canon"`，而 Make/Model/LensModel 常常还在引号前后留空格)。这五处
+/// 清洗逻辑逐字重复，抽出来只为让「什么样的值算干净」有一处定义。
+fn exif_clean(field: &exif::Field) -> String {
+    field
+        .display_value()
+        .to_string()
+        .trim_matches('"')
+        .trim()
+        .to_string()
+}
+
+/// 取已取到的 metadata 里的 mtime 秒数（缺省 0）。
+///
+/// 两处调用点都**已经**持有 `metadata`（为了同时拿 `len()`），所以这里收
+/// `Option<&Metadata>` 而不是路径 —— 免得为了取时间戳再 stat 一次。
+///
+/// 缺省取 0 而非别的值：mtime 在本文件里只用于「同一目录内排序的次级键」，
+/// 0 表示"没有时间信息"，与真实的 epoch 0 在排序上等价。
+/// 注意 `db::file_mtime_secs` 用的是 **-1** 缺省且语义不同（那边判 `> 0`），
+/// 两者不可合并。
+fn secs_from_meta(metadata: Option<&std::fs::Metadata>) -> u64 {
+    metadata
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// 求 JPG / RAW 词干并集。
@@ -241,11 +235,7 @@ fn scan_directory(
                             .to_string();
                         let metadata = entry.metadata().ok();
                         let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
-                        let mtime = metadata
-                            .and_then(|m| m.modified().ok())
-                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                            .map(|d| d.as_secs())
-                            .unwrap_or(0);
+                        let mtime = secs_from_meta(metadata.as_ref());
 
                         let info = PhotoFileInfo {
                             name,
