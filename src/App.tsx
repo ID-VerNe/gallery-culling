@@ -17,6 +17,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useAppSettings } from './hooks/useAppSettings';
 import { useAutoUpdate } from './hooks/useAutoUpdate';
 import { useCollection } from './hooks/useCollection';
+import { useComparePin } from './hooks/useComparePin';
 import { useFolderScan } from './hooks/useFolderScan';
 import { useSessionDebounce } from './hooks/useSessionDebounce';
 import { useRatingUndo } from './hooks/useRatingUndo';
@@ -33,7 +34,6 @@ import {
 } from './types';
 import { api } from './services/api';
 import { computeAutoTone, DEFAULT_TONE, toneEquals } from './utils/autoTone';
-import { deriveCompareGroups } from './utils/compareGroups';
 import { groupPath } from './utils/groupPath';
 
 
@@ -77,8 +77,6 @@ function AppShell() {
     clear: clearRatingUndo,
   } = useRatingUndo();
 
-  const [pinnedId, setPinnedId] = useState<string | null>(null);
-  const [isPinnedOnLeft, setIsPinnedOnLeft] = useState<boolean>(true);
   const [viewMode, setViewMode] = useState<ViewMode>('single');
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -254,6 +252,34 @@ function AppShell() {
 
 
 
+  const swapIndices = useCallback(() => {
+    const temp = selectedIndex;
+    setSelectedIndex(compareIndex);
+    setCompareIndex(temp);
+  }, [selectedIndex, compareIndex]);
+
+  const pin = useComparePin({
+    filteredGroups,
+    selectedIndex,
+    compareIndex,
+    currentGroup,
+    onSwapIndices: swapIndices,
+  });
+  const {
+    pinnedId,
+    isPinnedOnLeft,
+    isLeftPinned,
+    isRightPinned,
+    leftCompareGroup,
+    rightCompareGroup,
+    togglePinLeft: handleTogglePinLeft,
+    togglePinRight: handleTogglePinRight,
+    togglePinCurrent: handleTogglePinCurrent,
+    togglePinBenchmark: handleTogglePinBenchmark,
+    swap: handleSwapCompare,
+    setPinnedId,
+  } = pin;
+
   // 「有基准且基准在左」的对比模式下，± 与宫格点击作用在**对比候选**而非当前
   // 照片 —— 用户此时盯着右窗格。判定留在 AppShell（它是唯一同时持有
   // viewMode / pinnedId / isPinnedOnLeft 的地方），useCollection 只管改索引。
@@ -287,82 +313,6 @@ function AppShell() {
   const tonalPanelVisible = showTonalPanel && !!currentGroup;
 
   // Compute compare groups based on pinned reference.
-  // 推导逻辑抽到 `utils/compareGroups`，以便对 filterMode × gridSearch × pinnedId
-  // 的四种组合做穷举回归（见该模块的 N-01/N-03 说明）。
-  const { leftCompareGroup, rightCompareGroup, isLeftPinned, isRightPinned } =
-    useMemo(
-      () =>
-        deriveCompareGroups(
-          filteredGroups,
-          selectedIndex,
-          compareIndex,
-          pinnedId,
-          isPinnedOnLeft,
-        ),
-      [filteredGroups, selectedIndex, compareIndex, pinnedId, isPinnedOnLeft],
-    );
-
-  // Pin / Unpin Left as Reference
-  const handleTogglePinLeft = useCallback(() => {
-    if (isLeftPinned) {
-      setPinnedId(null);
-    } else if (leftCompareGroup) {
-      setPinnedId(leftCompareGroup.id);
-      setIsPinnedOnLeft(true);
-    }
-  }, [isLeftPinned, leftCompareGroup]);
-
-  // Pin / Unpin Right as Reference
-  const handleTogglePinRight = useCallback(() => {
-    if (isRightPinned) {
-      setPinnedId(null);
-    } else if (rightCompareGroup) {
-      setPinnedId(rightCompareGroup.id);
-      setIsPinnedOnLeft(false);
-    }
-  }, [isRightPinned, rightCompareGroup]);
-
-  // 空格「设为基准」：落在**当前照片**上，且是切换语义。
-  //
-  // 不用 handleTogglePinRight —— 无基准时 right 恒等于 compareIndex 那张，
-  // 单图视口下会把另一张照片钉为基准，界面上看不出发生了什么。
-  // 钉在右侧窗格（比较视图里看得到"基准 vs 候选"），与左/中/右位置无关。
-  const handleTogglePinCurrent = useCallback(() => {
-    if (!currentGroup) return;
-    setPinnedId((prev) => (prev === currentGroup.id ? null : currentGroup.id));
-  }, [currentGroup]);
-
-  // Swap A / B (Candidate becomes new pinned benchmark or swap positions)
-  const handleSwapCompare = useCallback(() => {
-    if (pinnedId) {
-      if (isPinnedOnLeft && rightCompareGroup) {
-        setPinnedId(rightCompareGroup.id);
-      } else if (!isPinnedOnLeft && leftCompareGroup) {
-        setPinnedId(leftCompareGroup.id);
-      }
-    } else {
-      const temp = selectedIndex;
-      setSelectedIndex(compareIndex);
-      setCompareIndex(temp);
-    }
-  }, [
-    pinnedId,
-    isPinnedOnLeft,
-    leftCompareGroup,
-    rightCompareGroup,
-    selectedIndex,
-    compareIndex,
-  ]);
-
-  // Benchmark toggle shortcut (B)
-  const handleTogglePinBenchmark = useCallback(() => {
-    if (pinnedId) {
-      setPinnedId(null);
-    } else if (leftCompareGroup) {
-      setPinnedId(leftCompareGroup.id);
-      setIsPinnedOnLeft(true);
-    }
-  }, [pinnedId, leftCompareGroup]);
 
   /** B6：把某张照片标记为"已同步到 XMP"（写盘成功时调用）。 */
   const markSynced = useCallback((id: string) => {
