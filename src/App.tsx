@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { TopBar } from './components/TopBar';
 import { ThumbnailGrid } from './components/ThumbnailGrid';
 import { PreviewViewport } from './components/PreviewViewport';
@@ -19,13 +19,13 @@ import { useAutoUpdate } from './hooks/useAutoUpdate';
 import { useCollection } from './hooks/useCollection';
 import { useComparePin } from './hooks/useComparePin';
 import { useFolderScan } from './hooks/useFolderScan';
+import { useBatchOps } from './hooks/useBatchOps';
 import { useRatingFlagSync } from './hooks/useRatingFlagSync';
 import { useToneEditing } from './hooks/useToneEditing';
 import { useSessionDebounce } from './hooks/useSessionDebounce';
 import { useLumenStatus } from './hooks/useLumenStatus';
 import type { ViewportEmptyState } from './components/PreviewViewport';
 import {
-  CullFlag,
   LumenCapabilities,
   PhotoFileInfo,
   PhotoGroupInfo,
@@ -37,13 +37,6 @@ import { api } from './services/api';
 import { DEFAULT_TONE } from './utils/autoTone';
 import { groupPath } from './utils/groupPath';
 
-
-/** L-11 撤销提示里用到的旗标文案（与宫格/底栏的叫法保持一致）。 */
-const FLAG_LABELS: Record<CullFlag, string> = {
-  pick: '保留',
-  reject: '淘汰',
-  none: '未标记',
-};
 
 function AppShell() {
   const toast = useToast();
@@ -60,13 +53,6 @@ function AppShell() {
 
   // B1：批量打分/标记的进度。前端逐张写盘、自行推进度条（无后端进度事件），
 // 与扫描互不干扰。
-  const [batchProgress, setBatchProgress] = useState<{
-    processed: number;
-    total: number;
-  } | null>(null);
-  /** 批量执行中"跳过剩余"的协作标志（读取走 ref，避免闭包陈旧）。 */
-  const batchCancelRef = useRef(false);
-  const [batchCancelling, setBatchCancelling] = useState(false);
 
   const [viewMode, setViewMode] = useState<ViewMode>('single');
   const [isExportOpen, setIsExportOpen] = useState(false);
@@ -83,13 +69,6 @@ function AppShell() {
    * B1：宫格多选集合（受控）。空集 = 沿用单选取值。
    * 有 ≥2 张时按 `1..5 / P / X` 走批量写盘（带确认与进度）。
    */
-  /** B1：待确认的批量操作（确认后才真正逐张写盘）。 */
-  const [pendingBatch, setPendingBatch] = useState<
-    | { kind: 'rate'; value: number }
-    | { kind: 'flag'; value: CullFlag }
-    | { kind: 'clear' }
-    | null
-  >(null);
   /** A1：更新下载/安装进行中（弹窗保持可见并显示进度）。 */
 
   // Grid search (progressive disclosure; owned here so the TopBar toggle and
@@ -144,11 +123,12 @@ function AppShell() {
   const rating = useRatingFlagSync({
     currentGroup,
     onGroupPatched: patchGroup,
-    onRequestBatch: setPendingBatch,
     selectedCount: selectedIds.size,
   });
   const {
     unsyncedIds,
+    pendingBatch,
+    setPendingBatch,
     canUndo,
     markSynced,
     markUnsynced,
@@ -162,6 +142,23 @@ function AppShell() {
     undo: handleUndo,
     clearRatingUndo,
   } = rating;
+
+  const batch = useBatchOps({
+    filteredGroups,
+    selectedIds,
+    onGroupPatched: patchGroup,
+    markSynced,
+    markUnsynced,
+    rememberRating,
+    pendingBatch,
+  });
+  const {
+    batchProgress,
+    batchCancelling,
+    pendingBatchSummary,
+    runBatch,
+    skipRemaining,
+  } = batch;
 
   const handleScanned = useCallback(
     (
@@ -346,91 +343,6 @@ function AppShell() {
 
 
 
-  /**
-   * B1：执行批量写盘。逐张乐观更新 + 写 XMP，进度条实时推进；单张失败不中断
-   * 整批（失败的那张打持久"未同步"角标），结束时如实汇报成功/失败张数。
-   */
-  const runBatch = useCallback(
-    async (action: NonNullable<typeof pendingBatch>) => {
-      const targets = filteredGroups.filter((g) => selectedIds.has(g.id));
-      if (targets.length === 0) return;
-
-      batchCancelRef.current = false;
-      setBatchCancelling(false);
-      setBatchProgress({ processed: 0, total: targets.length });
-
-      let ok = 0;
-      let failed = 0;
-      for (let i = 0; i < targets.length; i++) {
-        if (batchCancelRef.current) break;
-        const g = targets[i];
-        const targetPath = groupPath(g);
-        if (!targetPath) {
-          failed++;
-          setBatchProgress({ processed: i + 1, total: targets.length });
-          continue;
-        }
-        const nextRating =
-          action.kind === 'rate'
-            ? action.value
-            : action.kind === 'clear'
-              ? 0
-              : g.rating;
-        const nextFlag =
-          action.kind === 'flag'
-            ? action.value
-            : action.kind === 'clear'
-              ? 'none'
-              : g.flag;
-
-        rememberRating({
-          id: g.id,
-          path: targetPath,
-          rating: g.rating,
-          flag: g.flag,
-        });
-        setGroups((prev) =>
-          prev.map((x) =>
-            x.id === g.id
-              ? { ...x, rating: nextRating, flag: nextFlag }
-              : x,
-          ),
-        );
-
-        try {
-          await api.updateRatingFlag(targetPath, nextRating, nextFlag, true);
-          markSynced(g.id);
-          ok++;
-        } catch (err) {
-          console.error('Batch XMP update error:', err);
-          markUnsynced(g.id);
-          failed++;
-        }
-        setBatchProgress({ processed: i + 1, total: targets.length });
-      }
-
-      const cancelled = batchCancelRef.current;
-      setBatchProgress(null);
-      setBatchCancelling(false);
-      if (failed > 0) {
-        toast.error(
-          `批量写入完成：${ok} 张成功，${failed} 张未同步到 XMP（格子上有红色角标，可点击重试）。`,
-        );
-      } else if (cancelled) {
-        toast.info(`已停止：${ok} 张已写入 XMP。`);
-      } else {
-        toast.success(`已批量写入 ${ok} 张的星级/标记到 XMP 侧边栏。`);
-      }
-    },
-    [
-      filteredGroups,
-      selectedIds,
-      rememberRating,
-      markSynced,
-      markUnsynced,
-      toast,
-    ],
-  );
 
 
   // Open in Photoshop / External app
@@ -668,17 +580,6 @@ function AppShell() {
   }, [groups.length, filteredGroups.length, handleBrowseJpg]);
 
   // B1：批量确认框里的一句话说明。放在 JSX 外，避免在属性里做类型收窄。
-  const pendingBatchSummary = useMemo(() => {
-    if (!pendingBatch) return '';
-    const count = selectedIds.size;
-    if (pendingBatch.kind === 'rate') {
-      return `将 ${count} 张照片的星级设为 ${pendingBatch.value} 星`;
-    }
-    if (pendingBatch.kind === 'flag') {
-      return `将 ${count} 张照片标记为「${FLAG_LABELS[pendingBatch.value]}」`;
-    }
-    return `清除 ${count} 张照片的星级与旗标`;
-  }, [pendingBatch, selectedIds]);
 
   return (
     <div className="flex flex-col h-screen w-screen bg-background-base text-white overflow-hidden antialiased">
@@ -735,10 +636,7 @@ function AppShell() {
         processed={batchProgress?.processed ?? 0}
         total={batchProgress?.total ?? 0}
         label="正在批量写入 XMP"
-        onCancel={() => {
-          batchCancelRef.current = true;
-          setBatchCancelling(true);
-        }}
+        onCancel={skipRemaining}
         cancelRequested={batchCancelling}
       />
 

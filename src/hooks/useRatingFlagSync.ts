@@ -3,6 +3,7 @@ import { api } from '../services/api';
 import { useToast } from '../components/Toast';
 import { useRatingUndo } from './useRatingUndo';
 import { groupPath } from '../utils/groupPath';
+import type { BatchAction } from './useBatchOps';
 import type { CullFlag, PhotoGroupInfo } from '../types';
 
 /** L-11 撤销提示里的旗标文案（与宫格/底栏的叫法保持一致）。 */
@@ -26,11 +27,9 @@ export function useRatingFlagSync(opts: {
   currentGroup: PhotoGroupInfo | undefined;
   /** 乐观更新落回集合。 */
   onGroupPatched: (id: string, patch: Partial<PhotoGroupInfo>) => void;
-  /** 多选 ≥2 张时改为弹批量确认，由批量执行器接管。 */
-  onRequestBatch: (batch: { kind: 'rate'; value: number } | { kind: 'flag'; value: CullFlag } | { kind: 'clear' }) => void;
   selectedCount: number;
 }) {
-  const { currentGroup, onGroupPatched, onRequestBatch, selectedCount } = opts;
+  const { currentGroup, onGroupPatched, selectedCount } = opts;
   const toast = useToast();
 
   /**
@@ -38,6 +37,14 @@ export function useRatingFlagSync(opts: {
    * （toast 会消失，角标不会），并提供点击重试。
    */
   const [unsyncedIds, setUnsyncedIds] = useState<Set<string>>(new Set());
+
+  /**
+   * B1：待确认的批量操作（确认后才真正逐张写盘）。
+   *
+   * state 归本 hook 持有而非批量执行器：打分/旗标/清除三个入口都在这里，
+   * 让它们直接写同一个 state，不必把 setter 绕一圈传给批量执行器再传回来。
+   */
+  const [pendingBatch, setPendingBatch] = useState<BatchAction | null>(null);
 
   // L-11：星级/旗标的单步撤销。`1..5/p/x/0` 按下即写 .xmp 且原先无路可退，
   // 一次误触只能手改侧边栏或回 Lightroom。这里保留一步回退（Ctrl/Cmd+Z，
@@ -152,19 +159,19 @@ export function useRatingFlagSync(opts: {
    */
   const applyRating = useCallback(
     (rating: number) => {
-      if (selectedCount > 1) onRequestBatch({ kind: 'rate', value: rating });
+      if (selectedCount > 1) setPendingBatch({ kind: 'rate', value: rating });
       else void rate(rating);
     },
-    [selectedCount, rate, onRequestBatch],
+    [selectedCount, rate],
   );
 
   /** B1：旗标入口同样的分流。 */
   const applyFlag = useCallback(
     (flag: CullFlag) => {
-      if (selectedCount > 1) onRequestBatch({ kind: 'flag', value: flag });
+      if (selectedCount > 1) setPendingBatch({ kind: 'flag', value: flag });
       else void setFlag(flag);
     },
-    [selectedCount, setFlag, onRequestBatch],
+    [selectedCount, setFlag],
   );
 
   /** B6：点击格子上"未同步"角标时，用该张当前值重写 XMP。 */
@@ -192,7 +199,7 @@ export function useRatingFlagSync(opts: {
    */
   const clearRatingFlag = useCallback(async () => {
     if (selectedCount > 1) {
-      onRequestBatch({ kind: 'clear' });
+      setPendingBatch({ kind: 'clear' });
       return;
     }
     const targetGroup = currentGroup;
@@ -220,7 +227,6 @@ export function useRatingFlagSync(opts: {
     markSynced,
     onGroupPatched,
     selectedCount,
-    onRequestBatch,
   ]);
 
   /**
@@ -260,6 +266,8 @@ export function useRatingFlagSync(opts: {
 
   return {
     unsyncedIds,
+    pendingBatch,
+    setPendingBatch,
     canUndo,
     markSynced,
     markUnsynced,
