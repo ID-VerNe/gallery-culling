@@ -4,7 +4,11 @@ import { useToast } from '../components/Toast';
 import type { AppSettings, SortOrder } from '../types';
 
 /**
- * 全局设置：启动时读回一次，设置弹窗保存后原地更新。
+ * 全局设置：启动时读回一次并回填默认目录，设置弹窗保存后原地更新。
+ *
+ * 回填走 `onFoldersLoaded` 回调而不是直接持有 jpgFolder 的 setter —— 那些
+ * setter 由 useFolderScan 产出，而 useFolderScan 又要用这里的 persistFolders，
+ * 直接持有会变成循环依赖。回调把解环的责任交给调用方。
  *
  * `lumenRefreshToken` 与 settings 同生命周期（N-12）：设置里改了 lumen-cli
  * 路径之后必须**强制重探**引擎握手，否则 UI 会一直显示改之前的可用性。
@@ -32,6 +36,8 @@ export function useAppSettings(onFoldersLoaded?: (s: AppSettings) => void) {
           '无法读取本地设置，将使用默认值。\n如果你的默认文件夹没有自动填充，请到「设置」中重新指定。',
         );
       });
+    // onFoldersLoaded 由调用方内联（lambda），每次渲染都是新引用；
+    // 只在首次加载时跑一次，故刻意不把它列入依赖。
     // onFoldersLoaded 由调用方内联（lambda），每次渲染都是新引用；
     // 只在首次加载时跑一次，故刻意不把它列入依赖。
     // eslint-disable-next-line react-hooks/exhaustive-deps

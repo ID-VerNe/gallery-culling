@@ -16,9 +16,8 @@ import { TaskProgressBar } from './components/TaskProgressBar';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useAppSettings } from './hooks/useAppSettings';
 import { useAutoUpdate } from './hooks/useAutoUpdate';
+import { useFolderScan } from './hooks/useFolderScan';
 import { useSessionDebounce } from './hooks/useSessionDebounce';
-import { useTaskProgress } from './hooks/useTaskProgress';
-import { isTaskCancelled } from './services/taskApi';
 import { useRatingUndo } from './hooks/useRatingUndo';
 import { useLumenStatus } from './hooks/useLumenStatus';
 import type { ViewportEmptyState } from './components/PreviewViewport';
@@ -59,13 +58,6 @@ function AppShell() {
     });
   const { dialog: updateDialog } = useAutoUpdate();
 
-  // 扫描的进度与取消（M-05）。解构出**稳定引用**的成员：`start/finish/
-  // isCancelRequested` 都不随进度变化，因此 `handleScan` 的 identity 不会
-  // 因为进度事件每几十毫秒刷新一次而抖动（否则会连带触发 [sortOrder] 那个
-  // effect 反复重新扫描）。
-  const scanTask = useTaskProgress('scan');
-  const { start: scanStart, finish: scanFinish, cancel: scanCancel } = scanTask;
-
   // B1：批量打分/标记的进度。前端逐张写盘、自行推进度条（无后端进度事件），
 // 与扫描互不干扰。
   const [batchProgress, setBatchProgress] = useState<{
@@ -86,26 +78,13 @@ function AppShell() {
     clear: clearRatingUndo,
   } = useRatingUndo();
 
-  const [jpgFolder, setJpgFolder] = useState('');
-  const [rawFolder, setRawFolder] = useState('');
   const [groups, setGroups] = useState<PhotoGroupInfo[]>([]);
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
   const [compareIndex, setCompareIndex] = useState<number>(1);
   const [pinnedId, setPinnedId] = useState<string | null>(null);
   const [isPinnedOnLeft, setIsPinnedOnLeft] = useState<boolean>(true);
-  const [isLoading, setIsLoading] = useState(false);
-  /**
-   * UX-15：最近一次扫描的真实失败原因（`null` = 无失败）。
-   *
-   * 原先失败只走一次 toast 就消失了：批量扫描时用户会同时盯着宫格和
-   * 进度条，toast 3 秒后自动退场，等反应过来已经不知道是哪一步坏了。
-   * 这里保留文案并在顶栏常驻，用户可自行「忽略」。
-   * 用户主动取消**不**算失败（后端以 `任务已取消` 哨兵返回）。
-   */
-  const [scanError, setScanError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('single');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
-  const [sortOrder, setSortOrder] = useState<SortOrder>('time_filename');
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMetadataOpen, setIsMetadataOpen] = useState(false);
@@ -151,6 +130,56 @@ function AppShell() {
 
   // Tonal & Luminar state
   const [toneMap, setToneMap] = useState<Record<string, ToneAdjustments>>({});
+
+  /**
+   * 扫描成功后的集合/对比状态更新。
+   *
+   * 独立成 useCallback：它是 useFolderScan 的入参，每次渲染新建函数会让
+   * handleScan 的 identity 抖动，进而触发重扫 effect。
+   */
+  const handleScanned = useCallback(
+    (
+      scanned: PhotoGroupInfo[],
+      initialTones: Record<string, ToneAdjustments>,
+      historyIndex: number | null,
+    ) => {
+      setGroups(scanned);
+      setToneMap(initialTones);
+      if (historyIndex !== null && historyIndex < scanned.length) {
+        setSelectedIndex(historyIndex);
+        setCompareIndex(Math.min(historyIndex + 1, scanned.length - 1));
+      } else {
+        setSelectedIndex(0);
+        setCompareIndex(scanned.length > 1 ? 1 : 0);
+      }
+      // Drop anything pinned to a photo that no longer exists.
+      setPinnedId(null);
+    },
+    [],
+  );
+
+  const scan = useFolderScan({
+    onScanned: handleScanned,
+    // 重新扫描后旧快照指向的照片可能已不在列表里，撤销会写到一个不该碰的文件上。
+    beforeScan: clearRatingUndo,
+    persistFolders,
+  });
+  const {
+    jpgFolder,
+    rawFolder,
+    sortOrder,
+    isLoading,
+    scanError,
+    scanTask,
+    handleScan,
+    handleCancelScan,
+    handleBrowseJpg,
+    handleBrowseRaw,
+    setJpgFolder,
+    setRawFolder,
+    setSortOrder,
+    dismissScanError,
+  } = scan;
   const [showTonalPanel, setShowTonalPanel] = useState(false);
   /** 调色保存进行中：禁用保存按钮并挡住重入，避免连点写两次 XMP/工程。 */
   const [isSavingTone, setIsSavingTone] = useState(false);
@@ -391,133 +420,6 @@ function AppShell() {
       setIsPinnedOnLeft(true);
     }
   }, [pinnedId, leftCompareGroup]);
-
-  // Folder scanning handler
-  const handleScan = useCallback(async () => {
-    if (!jpgFolder.trim()) return;
-    setIsLoading(true);
-    // 每次重新扫描都先清掉上一轮的错误，避免旧故障文案挂在新扫描上。
-    setScanError(null);
-    scanStart();
-    // 重新扫描后旧快照指向的照片可能已不在列表里，撤销会写到一个不该碰的文件上。
-    clearRatingUndo();
-
-    try {
-      const res = await api.scanFolders(jpgFolder, rawFolder, sortOrder);
-      setGroups(res.groups);
-
-      // Populate initial tones from XMP
-      const initialTones: Record<string, ToneAdjustments> = {};
-      res.groups.forEach((g) => {
-        if (g.tone) initialTones[g.id] = g.tone;
-      });
-      setToneMap(initialTones);
-
-      // Check session history for this folder
-      const history = await api.loadSession(jpgFolder);
-      if (history && history[0] < res.groups.length) {
-        setSelectedIndex(history[0]);
-        setCompareIndex(Math.min(history[0] + 1, res.groups.length - 1));
-      } else {
-        setSelectedIndex(0);
-        setCompareIndex(res.groups.length > 1 ? 1 : 0);
-      }
-
-      // Drop anything pinned to a photo that no longer exists.
-      setPinnedId(null);
-
-      // Save as default in settings
-      persistFolders(jpgFolder, rawFolder, sortOrder);
-
-      toast.success(
-        `扫描完成，共 ${res.groups.length} 组照片。已按${
-          sortOrder === 'time_filename'
-            ? '拍摄时间'
-            : sortOrder === 'filename'
-            ? '文件名'
-            : '星级'
-        }排序。`,
-      );
-    } catch (err) {
-      // 取消不是失败：后端以哨兵文案 `任务已取消` 返回，必须按「已取消」呈现，
-      // 否则用户主动取消会被读成"扫描坏了"。按哨兵而非「点过取消按钮」判断，
-      // 这样与取消同时发生的真实错误仍会如实报成失败。
-      if (isTaskCancelled(err)) {
-        toast.info('已取消扫描：照片列表未更新。');
-      } else {
-        console.error('Scan failed:', err);
-        // UX-15：常驻顶栏，不只靠一次 toast。
-        setScanError(String(err));
-        toast.error(
-          `扫描失败：${String(err)}\n请确认文件夹路径存在且有读取权限，然后重试。`,
-        );
-      }
-    } finally {
-      scanFinish();
-      setIsLoading(false);
-    }
-  }, [
-    jpgFolder,
-    rawFolder,
-    sortOrder,
-    toast,
-    scanStart,
-    scanFinish,
-    clearRatingUndo,
-    persistFolders,
-  ]);
-
-  /**
-   * E3：扫描取消要**捕获失败**。原先 `onCancel={() => void scanTask.cancel()}`
-   * 把 rejection 丢掉 —— 取消请求失败时按钮悄悄弹回"取消"，用户零反馈。
-   */
-  const handleCancelScan = useCallback(() => {
-    scanCancel().catch((err) => {
-      console.error('Cancel scan failed:', err);
-      toast.error(
-        `取消扫描失败：${String(err)}\n扫描可能仍在进行，请稍后重试。`,
-      );
-    });
-  }, [scanCancel, toast]);
-
-  // Re-scan when the sort order changes.
-  //
-  // The previous version called `handleScan()` from the onChange handler,
-  // which captured the *previous* `sortOrder` — every sort change re-scanned
-  // with the stale order (F-12).
-  //
-  // The guard skips the value that arrived with the saved settings, so
-  // restoring a session does not silently launch a scan.
-  const sortOrderInitialised = useRef(false);
-  useEffect(() => {
-    if (!sortOrderInitialised.current) {
-      sortOrderInitialised.current = true;
-      return;
-    }
-    if (!jpgFolder.trim()) return;
-    void handleScan();
-    // `handleScan` identity covers jpgFolder / rawFolder / sortOrder.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortOrder]);
-
-  // Folder picker handlers
-  const handleBrowseJpg = useCallback(async () => {
-    try {
-      const selected = await api.selectFolderDialog(jpgFolder);
-      if (selected) setJpgFolder(selected);
-    } catch (err) {
-      toast.error(`无法打开文件夹选择器：${String(err)}`);
-    }
-  }, [jpgFolder, toast]);
-
-  const handleBrowseRaw = useCallback(async () => {
-    try {
-      const selected = await api.selectFolderDialog(rawFolder);
-      if (selected) setRawFolder(selected);
-    } catch (err) {
-      toast.error(`无法打开文件夹选择器：${String(err)}`);
-    }
-  }, [rawFolder, toast]);
 
   // Selection navigation (aware of pinned compare mode)
   const handlePrev = useCallback(() => {
@@ -1449,7 +1351,7 @@ function AppShell() {
             : undefined
         }
         scanError={scanError}
-        onDismissScanError={() => setScanError(null)}
+        onDismissScanError={dismissScanError}
         filterMode={filterMode}
         onFilterChange={handleFilterChange}
         filterCounts={filterCounts}
