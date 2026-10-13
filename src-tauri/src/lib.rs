@@ -55,8 +55,8 @@ pub fn run() {
             lumen_apply_recipe_cmd,
             lumen_capabilities_cmd,
             lumen_apply_preset_cmd,
-            apply_tone_cmd,
-            get_tone_state_cmd,
+            commands::apply_tone_cmd,
+            commands::get_tone_state_cmd,
             lumen_apply_mask_cmd,
             lumen_list_masks_cmd,
         ])
