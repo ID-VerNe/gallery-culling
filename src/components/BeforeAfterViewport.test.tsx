@@ -90,15 +90,18 @@ describe('BeforeAfterViewport —— 联动/独立缩放', () => {
     renderBA();
     unlock();
 
-    // 初始两侧都是 100%，焦点默认在 after。
+    // 初始两侧都处于「适应」（scale=1），焦点默认在 after。
+    // V-01：fit 态读数走 scaleLabel，显示「适应」而非「100%」——原先这里
+    // 硬编码 Math.round(scale*100)+'%'，与 Preview/Split 的「适应」措辞不一致，
+    // 且同一组件内重置 tooltip 用的却是 scaleLabel，自相矛盾。
     expect(
-      screen.getByLabelText('当前缩放：前 100%，后 100%（聚焦后图）'),
+      screen.getByLabelText('当前缩放：前 适应，后 适应（聚焦后图）'),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText('放大'));
     // 只有 after 变，before 保持 —— 这正是「独立读数分列两侧」的证据。
     expect(
-      screen.getByLabelText('当前缩放：前 100%，后 125%（聚焦后图）'),
+      screen.getByLabelText('当前缩放：前 适应，后 125%（聚焦后图）'),
     ).toBeInTheDocument();
   });
 });

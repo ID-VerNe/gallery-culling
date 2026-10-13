@@ -362,6 +362,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
           </div>
         )}
 
+
         {/* 含成品提示：该分组存在 edited（Luminar 成果）。
             仅作提示，主图口径仍是工作版（jpg/raw + LUMEN 调色）。 */}
         {group.edited && (
@@ -470,6 +471,9 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             aria-pressed={group.flag === 'pick'}
           >
             <Check className="w-3.5 h-3.5" aria-hidden="true" />
+            {/* V-05：图标 + 文字，与另外两个视口对齐。仅图标的按钮在窄窗格
+                里语义全靠 tooltip，鼠标用户扫一眼认不出哪个是保留哪个是淘汰。 */}
+            <span className="text-[10px]">保留</span>
           </button>
           <button
             onClick={() => onFlag(group, group.flag === 'reject' ? 'none' : 'reject')}
@@ -483,6 +487,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             aria-pressed={group.flag === 'reject'}
           >
             <X className="w-3.5 h-3.5" aria-hidden="true" />
+            <span className="text-[10px]">淘汰</span>
           </button>
         </div>
       </div>
@@ -546,7 +551,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
                 className="font-mono tabular-nums text-white/80 px-1 text-center flex items-center gap-1"
                 aria-label={`当前缩放：左 ${scaleLabel(leftScale)}，右 ${scaleLabel(
                   rightScale,
-                )}%（聚焦${focusedPane === 'left' ? '左' : '右'}图）`}
+                )}（聚焦${focusedPane === 'left' ? '左' : '右'}图）`}
               >
                 <span className={focusedPane === 'left' ? 'text-white' : 'text-white/60'}>
                   L {scaleLabel(leftScale)}
@@ -570,7 +575,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
               onClick={resetView}
               className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-r active:scale-[0.96] transition-colors"
               title={`重置缩放与平移（当前 ${scaleLabel(effectiveScale)}）`}
-              aria-label="重置缩放与平移"
+              aria-label={`重置缩放与平移（当前 ${scaleLabel(effectiveScale)}）`}
             >
               <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
             </button>

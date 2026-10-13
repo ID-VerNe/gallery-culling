@@ -19,6 +19,7 @@ import { zoomAtPoint } from '../utils/zoom';
 import { useLumenPreview } from '../hooks/useLumenPreview';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
+import { ExifCapsule } from './ExifCapsule';
 
 interface PreviewViewportProps {
   group?: PhotoGroupInfo;
@@ -294,30 +295,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
         </div>
       )}
 
-      {/* Floating EXIF capsule at Top-Right (Text selectable) */}
-      {group.exif && (
-        <div className="absolute top-3 right-3 bg-background-base/75 backdrop-blur-md px-3.5 py-2.5 rounded-lg text-xs text-white/80 flex flex-col gap-1 border border-default pointer-events-auto select-text max-w-[16rem]">
-          <div className="font-semibold text-white truncate">
-            {group.exif.cameraModel || group.exif.cameraMake || '未知相机'}
-          </div>
-          {group.exif.lensModel && (
-            <div className="text-[11px] text-white/70 truncate">
-              {group.exif.lensModel}
-            </div>
-          )}
-          <div className="flex items-center gap-2 text-[11px] font-mono tabular-nums text-white/80 mt-0.5 flex-wrap">
-            {group.exif.focalLength && <span>{group.exif.focalLength}</span>}
-            {group.exif.aperture && <span>{group.exif.aperture}</span>}
-            {group.exif.shutterSpeed && <span>{group.exif.shutterSpeed}</span>}
-            {group.exif.iso && <span>ISO{group.exif.iso}</span>}
-          </div>
-          {group.exif.dateTime && (
-            <div className="text-[10px] text-white/70 font-mono tabular-nums mt-0.5">
-              {group.exif.dateTime}
-            </div>
-          )}
-        </div>
-      )}
+      <ExifCapsule exif={group.exif} />
 
       {/* Navigation Overlay Buttons — opaque enough to read over any photo */}
       <button

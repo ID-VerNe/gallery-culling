@@ -20,6 +20,7 @@ import { useLumenPreview } from '../hooks/useLumenPreview';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import type { ViewportEmptyState } from './PreviewViewport';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
+import { ExifCapsule } from './ExifCapsule';
 
 interface BeforeAfterViewportProps {
   group?: PhotoGroupInfo;
@@ -319,23 +320,23 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
             {syncLock ? (
               <span
                 className="font-mono tabular-nums text-white/80 w-10 text-center"
-                aria-label={`当前缩放 ${Math.round(beforeScale * 100)}%`}
+                aria-label={`当前缩放 ${scaleLabel(beforeScale)}`}
               >
-                {Math.round(beforeScale * 100)}%
+                {scaleLabel(beforeScale)}
               </span>
             ) : (
               <span
                 className="font-mono tabular-nums text-white/80 px-1 text-center flex items-center gap-1"
-                aria-label={`当前缩放：前 ${Math.round(beforeScale * 100)}%，后 ${Math.round(
-                  afterScale * 100,
-                )}%（聚焦${activePane === 'before' ? '前' : '后'}图）`}
+                aria-label={`当前缩放：前 ${scaleLabel(beforeScale)}，后 ${scaleLabel(
+                  afterScale,
+                )}（聚焦${activePane === 'before' ? '前' : '后'}图）`}
               >
                 <span className={activePane === 'before' ? 'text-white' : 'text-white/45'}>
-                  前 {Math.round(beforeScale * 100)}%
+                  前 {scaleLabel(beforeScale)}
                 </span>
                 <span className="text-white/25">/</span>
                 <span className={activePane === 'after' ? 'text-white' : 'text-white/45'}>
-                  后 {Math.round(afterScale * 100)}%
+                  后 {scaleLabel(afterScale)}
                 </span>
               </span>
             )}
@@ -352,7 +353,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
               onClick={resetView}
               className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-r active:scale-[0.96] transition-colors"
               title={`重置缩放与平移（当前 ${scaleLabel(effectiveScale)}）`}
-              aria-label="重置缩放与平移"
+              aria-label={`重置缩放与平移（当前 ${scaleLabel(effectiveScale)}）`}
             >
               <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
             </button>
@@ -466,6 +467,9 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
               正在渲染 RAW…
             </div>
           )}
+
+          {/* V-07：与 Preview 视口对齐的 EXIF 胶囊（原先只有 Preview 有）。 */}
+          <ExifCapsule exif={group.exif} />
 
           {/* Before Badge */}
           <div className="absolute top-3 left-3 bg-background-base/85 backdrop-blur-xl px-3 py-1.5 rounded-lg text-xs text-white/80 flex items-center gap-2 border border-white/15 select-text">
