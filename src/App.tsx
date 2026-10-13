@@ -34,26 +34,21 @@ import {
   ToneAdjustments,
 } from './types';
 import { api } from './services/api';
-import { computeAutoTone, DEFAULT_TONE } from './utils/autoTone';
+import { computeAutoTone, DEFAULT_TONE, toneEquals } from './utils/autoTone';
 import { deriveCompareGroups } from './utils/compareGroups';
 import { countByFilter, matchesFilter } from './utils/filterMatch';
+import { groupPath } from './utils/groupPath';
 
-/** C3：调色逐字段严格比较（滑杆值都是量化后的整数/定点数，严格相等即可）。 */
-function toneEquals(a: ToneAdjustments, b: ToneAdjustments): boolean {
-  return (Object.keys(a) as Array<keyof ToneAdjustments>).every(
-    (k) => a[k] === b[k],
-  );
-}
+
+/** L-11 撤销提示里用到的旗标文案（与宫格/底栏的叫法保持一致）。 */
+const FLAG_LABELS: Record<CullFlag, string> = {
+  pick: '保留',
+  reject: '淘汰',
+  none: '未标记',
+};
 
 function AppShell() {
   const toast = useToast();
-
-  /** L-11 撤销提示里用到的旗标文案（与宫格/底栏的叫法保持一致）。 */
-  const FLAG_LABELS: Record<CullFlag, string> = {
-    pick: '保留',
-    reject: '淘汰',
-    none: '未标记',
-  };
 
   // 扫描的进度与取消（M-05）。解构出**稳定引用**的成员：`start/finish/
   // isCancelRequested` 都不随进度变化，因此 `handleScan` 的 identity 不会
@@ -682,7 +677,7 @@ function AppShell() {
   const handleRate = useCallback(
     async (rating: number, targetGroup: PhotoGroupInfo = currentGroup!) => {
       if (!targetGroup) return;
-      const targetPath = targetGroup.raw?.path || targetGroup.jpg?.path;
+      const targetPath = groupPath(targetGroup);
       if (!targetPath) return;
 
       // L-11：快照必须在乐观更新**之前**取，否则拿到的已是新值。
@@ -724,7 +719,7 @@ function AppShell() {
       targetGroup: PhotoGroupInfo = currentGroup!,
     ) => {
       if (!targetGroup) return;
-      const targetPath = targetGroup.raw?.path || targetGroup.jpg?.path;
+      const targetPath = groupPath(targetGroup);
       if (!targetPath) return;
 
       rememberRating({
@@ -772,7 +767,7 @@ function AppShell() {
   /** B6：点击格子上"未同步"角标时，用该张当前值重写 XMP。 */
   const handleRetrySync = useCallback(
     async (group: PhotoGroupInfo) => {
-      const targetPath = group.raw?.path || group.jpg?.path;
+      const targetPath = groupPath(group);
       if (!targetPath) return;
       try {
         await api.updateRatingFlag(targetPath, group.rating, group.flag, true);
@@ -799,7 +794,7 @@ function AppShell() {
     }
     const targetGroup = currentGroup;
     if (!targetGroup) return;
-    const targetPath = targetGroup.raw?.path || targetGroup.jpg?.path;
+    const targetPath = groupPath(targetGroup);
     if (!targetPath) return;
 
     rememberRating({
@@ -845,7 +840,7 @@ function AppShell() {
       for (let i = 0; i < targets.length; i++) {
         if (batchCancelRef.current) break;
         const g = targets[i];
-        const targetPath = g.raw?.path || g.jpg?.path;
+        const targetPath = groupPath(g);
         if (!targetPath) {
           failed++;
           setBatchProgress({ processed: i + 1, total: targets.length });
@@ -954,7 +949,7 @@ function AppShell() {
   // Open in Photoshop / External app
   const handleOpenExternal = useCallback(async () => {
     if (!currentGroup) return;
-    const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
+    const targetPath = groupPath(currentGroup);
     if (!targetPath) return;
 
     try {
@@ -1148,7 +1143,7 @@ function AppShell() {
     if (!currentGroup) return;
     const toneToSave =
       toneMap[currentGroup.id] || currentGroup.tone || DEFAULT_TONE;
-    const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
+    const targetPath = groupPath(currentGroup);
     if (!targetPath) return;
 
     setIsSavingTone(true);
@@ -1192,7 +1187,7 @@ function AppShell() {
       setToneDivergent(false);
       return;
     }
-    const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
+    const targetPath = groupPath(currentGroup);
     if (!targetPath) return;
     let active = true;
     api
@@ -1218,7 +1213,7 @@ function AppShell() {
   const handleApplyLumenPreset = useCallback(
     async (name: string) => {
       if (!currentGroup) return;
-      const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
+      const targetPath = groupPath(currentGroup);
       if (!targetPath) return;
       try {
         await api.applyLumenPreset(targetPath, name, 100);
@@ -1243,7 +1238,7 @@ function AppShell() {
   const handleApplyLumenMask = useCallback(
     async (region: string, dehaze: number) => {
       if (!currentGroup) return;
-      const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
+      const targetPath = groupPath(currentGroup);
       if (!targetPath) return;
       // 后端拒绝（引擎未启用 / 非 GPU 版 / 区域非法）会走到这里。原实现没有
       // try/catch，Promise 拒绝变成 unhandled rejection：用户看不到任何提示，
@@ -1276,7 +1271,7 @@ function AppShell() {
       setLumenMasks([]);
       return;
     }
-    const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
+    const targetPath = groupPath(currentGroup);
     if (!targetPath || !lumenCaps?.aiMasks) return;
     let active = true;
     api
@@ -1300,8 +1295,7 @@ function AppShell() {
       const target =
         folder ||
         settings?.defaultRawFolder ||
-        currentGroup?.raw?.path ||
-        currentGroup?.jpg?.path ||
+        groupPath(currentGroup) ||
         '';
       if (!target) {
         toast.error('没有可同步的路径，请先设置默认 RAW 目录。');
@@ -1340,7 +1334,7 @@ function AppShell() {
   // Luminar AI Roundtrip Handler
   const handleOpenLuminar = useCallback(async () => {
     if (!currentGroup) return;
-    const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
+    const targetPath = groupPath(currentGroup);
     if (!targetPath) return;
 
     setIsLuminarRunning(true);
