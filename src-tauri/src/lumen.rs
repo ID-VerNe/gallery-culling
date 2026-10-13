@@ -8,17 +8,21 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(test)]
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
+mod cache;
+mod tone;
 mod cli;
 mod discovery;
 mod error;
 
+pub use cache::*;
 pub use cli::*;
+pub use tone::*;
 pub use discovery::*;
 pub use error::LumenError;
 
@@ -29,94 +33,6 @@ pub enum PreviewVariant {
     Original,
 }
 
-/// 把可选时间戳编码进缓存键：None 与 Some(UNIX_EPOCH) 也必须可区分。
-fn mtime_tag(mtime: Option<SystemTime>) -> u128 {
-    match mtime {
-        Some(t) => t
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(u128::MAX),
-        None => u128::MAX,
-    }
-}
-
-/// 计算预览缓存键：16 位小写 hex。
-///
-/// 输入任一变化（宽高/变体/版本/源文件 mtime/兄弟 .lumen mtime）→ key 变化。
-pub fn lumen_cache_key(
-    src: &Path,
-    width: u32,
-    variant: PreviewVariant,
-    lumen_version: &str,
-    src_mtime: Option<SystemTime>,
-    project_mtime: Option<SystemTime>,
-) -> String {
-    lumen_cache_key_with_recipe(
-        src,
-        width,
-        variant,
-        lumen_version,
-        src_mtime,
-        project_mtime,
-        None,
-    )
-}
-
-/// 带 recipe 的缓存键。recipe 参与键是**硬要求**：改了色必须重新渲染，
-/// 否则用户会看到上一次的图（Step 9 spec 不变量 N4）。
-pub fn lumen_cache_key_with_recipe(
-    src: &Path,
-    width: u32,
-    variant: PreviewVariant,
-    lumen_version: &str,
-    src_mtime: Option<SystemTime>,
-    project_mtime: Option<SystemTime>,
-    recipe: Option<&Value>,
-) -> String {
-    // 相对路径 canonicalize，保证同一文件不同写法同 key。
-    let abs = src.canonicalize().unwrap_or_else(|_| src.to_path_buf());
-    let variant_tag = match variant {
-        PreviewVariant::Edited => "edited",
-        PreviewVariant::Original => "orig",
-    };
-    // v2：新增 recipe 段。升级版本号会让所有旧缓存自然失效（一次性重渲染）。
-    let recipe_tag = recipe.map(recipe_hash).unwrap_or_else(|| "-".to_string());
-    let payload = format!(
-        "lumen-preview-v2|{}|{}|{}|{}|{}|{}|{}",
-        lumen_version,
-        abs.display(),
-        mtime_tag(src_mtime),
-        mtime_tag(project_mtime),
-        width,
-        variant_tag,
-        recipe_tag
-    );
-    let digest = Sha256::digest(payload.as_bytes());
-    // 16 位小写 hex = 前 8 字节。
-    digest
-        .iter()
-        .take(8)
-        .map(|b| format!("{:02x}", b))
-        .collect()
-}
-
-/// 预览产物落盘路径：`<cache_root>/lumen/<key>_<width>[_orig]_lumen.jpg`。
-pub fn preview_cache_path(
-    cache_root: &Path,
-    key: &str,
-    width: u32,
-    variant: PreviewVariant,
-) -> PathBuf {
-    let suffix = match variant {
-        PreviewVariant::Edited => "",
-        PreviewVariant::Original => "_orig",
-    };
-    cache_root
-        .join("lumen")
-        .join(format!("{}_{}{}_lumen.jpg", key, width, suffix))
-}
-
-/// lumen-raw 版本钉死：sidecar 与此不符即整体禁用 RAW 链路（协议漂移保护）。
 pub const PINNED_LUMEN_VERSION: &str = "1.6.0";
 
 /// MCP initialize 使用的 legacy 协议版本（宿主永不带 _meta，绕开 modern 分支）。
@@ -333,96 +249,6 @@ pub fn project_masks(state: &Value) -> Vec<Value> {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default()
-}
-
-/// 宿主 ToneAdjustments → lumen recipe changes（**最终值**语义）。
-///
-/// 六个滑杆全部直通，包括 temperature。Step 9 当时排除了 temperature，理由是
-/// "量纲不同"——实测证明真正量纲不同的是**宿主写 XMP 的标签**（`crs:Temperature`
-/// 是绝对 Kelvin），而不是 lumen：宿主滑杆量程 -100..=100（"冷暖偏移"），
-/// lumen `adjustments.temperature` 同为 ±100 相对偏移（实测传 500 → 存 100），
-/// 两侧现在都落到 `crs:Temperature2012`（Lightroom 的相对刻度）。
-pub fn tone_to_recipe(tone: &crate::models::ToneAdjustments, include_temperature: bool) -> Value {
-    let mut adj = serde_json::Map::new();
-    adj.insert("exposure".into(), json_f32(tone.exposure));
-    adj.insert("highlights".into(), json_f32(tone.highlights));
-    adj.insert("shadows".into(), json_f32(tone.shadows));
-    adj.insert("tint".into(), json_f32(tone.tint));
-    adj.insert("contrast".into(), json_f32(tone.contrast));
-    // 单位已统一（两侧都是 ±100 相对偏移），默认直通；
-    // include_temperature=false 保留只为兼容旧调用点。
-    adj.insert(
-        "temperature".into(),
-        json_f32(tone.temperature.clamp(-100.0, 100.0)),
-    );
-    if !include_temperature {
-        adj.remove("temperature");
-    }
-    serde_json::json!({ "adjustments": adj })
-}
-
-/// lumen `state.adjustments` → 宿主 ToneAdjustments（缺失字段 → 0）。
-pub fn recipe_to_tone(state: &Value) -> crate::models::ToneAdjustments {
-    let adj = state.get("adjustments").cloned().unwrap_or(Value::Null);
-    let g = |k: &str| adj.get(k).and_then(Value::as_f64).unwrap_or(0.0) as f32;
-    crate::models::ToneAdjustments {
-        exposure: g("exposure"),
-        highlights: g("highlights"),
-        shadows: g("shadows"),
-        // temperature 同量纲问题：回读也只作展示，不参与回写
-        // 单位已统一（±100 相对），回读即滑杆值；越界值夹紧以免 UI 失控
-        temperature: g("temperature").clamp(-100.0, 100.0),
-        tint: g("tint"),
-        contrast: g("contrast"),
-    }
-}
-
-/// f32 → JSON：量化到 4 位小数，消除 f32→f64 的二进制表示噪声
-/// （0.65f32 直接转 f64 会得到 0.6499999761581421，破坏快照对比与缓存稳定性）。
-fn json_f32(v: f32) -> Value {
-    let rounded = (v as f64 * 10_000.0).round() / 10_000.0;
-    serde_json::Number::from_f64(rounded)
-        .map(Value::Number)
-        .unwrap_or(Value::Null)
-}
-
-/// recipe 的规范化哈希（进缓存键）：键排序 + 浮点归一，保证同配方同 key。
-pub fn recipe_hash(changes: &Value) -> String {
-    let canonical = canonical_json(changes);
-    let digest = Sha256::digest(canonical.as_bytes());
-    digest
-        .iter()
-        .take(8)
-        .map(|b| format!("{:02x}", b))
-        .collect()
-}
-
-/// 递归规范化：对象键排序、浮点保留 4 位，避免 0.30000000000000004 之类的抖动。
-fn canonical_json(v: &Value) -> String {
-    match v {
-        Value::Object(map) => {
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
-            let inner: Vec<String> = keys
-                .iter()
-                .map(|k| format!("{:?}:{}", k, canonical_json(&map[*k])))
-                .collect();
-            format!("{{{}}}", inner.join(","))
-        }
-        Value::Array(items) => format!(
-            "[{}]",
-            items
-                .iter()
-                .map(canonical_json)
-                .collect::<Vec<_>>()
-                .join(",")
-        ),
-        Value::Number(n) => {
-            let f = n.as_f64().unwrap_or(0.0);
-            format!("{:.4}", f)
-        }
-        other => other.to_string(),
-    }
 }
 
 /// 同步动作：宿主评级 → lumen。
@@ -1207,109 +1033,6 @@ pub fn query_version(exe: &Path) -> Option<String> {
         return None;
     }
     parse_lumen_version(&String::from_utf8_lossy(&output.stdout))
-}
-
-/// 组装 `render.preview` 的 JSON 参数（4 键，不得多键）。
-pub fn preview_args(src: &Path, width: u32, variant: PreviewVariant, output: &Path) -> Value {
-    serde_json::json!({
-        "path": src.to_string_lossy(),
-        "size": width,
-        "original": matches!(variant, PreviewVariant::Original),
-        "output": output.to_string_lossy(),
-    })
-}
-
-/// 缓存命中判定：目标文件存在且是普通文件。
-pub fn cached_preview(
-    cache_root: &Path,
-    key: &str,
-    width: u32,
-    variant: PreviewVariant,
-) -> Option<PathBuf> {
-    let path = preview_cache_path(cache_root, key, width, variant);
-    path.is_file().then_some(path)
-}
-
-/// 预览缓存键的全部输入（打包以保持函数签名 ≤7 参数，clippy too_many_arguments）。
-#[derive(Debug, Clone)]
-pub struct PreviewCacheInputs {
-    pub width: u32,
-    pub variant: PreviewVariant,
-    pub lumen_version: &'static str,
-    pub src_mtime: Option<SystemTime>,
-    pub project_mtime: Option<SystemTime>,
-    /// 待渲染的调色 recipe（进缓存键 + 渲染参数）
-    pub recipe: Option<Value>,
-}
-
-impl Default for PreviewCacheInputs {
-    fn default() -> Self {
-        Self {
-            width: 1600,
-            variant: PreviewVariant::Edited,
-            lumen_version: PINNED_LUMEN_VERSION,
-            src_mtime: None,
-            project_mtime: None,
-            recipe: None,
-        }
-    }
-}
-
-impl PreviewCacheInputs {
-    pub fn key(&self, src: &Path) -> String {
-        lumen_cache_key_with_recipe(
-            src,
-            self.width,
-            self.variant,
-            self.lumen_version,
-            self.src_mtime,
-            self.project_mtime,
-            self.recipe.as_ref(),
-        )
-    }
-
-    pub fn cache_path(&self, cache_root: &Path, key: &str) -> PathBuf {
-        preview_cache_path(cache_root, key, self.width, self.variant)
-    }
-}
-
-/// 预览渲染编排：命中缓存直接返回；否则 tmp 渲染 + 原子 rename。
-///
-/// `render` 是进程边界注入（真实实现为 `run_lumen(exe, "render.preview", args)`）。
-pub fn ensure_preview(
-    src: &Path,
-    cache_root: &Path,
-    inputs: PreviewCacheInputs,
-    render: impl FnOnce(&Path, &Value) -> Result<(), LumenError>,
-) -> Result<PathBuf, LumenError> {
-    let key = inputs.key(src);
-    let out = inputs.cache_path(cache_root, &key);
-    if out.is_file() {
-        return Ok(out); // 缓存命中：不碰渲染边界
-    }
-
-    let file_name = out
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .ok_or_else(|| LumenError::Protocol("缓存路径非法".to_string()))?;
-    let tmp = out
-        .parent()
-        .unwrap_or(cache_root)
-        .join(format!("{}.tmp", file_name));
-
-    if let Some(parent) = out.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| LumenError::Io(e.to_string()))?;
-    }
-
-    let args = preview_args(src, inputs.width, inputs.variant, &tmp);
-    render(&tmp, &args)?;
-    if !tmp.is_file() {
-        return Err(LumenError::Protocol(
-            "LUMEN RAW 未生成预览输出文件".to_string(),
-        ));
-    }
-    std::fs::rename(&tmp, &out).map_err(|e| LumenError::Io(e.to_string()))?;
-    Ok(out)
 }
 
 /// 握手状态纯映射：enabled × exe × version(==PINNED) → LumenStatus。
