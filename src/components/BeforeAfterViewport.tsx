@@ -160,31 +160,38 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
   };
   const clampTo = (
     p: { x: number; y: number },
-    dx: number,
-    dy: number,
     maxX: number,
     maxY: number,
   ) => ({
-    x: Math.min(Math.max(p.x + dx, -maxX), maxX),
-    y: Math.min(Math.max(p.y + dy, -maxY), maxY),
+    x: Math.min(Math.max(p.x, -maxX), maxX),
+    y: Math.min(Math.max(p.y, -maxY), maxY),
   });
 
   // 拖拽平移（C8：Pointer 事件 + 捕获，拖出容器不丢拽）
+  //
+  // 坐标系：**绝对系**（与 PreviewViewport / SplitCompareViewport 一致）。
+  // `dragStart` 记的是「抓取点相对图像原点的偏移」，move 时直接由当前
+  // 客户端坐标反解出目标平移量。
+  //
+  // 原先这里是增量系（`dx = client - dragStart` 再把 client 写回 dragStart）：
+  // dragStart 是 React state，同帧内派发的两个 pointermove 会被批处理，
+  // 第二个 handler 读到**同一个旧 dragStart**，dx 被重复计算、位移丢一帧。
+  // 快速拖拽 / 低帧率下会放大成可见抖动。绝对系天然免疫。
   const handlePointerDown = (side: PaneSide, e: React.PointerEvent) => {
     if (e.button !== 0) return;
     // 覆盖层交互元素不进入拖拽。
     if (e.target !== e.currentTarget) return;
     setIsDragging(true);
     setActivePane(side);
-    setDragStart({ x: e.clientX, y: e.clientY });
+    const origin = side === 'before' ? beforePos : afterPos;
+    setDragStart({ x: e.clientX - origin.x, y: e.clientY - origin.y });
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!isDragging) return;
-    const dx = e.clientX - dragStart.x;
-    const dy = e.clientY - dragStart.y;
-    setDragStart({ x: e.clientX, y: e.clientY });
+    // 绝对系：由客户端坐标与抓取偏移反解目标平移量，与 dragStart 是否已提交无关。
+    const target = { x: e.clientX - dragStart.x, y: e.clientY - dragStart.y };
 
     if (syncLock) {
       // 联动平移两栏：夹紧取两栏的公共边界，避免任一栏露空。
@@ -192,14 +199,14 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
       const am = paneMaxPan('after', afterScale);
       const mx = Math.min(bm.x, am.x);
       const my = Math.min(bm.y, am.y);
-      setBeforePos((p) => clampTo(p, dx, dy, mx, my));
-      setAfterPos((p) => clampTo(p, dx, dy, mx, my));
+      setBeforePos(clampTo(target, mx, my));
+      setAfterPos(clampTo(target, mx, my));
     } else if (activePane === 'before') {
       const m = paneMaxPan('before', beforeScale);
-      setBeforePos((p) => clampTo(p, dx, dy, m.x, m.y));
+      setBeforePos(clampTo(target, m.x, m.y));
     } else {
       const m = paneMaxPan('after', afterScale);
-      setAfterPos((p) => clampTo(p, dx, dy, m.x, m.y));
+      setAfterPos(clampTo(target, m.x, m.y));
     }
   };
 
