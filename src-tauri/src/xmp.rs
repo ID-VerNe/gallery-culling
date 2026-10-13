@@ -357,7 +357,8 @@ pub fn write_xmp_preserving(image_path: &Path, meta: &XmpMetadata) -> Result<Pat
     let merged = match fs::read_to_string(&xmp_path) {
         Ok(existing) => match splice_our_block(&existing, &our_block) {
             Some(spliced) => spliced,
-            None => append_our_block(&existing, &our_block),
+            // 畸形文档：拒写并把原因往上传，绝不降级成"重建空模板"。
+            None => append_our_block(&existing, &our_block)?,
         },
         Err(_) => build_fresh_document(meta),
     };
@@ -383,27 +384,20 @@ pub fn write_xmp_preserving(image_path: &Path, meta: &XmpMetadata) -> Result<Pat
 }
 
 /// 把本方块插到已有 `rdf:RDF` 的最后一个 Description 之后（Lightroom 风格文档）。
-fn append_our_block(existing: &str, our_block: &str) -> String {
-    if let Some(pos) = existing.find("</rdf:RDF>") {
-        let mut out = String::with_capacity(existing.len() + our_block.len());
-        out.push_str(&existing[..pos]);
-        out.push_str(our_block);
-        out.push_str(&existing[pos..]);
-        return out;
-    }
-    // 连 rdf:RDF 都没有的畸形文件：不冒险改写，直接覆盖为标准模板
-    build_fresh_document(&XmpMetadata::default())
-}
-
-/// 写 reject：整份元数据置为 Rating = -1（保留第三方命名空间）。
-fn write_xmp_rating_minus_one(image_path: &Path) -> Result<PathBuf, String> {
-    let meta = XmpMetadata {
-        rating: 0,
-        label: String::new(),
-        rejected: true,
-        ..Default::default()
-    };
-    write_xmp_preserving(image_path, &meta)
+///
+/// 找不到 `</rdf:RDF>` 说明文件畸形（被截断或被别的工具写坏）。此时**必须报错拒写**：
+/// 任何"重建模板"的兜底都会连同调用方已读出的 meta 一起丢弃，把用户已有的
+/// 镜头/调色/第三方命名空间整体替换成空模板，且静默返回成功。
+fn append_our_block(existing: &str, our_block: &str) -> Result<String, String> {
+    let pos = existing.find("</rdf:RDF>").ok_or_else(|| {
+        "malformed XMP: 未找到 </rdf:RDF> 闭合标记，拒绝改写（否则会清空整份元数据）"
+            .to_string()
+    })?;
+    let mut out = String::with_capacity(existing.len() + our_block.len());
+    out.push_str(&existing[..pos]);
+    out.push_str(our_block);
+    out.push_str(&existing[pos..]);
+    Ok(out)
 }
 
 /// Write Adobe Lightroom Classic & Capture One compatible XMP sidecar
@@ -423,8 +417,14 @@ pub fn write_xmp(image_path: &Path, rating: u8, flag: &str) -> Result<PathBuf, S
         _ => String::new(),
     };
     if flag == "reject" {
+        // 复用上面已读出的 meta，**不要**另造空壳：reject 只是把评级归零，
+        // 镜头/调色/第三方命名空间都必须原样存活。原实现走
+        // write_xmp_rating_minus_one（XmpMetadata::default()），每次 reject
+        // 都会静默清空用户已写好的镜头与调色参数，且不可恢复。
         meta.rating = 0;
-        return write_xmp_rating_minus_one(image_path);
+        meta.label = String::new();
+        meta.rejected = true;
+        return write_xmp_preserving(image_path, &meta);
     }
     // 非 reject 分支必须显式清掉 `rejected`。
     //
@@ -498,6 +498,104 @@ pub fn flag_from_xmp(meta: &XmpMetadata) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---------------------------------------------------------------------
+    // BE-01：reject 不得清空本方块里已有的镜头与调色元数据
+    //
+    // 缺陷：write_xmp 的 reject 分支读了 meta（含 lens/tone），却调用
+    // write_xmp_rating_minus_one，后者构造全新的 XmpMetadata::default()
+    // 空壳，于是每次 reject 都静默清空用户已写好的镜头型号与调色参数。
+    // ---------------------------------------------------------------------
+    #[test]
+    fn rejecting_a_toned_photo_preserves_lens_and_tone() {
+        let img =
+            std::env::temp_dir().join(format!("xmp_reject_keeps_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+
+        // 先写一张"调过色、有镜头信息"的侧边栏
+        let seeded = XmpMetadata {
+            rating: 4,
+            label: String::new(),
+            rejected: false,
+            lens_model: Some("RF 24-70mm F2.8".into()),
+            focal_length: Some("50mm".into()),
+            aperture: Some("f/2.8".into()),
+            exposure: Some(0.65),
+            highlights: Some(-20.0),
+            shadows: Some(15.0),
+            temperature: Some(8.0),
+            tint: Some(-3.0),
+            contrast: Some(12.0),
+        };
+        write_xmp_preserving(&img, &seeded).expect("预置侧边栏应成功");
+
+        // 对它执行 reject —— 修复前 lens/tone 会被清空
+        write_xmp(&img, 0, "reject").expect("reject 应成功");
+
+        let after = read_xmp_full(&xmp).expect("侧边栏应仍可读");
+        assert!(after.rejected, "reject 状态未落盘");
+        assert_eq!(after.rating, 0, "reject 后本方星级应为 0");
+        // 关键断言：镜头与调色必须完好
+        assert_eq!(
+            after.lens_model.as_deref(),
+            Some("RF 24-70mm F2.8"),
+            "reject 清空了镜头型号（数据丢失）"
+        );
+        assert_eq!(after.focal_length.as_deref(), Some("50mm"), "reject 清空了焦距");
+        assert_eq!(after.aperture.as_deref(), Some("f/2.8"), "reject 清空了光圈");
+        assert_eq!(after.exposure, Some(0.65), "reject 清空了曝光");
+        assert_eq!(after.highlights, Some(-20.0), "reject 清空了高光");
+        assert_eq!(after.shadows, Some(15.0), "reject 清空了阴影");
+        assert_eq!(after.temperature, Some(8.0), "reject 清空了色温");
+        assert_eq!(after.tint, Some(-3.0), "reject 清空了色调");
+        assert_eq!(after.contrast, Some(12.0), "reject 清空了对比度");
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    // ---------------------------------------------------------------------
+    // BE-02：畸形 XMP（缺 </rdf:RDF>）必须报错拒写，而不是清空覆盖
+    //
+    // 缺陷：append_our_block 找不到 </rdf:RDF> 时静默回退到
+    // build_fresh_document(&XmpMetadata::default())，**连调用方已读出的 meta
+    // 也一并丢弃**，把整个文件替换成空模板并返回 Ok。
+    // ---------------------------------------------------------------------
+    #[test]
+    fn malformed_xmp_refuses_to_overwrite_and_leaves_bytes_untouched() {
+        let img = std::env::temp_dir().join(format!("xmp_malformed_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+
+        // 有 <rdf:RDF> 但没有 </rdf:RDF>（截断/被别的工具写坏），内含镜头信息
+        let malformed = r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:aux="http://ns.adobe.com/exif/1.0/aux/">
+   <aux:Lens>RF 24-70mm F2.8</aux:Lens>
+  </rdf:Description>
+"#;
+        fs::write(&xmp, malformed).unwrap();
+        let before = fs::read(&xmp).unwrap();
+
+        let meta = XmpMetadata {
+            rating: 5,
+            label: "Green".into(),
+            ..Default::default()
+        };
+        let result = write_xmp_preserving(&img, &meta);
+
+        assert!(
+            result.is_err(),
+            "畸形 XMP 必须拒写（返回 Err），修复前会静默覆盖为空模板"
+        );
+        assert_eq!(
+            fs::read(&xmp).unwrap(),
+            before,
+            "拒写后原文件字节必须完全不变"
+        );
+
+        let _ = fs::remove_file(&xmp);
+    }
 
     /// 模拟 Lightroom 写出的侧边栏（lr:/dc:/GPS + 本方块共存）
     fn lightroom_sidecar() -> String {
