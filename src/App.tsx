@@ -90,6 +90,15 @@ function AppShell() {
   const [pinnedId, setPinnedId] = useState<string | null>(null);
   const [isPinnedOnLeft, setIsPinnedOnLeft] = useState<boolean>(true);
   const [isLoading, setIsLoading] = useState(false);
+  /**
+   * UX-15：最近一次扫描的真实失败原因（`null` = 无失败）。
+   *
+   * 原先失败只走一次 toast 就消失了：批量扫描时用户会同时盯着宫格和
+   * 进度条，toast 3 秒后自动退场，等反应过来已经不知道是哪一步坏了。
+   * 这里保留文案并在顶栏常驻，用户可自行「忽略」。
+   * 用户主动取消**不**算失败（后端以 `任务已取消` 哨兵返回）。
+   */
+  const [scanError, setScanError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('single');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [sortOrder, setSortOrder] = useState<SortOrder>('time_filename');
@@ -466,6 +475,8 @@ function AppShell() {
   const handleScan = useCallback(async () => {
     if (!jpgFolder.trim()) return;
     setIsLoading(true);
+    // 每次重新扫描都先清掉上一轮的错误，避免旧故障文案挂在新扫描上。
+    setScanError(null);
     scanStart();
     // 重新扫描后旧快照指向的照片可能已不在列表里，撤销会写到一个不该碰的文件上。
     clearRatingUndo();
@@ -523,6 +534,8 @@ function AppShell() {
         toast.info('已取消扫描：照片列表未更新。');
       } else {
         console.error('Scan failed:', err);
+        // UX-15：常驻顶栏，不只靠一次 toast。
+        setScanError(String(err));
         toast.error(
           `扫描失败：${String(err)}\n请确认文件夹路径存在且有读取权限，然后重试。`,
         );
@@ -1519,6 +1532,13 @@ function AppShell() {
         onBrowseRaw={handleBrowseRaw}
         onScan={handleScan}
         isLoading={isLoading || scanTask.isRunning}
+        scanProgress={
+          scanTask.progress
+            ? { processed: scanTask.progress.processed, total: scanTask.progress.total }
+            : undefined
+        }
+        scanError={scanError}
+        onDismissScanError={() => setScanError(null)}
         filterMode={filterMode}
         onFilterChange={handleFilterChange}
         filterCounts={filterCounts}
