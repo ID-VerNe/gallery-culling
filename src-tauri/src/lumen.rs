@@ -429,91 +429,6 @@ impl Drop for ProcessTransport {
     }
 }
 
-/// 监督器状态（崩溃退避 + 干净回收）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SupervisorState {
-    Down,
-    Ready { version: String },
-    Dead { attempt: u32 },
-}
-
-/// 常驻 sidecar 监督器：拉起 → 握手 → Ready；失败 → Dead + 指数退避。
-#[derive(Debug)]
-pub struct Supervisor {
-    state: SupervisorState,
-    last_error: Option<String>,
-}
-
-impl Default for Supervisor {
-    fn default() -> Self {
-        Self {
-            state: SupervisorState::Down,
-            last_error: None,
-        }
-    }
-}
-
-impl Supervisor {
-    pub fn state(&self) -> &SupervisorState {
-        &self.state
-    }
-
-    pub fn last_error(&self) -> Option<&str> {
-        self.last_error.as_deref()
-    }
-
-    pub fn mark_ready(&mut self, version: &str) {
-        self.state = SupervisorState::Ready {
-            version: version.to_string(),
-        };
-        self.last_error = None;
-    }
-
-    /// 标记崩溃；返回下一次重启的退避时长（超过 MAX_RESTARTS 则 None = 不再自动重启）。
-    pub fn mark_dead(&mut self, err: &str) -> Option<std::time::Duration> {
-        self.last_error = Some(err.to_string());
-        let attempt = match self.state {
-            SupervisorState::Dead { attempt } => attempt + 1,
-            _ => 1,
-        };
-        self.state = SupervisorState::Dead { attempt };
-        if attempt > MAX_RESTARTS {
-            None
-        } else {
-            Some(next_backoff(attempt - 1))
-        }
-    }
-
-    /// 拉起（必要时）并握手。Ready 直接返回缓存版本。
-    pub fn ensure_running(&mut self, exe: &Path) -> Result<String, LumenError> {
-        if let SupervisorState::Ready { version } = &self.state {
-            return Ok(version.clone());
-        }
-        // 固定 --headless：禁止误连本机 GUI（A 报告 G3/R4）
-        let transport = match ProcessTransport::spawn(exe, &["mcp", "--headless"]) {
-            Ok(t) => t,
-            Err(e) => {
-                self.mark_dead(&e.to_string());
-                return Err(e);
-            }
-        };
-        let mut client = McpClient::new(transport);
-        match client.handshake() {
-            Ok(()) => {
-                let version = client
-                    .server_version()
-                    .unwrap_or(PINNED_LUMEN_VERSION)
-                    .to_string();
-                self.mark_ready(&version);
-                Ok(version)
-            }
-            Err(e) => {
-                self.mark_dead(&e.to_string());
-                Err(e)
-            }
-        }
-    }
-}
 
 /// 直调 CLI 子命令（非 `run` 形态）。
 ///
@@ -2610,28 +2525,6 @@ mod tests {
     }
 
     #[test]
-    fn ensure_running_rejects_non_mcp_child() {
-        // 契约：ensure_running 必须真握手；对着"吐垃圾"的对端不得宣称 Ready。
-        let fixture = Path::new("tests/fixtures/mcp_garbage.cmd")
-            .canonicalize()
-            .expect("夹具应存在");
-        let mut sup = Supervisor::default();
-        let err = sup
-            .ensure_running(&fixture)
-            .expect_err("非 MCP 对端握手必须失败");
-        assert!(
-            matches!(err, LumenError::Protocol(_) | LumenError::Command(_)),
-            "实际: {:?}",
-            err
-        );
-        assert!(
-            matches!(sup.state(), SupervisorState::Dead { .. }),
-            "握手失败后应 Dead，实际: {:?}",
-            sup.state()
-        );
-    }
-
-    #[test]
     fn runtime_status_matrix_without_sidecar() {
         let rt = LumenRuntime::new();
         // enabled=false → 不可用且零请求
@@ -3162,8 +3055,10 @@ ope\lumen-cli-xyz.exe",
         // schema 是 amount 0..100（曾误用 strength，真实 sidecar 报 unknown argument）
         let json = serde_json::json!({"path": "x.ARW", "name": "金色时刻", "amount": 60});
         assert_eq!(json["amount"], serde_json::json!(60));
-        // 越界必须夹紧（schema 会拒绝 >100）
-        let clamped = (140u8).min(100);
+        // 越界必须夹紧（schema 会拒绝 >100）。用变量而非两个字面量，
+        // 否则 .min() 在编译期就折叠成常量，这个断言其实什么都没测。
+        let raw: u8 = 140;
+        let clamped = raw.min(100u8);
         assert_eq!(clamped, 100);
     }
 
@@ -3175,44 +3070,6 @@ ope\lumen-cli-xyz.exe",
         )
         .expect_err("不存在 exe 应 Err");
         assert_eq!(err, LumenError::NotInstalled);
-    }
-
-    #[test]
-    fn supervisor_state_machine_and_backoff() {
-        let mut sup = Supervisor::default();
-        assert_eq!(sup.state(), &SupervisorState::Down);
-
-        let d1 = sup.mark_dead("boom").expect("第 1 次应给退避");
-        assert_eq!(d1, std::time::Duration::from_millis(500));
-        let d2 = sup.mark_dead("boom").expect("第 2 次应给退避");
-        assert_eq!(d2, std::time::Duration::from_millis(1000));
-        assert!(matches!(sup.state(), SupervisorState::Dead { attempt: 2 }));
-        assert_eq!(sup.last_error(), Some("boom"));
-
-        sup.mark_ready("1.6.0");
-        assert_eq!(
-            sup.state(),
-            &SupervisorState::Ready {
-                version: "1.6.0".into()
-            }
-        );
-        assert_eq!(sup.last_error(), None, "成功后清空错误");
-
-        // ready 后再 crash：attempt 重新计数
-        let d3 = sup.mark_dead("again").expect("ready 后 crash 仍应退避");
-        assert_eq!(d3, std::time::Duration::from_millis(500));
-    }
-
-    #[test]
-    fn supervisor_max_restarts_stops_auto_retry() {
-        let mut sup = Supervisor::default();
-        for i in 0..MAX_RESTARTS {
-            assert!(sup.mark_dead("boom").is_some(), "第 {} 次应仍给退避", i + 1);
-        }
-        assert!(
-            sup.mark_dead("boom").is_none(),
-            "超过 MAX_RESTARTS 后不再自动重启"
-        );
     }
 
     #[test]
@@ -3240,30 +3097,5 @@ ope\lumen-cli-xyz.exe",
             "实际: {:?}",
             err
         );
-    }
-
-    #[test]
-    fn supervisor_ensure_running_marks_dead_on_bad_exe() {
-        let mut sup = Supervisor::default();
-        let err = sup
-            .ensure_running(Path::new(r"C:\definitely\not\here\lumen-cli-xyz987.exe"))
-            .expect_err("不存在 exe 应 Err");
-        assert_eq!(err, LumenError::NotInstalled);
-        assert!(
-            matches!(sup.state(), SupervisorState::Dead { attempt: 1 }),
-            "失败后应 Dead，实际: {:?}",
-            sup.state()
-        );
-    }
-
-    #[test]
-    fn supervisor_ready_short_circuits_spawn() {
-        let mut sup = Supervisor::default();
-        sup.mark_ready("1.6.0");
-        // 已 Ready 时不再 spawn（即使 exe 不存在也应直接返回版本）
-        let got = sup
-            .ensure_running(Path::new(r"C:\definitely\not\here\lumen-cli-xyz987.exe"))
-            .expect("Ready 应短路返回");
-        assert_eq!(got, "1.6.0");
     }
 }

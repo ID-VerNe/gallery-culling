@@ -236,10 +236,8 @@ pub async fn batch_update_metadata_cmd(
 
         for file_path in file_paths {
             let path = Path::new(&file_path);
-            if path.exists() {
-                if update_xmp_metadata(path, lens, focal, ap).is_ok() {
-                    count += 1;
-                }
+            if path.exists() && update_xmp_metadata(path, lens, focal, ap).is_ok() {
+                count += 1;
             }
         }
         Ok(count)
@@ -313,10 +311,8 @@ pub async fn trash_photos_cmd(file_paths: Vec<String>) -> Result<usize, String> 
         let mut count = 0;
         for path_str in file_paths {
             let path = Path::new(&path_str);
-            if path.exists() {
-                if trash::delete(path).is_ok() {
-                    count += 1;
-                }
+            if path.exists() && trash::delete(path).is_ok() {
+                count += 1;
             }
         }
         Ok(count)

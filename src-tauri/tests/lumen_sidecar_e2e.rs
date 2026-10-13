@@ -141,23 +141,6 @@ fn e2e_render_preview_produces_jpeg_and_caches() {
 
 #[test]
 #[ignore = "需要已构建的 lumen-cli sidecar"]
-fn e2e_supervisor_handshakes_with_real_mcp_server() {
-    let exe = require_sidecar();
-    let mut sup = gallery_culling_lib::lumen::Supervisor::default();
-    let version = sup
-        .ensure_running(&exe)
-        .unwrap_or_else(|e| panic!("真实 MCP 握手应成功: {:?}", e));
-    assert_eq!(version, PINNED_LUMEN_VERSION);
-    assert!(matches!(
-        sup.state(),
-        gallery_culling_lib::lumen::SupervisorState::Ready { .. }
-    ));
-    // Ready 后短路
-    assert_eq!(sup.ensure_running(Path::new("nope.exe")).unwrap(), version);
-}
-
-#[test]
-#[ignore = "需要已构建的 lumen-cli sidecar"]
 fn e2e_error_contract_exit1_is_command() {
     let exe = require_sidecar();
     // 不存在的照片 → exit 1 + `lumen-cli: ` 前缀 → Command 分类
@@ -211,7 +194,7 @@ fn e2e_requires_sidecar_message_is_actionable() {
     if sidecar().is_some() {
         return; // 环境已配置，跳过断言（非测试目标）
     }
-    let msg = std::panic::catch_unwind(|| require_sidecar())
+    let msg = std::panic::catch_unwind(require_sidecar)
         .expect_err("无 sidecar 时应 panic 并给出提示");
     let text = msg.downcast_ref::<String>().cloned().unwrap_or_default();
     assert!(text.contains("LUMEN_CLI"), "提示应指明如何配置: {}", text);

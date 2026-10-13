@@ -249,10 +249,14 @@ impl Database {
 
 fn get_db_path() -> PathBuf {
     let local = PathBuf::from("gallery_culling.db");
-    if let Ok(_) = std::fs::OpenOptions::new()
+    // create(true) 配 write(true) 但**没有** truncate(true)：刻意如此 ——
+    // 这里只是探测「当前目录可写」，绝不能把已存在的数据库清空。
+    if std::fs::OpenOptions::new()
         .create(true)
         .write(true)
+        .truncate(false)
         .open(&local)
+        .is_ok()
     {
         local
     } else {

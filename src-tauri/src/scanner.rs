@@ -511,7 +511,7 @@ pub fn scan_folders(
     }
     match sort_order {
         "filename" => {
-            groups.sort_by(|a, b| a.base_name.to_lowercase().cmp(&b.base_name.to_lowercase()));
+            groups.sort_by_key(|g| g.base_name.to_lowercase());
         }
         "rating" => {
             groups.sort_by(|a, b| {
