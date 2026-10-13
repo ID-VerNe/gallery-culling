@@ -417,6 +417,16 @@ function AppShell() {
     }
   }, [isRightPinned, rightCompareGroup]);
 
+  // 空格「设为基准」：落在**当前照片**上，且是切换语义。
+  //
+  // 不用 handleTogglePinRight —— 无基准时 right 恒等于 compareIndex 那张，
+  // 单图视口下会把另一张照片钉为基准，界面上看不出发生了什么。
+  // 钉在右侧窗格（比较视图里看得到"基准 vs 候选"），与左/中/右位置无关。
+  const handleTogglePinCurrent = useCallback(() => {
+    if (!currentGroup) return;
+    setPinnedId((prev) => (prev === currentGroup.id ? null : currentGroup.id));
+  }, [currentGroup]);
+
   // Swap A / B (Candidate becomes new pinned benchmark or swap positions)
   const handleSwapCompare = useCallback(() => {
     if (pinnedId) {
@@ -668,14 +678,22 @@ function AppShell() {
         flag: targetGroup.flag,
       });
 
+      // 评分必须与淘汰态互斥：给「已淘汰」的照片打星 = 解除淘汰。
+      //
+      // 否则 handleRate 原样透传 flag=reject，后端按 reject 写 Rating=-1 ——
+      // 界面显示「4 星」、磁盘仍是 -1，用户打多少星都摆脱不掉淘汰标记。
+      // pick 语义与评分正交（打了星仍是 pick），故只有 reject 被清掉。
+      const nextFlag: CullFlag =
+        targetGroup.flag === 'reject' && rating > 0 ? 'none' : targetGroup.flag;
+
       // Update in local state
       setGroups((prev) =>
-        prev.map((g) => (g.id === targetGroup.id ? { ...g, rating } : g)),
+        prev.map((g) => (g.id === targetGroup.id ? { ...g, rating, flag: nextFlag } : g)),
       );
 
       // Sync to XMP in background
       try {
-        await api.updateRatingFlag(targetPath, rating, targetGroup.flag, true);
+        await api.updateRatingFlag(targetPath, rating, nextFlag, true);
         markSynced(targetGroup.id);
       } catch (err) {
         reportRatingFlagError(err, targetGroup.id);
@@ -1415,6 +1433,7 @@ function AppShell() {
     onTogglePinReference: handleTogglePinBenchmark,
     onPinLeft: handleTogglePinLeft,
     onPinRight: handleTogglePinRight,
+    onTogglePinCurrent: handleTogglePinCurrent,
     onOpenMetadataModal: () => setIsMetadataOpen(true),
     onToggleBeforeAfter: handleToggleBeforeAfter,
     onToggleTonalPanel: handleToggleTonalPanel,

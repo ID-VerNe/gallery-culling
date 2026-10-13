@@ -19,6 +19,8 @@ interface KeyboardShortcutsProps {
   onTogglePinReference?: () => void;
   onPinLeft?: () => void;
   onPinRight?: () => void;
+  /** 空格：把当前照片设为对比基准，已钉住则取消（落在 currentGroup，不落在右窗格）。 */
+  onTogglePinCurrent?: () => void;
   onOpenMetadataModal?: () => void;
   onToggleBeforeAfter?: () => void;
   onToggleTonalPanel?: () => void;
@@ -47,6 +49,7 @@ export function useKeyboardShortcuts({
   onTogglePinReference,
   onPinLeft,
   onPinRight,
+  onTogglePinCurrent,
   onOpenMetadataModal,
   onToggleBeforeAfter,
   onToggleTonalPanel,
@@ -280,7 +283,7 @@ export function useKeyboardShortcuts({
           }
           break;
 
-        // Pin Right as Baseline (]) or Space
+        // Pin Right as Baseline (])
         case ']':
           if (onPinRight) {
             e.preventDefault();
@@ -288,10 +291,16 @@ export function useKeyboardShortcuts({
           }
           break;
 
+        // 空格 = 把**当前照片**设为对比基准（已钉住则取消）。
+        //
+        // 曾复用 onPinRight，但无基准时 deriveCompareGroups 总让 right = compareIndex
+        // 那张，于是单图视口下按空格会把**另一张**照片钉为基准，界面上完全看不出
+        // 发生了什么 —— 与 ShortcutHelpModal 承诺的「空格 = 设为基准」矛盾。
+        // `]` 仍是"钉右窗格"，语义与空格不同，故这里走独立回调。
         case ' ':
-          if (onPinRight) {
+          if (onTogglePinCurrent) {
             e.preventDefault();
-            onPinRight();
+            onTogglePinCurrent();
           }
           break;
 
@@ -375,6 +384,7 @@ export function useKeyboardShortcuts({
     onTogglePinReference,
     onPinLeft,
     onPinRight,
+    onTogglePinCurrent,
     onOpenMetadataModal,
     onToggleBeforeAfter,
     onToggleTonalPanel,

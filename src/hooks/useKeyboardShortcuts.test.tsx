@@ -37,6 +37,7 @@ function setup() {
     onOpenExternal: vi.fn(),
     onToggleCompare: vi.fn(),
     onPinRight: vi.fn(),
+    onTogglePinCurrent: vi.fn(),
     onHoldOriginalStart: vi.fn(),
     onHoldOriginalEnd: vi.fn(),
     onFocusSearch: vi.fn(),
@@ -69,7 +70,7 @@ describe('useKeyboardShortcuts 守卫作用域', () => {
 
     const notPrevented = fireEvent.keyDown(button, { key: ' ' });
 
-    expect(h.onPinRight).not.toHaveBeenCalled();
+    expect(h.onTogglePinCurrent).not.toHaveBeenCalled();
     // 不 preventDefault，原生按钮才能被空格激活。
     expect(notPrevented).toBe(true);
   });
@@ -83,7 +84,7 @@ describe('useKeyboardShortcuts 守卫作用域', () => {
 
     fireEvent.keyDown(grid, { key: ' ' });
 
-    expect(h.onPinRight).toHaveBeenCalledTimes(1);
+    expect(h.onTogglePinCurrent).toHaveBeenCalledTimes(1);
   });
 
   it('range 滑杆聚焦时方向键不被劫持，也不阻止默认', () => {

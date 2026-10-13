@@ -446,11 +446,14 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
                 >
                   {rowGroups.map((group, colIdx) => {
                     const itemIndex = virtualRow.index * columns + colIdx;
-                    // 多选启用时以集合为准（集合为空时退回单选高亮）。
+                    // 高亮真值 = 当前照片(selectedIndex) ∪ 批量选区(selectedIds)。
+                    //
+                    // 二者不可互斥：键盘导航(a/d/←/→)只更新 selectedIndex、不碰
+                    // selectedIds。若集合非空就完全以集合为准，用户点过任意缩略图后
+                    // 宫格高亮会永久停在旧格 —— 底栏与主视口已切到下一张，宫格却指着
+                    // 上一张，**用户看到的选中格与实际被评级的照片不是同一张**。
                     const isSelected =
-                      activeIds.size > 0
-                        ? activeIds.has(group.id)
-                        : itemIndex === selectedIndex;
+                      itemIndex === selectedIndex || activeIds.has(group.id);
                     const isPinned = pinnedId === group.id;
                     const isCandidate =
                       candidateId != null && candidateId === group.id;
