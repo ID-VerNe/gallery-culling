@@ -14,6 +14,7 @@ import { ConfirmDialog } from './components/ConfirmDialog';
 import { ToastProvider, useToast } from './components/Toast';
 import { TaskProgressBar } from './components/TaskProgressBar';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { useAppSettings } from './hooks/useAppSettings';
 import { useAutoUpdate } from './hooks/useAutoUpdate';
 import { useSessionDebounce } from './hooks/useSessionDebounce';
 import { useTaskProgress } from './hooks/useTaskProgress';
@@ -22,7 +23,6 @@ import { useRatingUndo } from './hooks/useRatingUndo';
 import { useLumenStatus } from './hooks/useLumenStatus';
 import type { ViewportEmptyState } from './components/PreviewViewport';
 import {
-  AppSettings,
   CullFlag,
   LumenCapabilities,
   FilterMode,
@@ -48,6 +48,15 @@ const FLAG_LABELS: Record<CullFlag, string> = {
 
 function AppShell() {
   const toast = useToast();
+
+  // 读回设置并回填默认目录。必须在 jpgFolder/rawFolder/sortOrder 的 state
+  // 声明之后挂载，所以放在它们后面。
+  const { settings, applySettings, persistFolders, lumenRefreshToken } =
+    useAppSettings((s) => {
+      if (s.defaultJpgFolder) setJpgFolder(s.defaultJpgFolder);
+      if (s.defaultRawFolder) setRawFolder(s.defaultRawFolder);
+      if (s.sortOrder) setSortOrder(s.sortOrder as SortOrder);
+    });
   const { dialog: updateDialog } = useAutoUpdate();
 
   // 扫描的进度与取消（M-05）。解构出**稳定引用**的成员：`start/finish/
@@ -101,7 +110,6 @@ function AppShell() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMetadataOpen, setIsMetadataOpen] = useState(false);
   const [isShortcutHelpOpen, setIsShortcutHelpOpen] = useState(false);
-  const [settings, setSettings] = useState<AppSettings | null>(null);
   /** XMP 与 LUMEN RAW 工程两侧调色是否不一致（统一管线的分歧标记） */
   const [toneDivergent, setToneDivergent] = useState(false);
   /** 工程里现有的 AI 蒙版 */
@@ -168,7 +176,6 @@ function AppShell() {
   // N-12：主动重探令牌。`useLumenStatus` 依赖 `enabled`/`cliPath`，但用户可能在
   // 弹窗里改了路径又撤销，或引擎在运行中才装好——保存设置后自增这个令牌，让
   // 引擎状态**当场刷新**，而不是停留在启动时的陈旧快照。
-  const [lumenRefreshToken, setLumenRefreshToken] = useState(0);
   const lumenStatus = useLumenStatus(
     settings?.lumenEnabled ?? false,
     settings?.lumenCliPath ?? '',
@@ -196,25 +203,6 @@ function AppShell() {
   const lumenGridThumbs =
     (settings?.lumenGridThumbnails ?? false) && lumenAvailable;
 
-  // Load initial settings and default paths on startup
-  useEffect(() => {
-    api
-      .getSettings()
-      .then((s) => {
-        setSettings(s);
-        if (s.defaultJpgFolder) setJpgFolder(s.defaultJpgFolder);
-        if (s.defaultRawFolder) setRawFolder(s.defaultRawFolder);
-        if (s.sortOrder) setSortOrder(s.sortOrder as SortOrder);
-      })
-      .catch((err) => {
-        // Without this the app looks healthy with settings === null, and the
-        // "save folder as default" branch never runs (F-04).
-        console.error('Failed to load settings:', err);
-        toast.error(
-          '无法读取本地设置，将使用默认值。\n如果你的默认文件夹没有自动填充，请到「设置」中重新指定。',
-        );
-      });
-  }, [toast]);
 
   // Filtered list of groups — the app's current working set.
   const filteredGroups = useMemo(
@@ -439,16 +427,7 @@ function AppShell() {
       setPinnedId(null);
 
       // Save as default in settings
-      if (settings) {
-        api
-          .saveSettings({
-            ...settings,
-            defaultJpgFolder: jpgFolder,
-            defaultRawFolder: rawFolder,
-            sortOrder,
-          })
-          .catch((err) => console.error('Failed to persist settings:', err));
-      }
+      persistFolders(jpgFolder, rawFolder, sortOrder);
 
       toast.success(
         `扫描完成，共 ${res.groups.length} 组照片。已按${
@@ -481,11 +460,11 @@ function AppShell() {
     jpgFolder,
     rawFolder,
     sortOrder,
-    settings,
     toast,
     scanStart,
     scanFinish,
     clearRatingUndo,
+    persistFolders,
   ]);
 
   /**
@@ -1651,11 +1630,7 @@ function AppShell() {
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
-        onSettingsSaved={(s) => {
-          setSettings(s);
-          // N-12：保存后强制重探引擎状态（SettingsModal 自己会 onClose）。
-          setLumenRefreshToken((t) => t + 1);
-        }}
+        onSettingsSaved={applySettings}
         onError={(m) => toast.error(m)}
         lumenStatus={lumenStatus}
         capabilities={lumenCaps}
