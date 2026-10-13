@@ -37,8 +37,13 @@ pub enum LumenError {
     Exit(i32),
     /// 磁盘 IO 失败（缓存目录创建 / rename 等）
     Io(String),
-    /// 等待应答超时（A 通道）
+    /// 等待应答超时（A 通道）—— 子进程还活着，只是没在期限内回话
     Timeout,
+    /// sidecar 子进程已退出（stdout 关闭 / 通道断开）。
+    ///
+    /// 必须与 `Timeout` 区分：超时可重试同一进程，而进程已死只能重启 sidecar。
+    /// 二者若混为一谈，崩溃会被当成"慢"，触发一次注定也失败的 run_lumen。
+    ProcessExited,
 }
 
 impl fmt::Display for LumenError {
@@ -60,6 +65,7 @@ impl fmt::Display for LumenError {
             }
             LumenError::Io(m) => write!(f, "LUMEN RAW 预览缓存写入失败: {}", m),
             LumenError::Timeout => write!(f, "LUMEN RAW 响应超时，请重试"),
+            LumenError::ProcessExited => write!(f, "LUMEN RAW 引擎进程已退出，请重启引擎"),
         }
     }
 }
@@ -397,13 +403,19 @@ impl LineTransport for ProcessTransport {
             .map_err(|e| LumenError::Io(format!("写入 sidecar stdin 失败: {}", e)))
     }
 
+    /// `Ok(None)` 只表示"超时尚未回话"，子进程仍活着，可重试。
+    /// `Err(ProcessExited)` 表示 stdout 已关闭，子进程没了，只能重启。
     fn read_line(&self, timeout: std::time::Duration) -> Result<Option<String>, LumenError> {
         match self.incoming.recv_timeout(timeout) {
             Ok(Ok(line)) => Ok(Some(line)),
             Ok(Err(e)) => Err(LumenError::Io(e)),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(None),
-            // 通道断开 = 子进程 stdout 已关闭（EOF）
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Ok(None),
+            // 通道断开 = 子进程 stdout 已关闭（EOF）= 进程已死。
+            // 原实现与 Timeout 同返 Ok(None)，上游一律当 LumenError::Timeout 处理，
+            // 于是崩溃被误判成"慢"，触发一次注定也失败的 run_lumen 而非重启 sidecar。
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err(LumenError::ProcessExited)
+            }
         }
     }
 }
@@ -1286,7 +1298,10 @@ impl<T: LineTransport> McpClient<T> {
 
         loop {
             match self.transport.read_line(READ_TIMEOUT)? {
+                // 超时：进程还在，可原样重试。
                 None => return Err(LumenError::Timeout),
+                // 进程已退出：read_line 已返回 ProcessExited，此处不重复包装。
+                // 调用方（render_preview 等）据此走"重启 sidecar"而非"再试一次"。
                 Some(line) => {
                     let line = line.trim();
                     if line.is_empty() {
@@ -2401,7 +2416,7 @@ mod tests {
     }
 
     #[test]
-    fn process_transport_eof_is_none() {
+    fn process_transport_eof_is_process_exited_not_timeout() {
         let t = spawn_echo();
         // 夹具只回显一行；不写则它一直等 set /p → 我们直接 drop stdin 让它退出
         drop(t);
@@ -2432,12 +2447,16 @@ mod tests {
             stdin: StdMutex::new(None),
             incoming: rx,
         };
-        assert_eq!(
-            transport
-                .read_line(std::time::Duration::from_millis(500))
-                .expect("读不应报错"),
-            None,
-            "子进程退出后（EOF）应返回 None"
+        // BL-02：EOF = 进程已死，必须与"超时"区分开。
+        // 原实现与 Timeout 同返 Ok(None)，上游统一当 LumenError::Timeout 处理，
+        // 于是崩溃被当成"慢"，触发一次注定也失败的 run_lumen 而非重启 sidecar。
+        let err = transport
+            .read_line(std::time::Duration::from_millis(500))
+            .expect_err("子进程退出（EOF）必须报错，不能与超时混为 Ok(None)");
+        assert!(
+            matches!(err, LumenError::ProcessExited),
+            "EOF 应报 ProcessExited，实际: {:?}",
+            err
         );
     }
 
@@ -2452,6 +2471,38 @@ mod tests {
         let got = transport.read_line(std::time::Duration::from_millis(200));
         assert_eq!(got, Ok(None), "超时必须是 Ok(None)，不得挂死或 Err");
         drop(tx);
+    }
+
+    #[test]
+    fn process_transport_distinguishes_timeout_from_process_death() {
+        // BL-02 的核心契约：同一个 read_line 面对"进程还活着只是慢"与"进程已死"
+        // 必须给出**不同**的结果，否则上层无法决定"重试"还是"重启"。
+        let (tx_live, rx_live) = std::sync::mpsc::channel::<Result<String, String>>();
+        let live = ProcessTransport {
+            stdin: StdMutex::new(None),
+            incoming: rx_live,
+        };
+        assert_eq!(
+            live.read_line(std::time::Duration::from_millis(120)),
+            Ok(None),
+            "进程存活但未回话 -> Ok(None)（可重试）"
+        );
+
+        // 发送端被丢弃 = 子进程 stdout 已关闭 = 进程已死
+        let (tx_dead, rx_dead) = std::sync::mpsc::channel::<Result<String, String>>();
+        let dead = ProcessTransport {
+            stdin: StdMutex::new(None),
+            incoming: rx_dead,
+        };
+        drop(tx_dead);
+        assert!(
+            matches!(
+                dead.read_line(std::time::Duration::from_millis(120)),
+                Err(LumenError::ProcessExited)
+            ),
+            "进程已死 -> Err(ProcessExited)（须重启而非重试）"
+        );
+        drop(tx_live);
     }
 
     #[test]
@@ -3179,7 +3230,12 @@ ope\lumen-cli-xyz.exe",
         assert!(
             matches!(
                 err,
-                LumenError::Timeout | LumenError::Protocol(_) | LumenError::Command(_)
+                LumenError::Timeout
+                    | LumenError::Protocol(_)
+                    | LumenError::Command(_)
+                    // 回显夹具不是真 MCP：它不回合法帧就退出，stdout 关闭 ->
+                    // ProcessExited（BL-02 起与 Timeout 分开）。
+                    | LumenError::ProcessExited
             ),
             "实际: {:?}",
             err
