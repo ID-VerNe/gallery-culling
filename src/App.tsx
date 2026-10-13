@@ -16,6 +16,7 @@ import { TaskProgressBar } from './components/TaskProgressBar';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useAppSettings } from './hooks/useAppSettings';
 import { useAutoUpdate } from './hooks/useAutoUpdate';
+import { useCollection } from './hooks/useCollection';
 import { useFolderScan } from './hooks/useFolderScan';
 import { useSessionDebounce } from './hooks/useSessionDebounce';
 import { useRatingUndo } from './hooks/useRatingUndo';
@@ -24,7 +25,6 @@ import type { ViewportEmptyState } from './components/PreviewViewport';
 import {
   CullFlag,
   LumenCapabilities,
-  FilterMode,
   PhotoFileInfo,
   PhotoGroupInfo,
   SortOrder,
@@ -34,7 +34,6 @@ import {
 import { api } from './services/api';
 import { computeAutoTone, DEFAULT_TONE, toneEquals } from './utils/autoTone';
 import { deriveCompareGroups } from './utils/compareGroups';
-import { countByFilter, matchesFilter } from './utils/filterMatch';
 import { groupPath } from './utils/groupPath';
 
 
@@ -78,13 +77,9 @@ function AppShell() {
     clear: clearRatingUndo,
   } = useRatingUndo();
 
-  const [groups, setGroups] = useState<PhotoGroupInfo[]>([]);
-  const [selectedIndex, setSelectedIndex] = useState<number>(0);
-  const [compareIndex, setCompareIndex] = useState<number>(1);
   const [pinnedId, setPinnedId] = useState<string | null>(null);
   const [isPinnedOnLeft, setIsPinnedOnLeft] = useState<boolean>(true);
   const [viewMode, setViewMode] = useState<ViewMode>('single');
-  const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMetadataOpen, setIsMetadataOpen] = useState(false);
@@ -100,7 +95,6 @@ function AppShell() {
    * B1：宫格多选集合（受控）。空集 = 沿用单选取值。
    * 有 ≥2 张时按 `1..5 / P / X` 走批量写盘（带确认与进度）。
    */
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   /**
    * B6：写盘失败、尚未同步到 XMP 的照片 id。用于格子上的持久"未同步"角标
    * （toast 会消失，角标不会），并提供点击重试。
@@ -124,12 +118,38 @@ function AppShell() {
 
   // Grid search (progressive disclosure; owned here so the TopBar toggle and
   // the grid can share it across the tonal-panel swap).
-  const [gridSearchOpen, setGridSearchOpen] = useState(false);
-  const [gridSearch, setGridSearch] = useState('');
-  const [gridSearchFocusToken, setGridSearchFocusToken] = useState(0);
 
   // Tonal & Luminar state
   const [toneMap, setToneMap] = useState<Record<string, ToneAdjustments>>({});
+
+  const collection = useCollection();
+  const {
+    groups,
+    filteredGroups,
+    filterCounts,
+    visibleGroups,
+    selectedVisibleIndex,
+    selectedIndex,
+    compareIndex,
+    currentGroup,
+    filterMode,
+    selectedIds,
+    gridSearch,
+    gridSearchOpen,
+    gridSearchFocusToken,
+    handleFilterChange,
+    handlePrev: selectPrev,
+    handleNext: selectNext,
+    handleSelectPhoto: selectPhoto,
+    setGroups,
+    setSelectedIndex,
+    setCompareIndex,
+    setSelectedIds,
+    setFilterMode,
+    setGridSearch,
+    setGridSearchOpen,
+    setGridSearchFocusToken,
+  } = collection;
 
   /**
    * 扫描成功后的集合/对比状态更新。
@@ -233,104 +253,27 @@ function AppShell() {
     (settings?.lumenGridThumbnails ?? false) && lumenAvailable;
 
 
-  // Filtered list of groups — the app's current working set.
-  const filteredGroups = useMemo(
-    () => groups.filter((g) => matchesFilter(g, filterMode)),
-    [groups, filterMode],
+
+  // 「有基准且基准在左」的对比模式下，± 与宫格点击作用在**对比候选**而非当前
+  // 照片 —— 用户此时盯着右窗格。判定留在 AppShell（它是唯一同时持有
+  // viewMode / pinnedId / isPinnedOnLeft 的地方），useCollection 只管改索引。
+  const isCompareNav = viewMode === 'split' && !!pinnedId && isPinnedOnLeft;
+  const handlePrev = useCallback(
+    () => selectPrev(isCompareNav),
+    [selectPrev, isCompareNav],
   );
-
-  // M-14：每档计数。与 `filteredGroups` **共用同一个谓词**（`matchesFilter`），
-  // 所以下拉里的 `(N)` 与实际切档后的张数不可能漂移——这正是把它们抽成
-  // `utils/filterMatch` 的唯一原因。O(n) 单遍，万张规模亚毫秒级。
-  const filterCounts = useMemo(() => countByFilter(groups), [groups]);
-
-  // Search narrowing applied inside the filtered set. `filteredIndices` maps a
-  // position in the visible list back to its index in `filteredGroups`, so
-  // selection, the counter and navigation all keep referring to the stable
-  // working set rather than to whatever the search currently matches.
-  const filteredIndices = useMemo(() => {
-    const q = gridSearch.trim().toLowerCase();
-    if (!q) return filteredGroups.map((_, i) => i);
-    return filteredGroups
-      .map((g, i) => (g.baseName.toLowerCase().includes(q) ? i : -1))
-      .filter((i) => i >= 0);
-  }, [filteredGroups, gridSearch]);
-
-  const visibleGroups = useMemo(
-    () => filteredIndices.map((i) => filteredGroups[i]),
-    [filteredIndices, filteredGroups],
+  const handleNext = useCallback(
+    () => selectNext(isCompareNav, filteredGroups.length),
+    [selectNext, isCompareNav, filteredGroups.length],
   );
-
-  const selectedVisibleIndex = useMemo(
-    () => filteredIndices.indexOf(selectedIndex),
-    [filteredIndices, selectedIndex],
-  );
-
-  // Keep the selection inside the working set. Switching from "全部照片" at
-  // photo 500 to "仅已保留" with 3 matches used to leave selectedIndex at 500
-  // and render a misleading "未加载照片" empty state.
-  //
-  // B4：光按**下标**裁剪会让"当前照片"无声消失（下标的含义在切换前后不同）。
-  // 切档时先记下当前照片的 id，切完优先按 id 找回同一张；确实不在结果里时
-  // 才退化到下标裁剪，并明确提示。
-  const preferredSelectIdRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    const max = filteredGroups.length;
-    if (max === 0) {
-      setSelectedIndex(0);
-      setCompareIndex(0);
-      preferredSelectIdRef.current = null;
-      return;
-    }
-    const wanted = preferredSelectIdRef.current;
-    preferredSelectIdRef.current = null;
-    if (wanted) {
-      const idx = filteredGroups.findIndex((g) => g.id === wanted);
-      if (idx >= 0) {
-        setSelectedIndex(idx);
-        setCompareIndex((prev) => Math.min(prev, max - 1));
-        return;
-      }
-      // 当前照片不在新筛选结果里 —— 明确告知，而不是静默跳走。
-      toast.info('当前照片不在该筛选结果中，已切换到首张匹配。');
-    }
-    setSelectedIndex((prev) => Math.min(prev, max - 1));
-    setCompareIndex((prev) => Math.min(prev, max - 1));
-    // 仅在筛选结果集合变化时重算；`filteredGroups` 是 useMemo 派生，引用稳定。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredGroups]);
-
-  // Drop a selection that a new search no longer contains onto the first
-  // visible item, so the counter and the highlight never disagree.
-  useEffect(() => {
-    if (gridSearch.trim() && filteredIndices.length > 0) {
-      setSelectedIndex((prev) =>
-        filteredIndices.includes(prev) ? prev : filteredIndices[0],
-      );
-      // N-04: the compare candidate has to be pulled into the visible set too,
-      // otherwise the split view keeps rendering a photo the search excluded
-      // and stops matching the grid it sits next to.
-      setCompareIndex((prev) =>
-        filteredIndices.includes(prev) ? prev : filteredIndices[0],
-      );
-    }
-  }, [filteredIndices, gridSearch]);
-
-  const currentGroup = filteredGroups[selectedIndex] || undefined;
-
-  /**
-   * B4：切筛选档位前记下"当前照片"的 id，切完由 effect 优先按 id 找回同一张。
-   * 下标在切换前后含义不同，直接沿用会让当前照片无声消失。
-   */
-  const handleFilterChange = useCallback(
-    (m: FilterMode) => {
-      preferredSelectIdRef.current = filteredGroups[selectedIndex]?.id ?? null;
-      // 切档后旧的选区多半已不在结果里，清空避免"看不见的选区"被批量写盘。
-      setSelectedIds(new Set());
-      setFilterMode(m);
-    },
-    [filteredGroups, selectedIndex],
+  const handleSelectPhoto = useCallback(
+    (visibleIndex: number) =>
+      selectPhoto(visibleIndex, {
+        isCompareNav,
+        hasPinned: !!pinnedId,
+        total: filteredGroups.length,
+      }),
+    [selectPhoto, isCompareNav, pinnedId, filteredGroups.length],
   );
 
   /**
@@ -420,45 +363,6 @@ function AppShell() {
       setIsPinnedOnLeft(true);
     }
   }, [pinnedId, leftCompareGroup]);
-
-  // Selection navigation (aware of pinned compare mode)
-  const handlePrev = useCallback(() => {
-    if (viewMode === 'split' && pinnedId && isPinnedOnLeft) {
-      setCompareIndex((prev) => (prev > 0 ? prev - 1 : prev));
-    } else {
-      setSelectedIndex((prev) => (prev > 0 ? prev - 1 : prev));
-    }
-  }, [viewMode, pinnedId, isPinnedOnLeft]);
-
-  const handleNext = useCallback(() => {
-    if (viewMode === 'split' && pinnedId && isPinnedOnLeft) {
-      setCompareIndex((prev) =>
-        prev < filteredGroups.length - 1 ? prev + 1 : prev,
-      );
-    } else {
-      setSelectedIndex((prev) =>
-        prev < filteredGroups.length - 1 ? prev + 1 : prev,
-      );
-    }
-  }, [viewMode, pinnedId, isPinnedOnLeft, filteredGroups.length]);
-
-  // Select photo from thumbnail list. `visibleIndex` is a position in the
-  // currently rendered (searched) list; translate it back to the working set.
-  const handleSelectPhoto = useCallback(
-    (visibleIndex: number) => {
-      const idx = filteredIndices[visibleIndex] ?? visibleIndex;
-
-      if (viewMode === 'split' && pinnedId && isPinnedOnLeft) {
-        setCompareIndex(idx);
-      } else {
-        setSelectedIndex(idx);
-        if (viewMode === 'split' && !pinnedId) {
-          setCompareIndex(Math.min(idx + 1, filteredGroups.length - 1));
-        }
-      }
-    },
-    [viewMode, pinnedId, isPinnedOnLeft, filteredGroups.length, filteredIndices],
-  );
 
   /** B6：把某张照片标记为"已同步到 XMP"（写盘成功时调用）。 */
   const markSynced = useCallback((id: string) => {
