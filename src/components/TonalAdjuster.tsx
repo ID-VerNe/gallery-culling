@@ -32,6 +32,8 @@ interface TonalAdjusterProps {
   tone: ToneAdjustments;
   onChange: (tone: ToneAdjustments) => void;
   onAutoTone?: () => void;
+  /** UX-12：auto-tone 计算中（RAW-only 要等 LUMEN 预览渲染，可达数秒）。 */
+  autoTonePending?: boolean;
   onAuto?: () => void;
   onReset?: () => void;
   /** 统一保存：一条命令同时写 XMP 与 LUMEN RAW（引擎可用时）。 */
@@ -139,6 +141,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
   tone,
   onChange,
   onAutoTone,
+  autoTonePending = false,
   onAuto,
   onReset,
   onSave,
@@ -435,12 +438,16 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
         {/* Auto Button */}
         <button
           onClick={triggerAutoTone}
-          className="focus-ring flex-1 flex items-center justify-center gap-1.5 py-2 px-2 bg-background-surface-hover hover:bg-white/10 text-white font-medium rounded-lg text-xs active:scale-[0.98] transition-colors"
+          disabled={autoTonePending}
+          className="focus-ring flex-1 flex items-center justify-center gap-1.5 py-2 px-2 bg-background-surface-hover hover:bg-white/10 text-white font-medium rounded-lg text-xs active:scale-[0.98] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
           title="基于直方图智能自适应计算"
           aria-label="智能自动调色"
+          aria-busy={autoTonePending || undefined}
         >
           <Wand2 className="w-3.5 h-3.5 text-white/60" aria-hidden="true" />
-          <span>自动</span>
+          {/* UX-12：RAW-only 时要先渲染 LUMEN 预览才能采样，全程可达数秒。
+              原先按钮毫无变化，用户无从判断是没生效还是还在算。 */}
+          <span>{autoTonePending ? '计算中…' : '自动'}</span>
         </button>
 
         {/* Reset Button */}

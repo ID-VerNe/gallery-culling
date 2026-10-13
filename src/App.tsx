@@ -144,6 +144,9 @@ function AppShell() {
   const [showTonalPanel, setShowTonalPanel] = useState(false);
   /** 调色保存进行中：禁用保存按钮并挡住重入，避免连点写两次 XMP/工程。 */
   const [isSavingTone, setIsSavingTone] = useState(false);
+  /** UX-12：auto-tone 计算中。RAW-only 要等 LUMEN 预览渲染，采样也是异步的，
+      全程数秒无任何反馈，按钮看起来像没生效。 */
+  const [isAutoToning, setIsAutoToning] = useState(false);
   const [isLuminarRunning, setIsLuminarRunning] = useState(false);
   const [isHoldOriginal, setIsHoldOriginal] = useState(false);
 
@@ -1058,16 +1061,20 @@ function AppShell() {
   );
 
   const handleAutoTone = useCallback(async () => {
-    if (!currentGroup) return;
-    const finish = (img: HTMLImageElement) =>
+    if (!currentGroup || isAutoToning) return;
+    const finish = (img: HTMLImageElement) => {
       handleToneChange(computeAutoTone(img));
+      setIsAutoToning(false);
+    };
 
     const loadAndFinish = (src: string) => {
       const tempImg = new Image();
       tempImg.crossOrigin = 'anonymous';
       tempImg.onload = () => finish(tempImg);
-      tempImg.onerror = () =>
+      tempImg.onerror = () => {
+        setIsAutoToning(false);
         toast.error('无法读取该照片的像素数据，自动调色已取消。');
+      };
       tempImg.src = src;
     };
 
@@ -1081,12 +1088,14 @@ function AppShell() {
       rendered.complete &&
       rendered.naturalWidth > 0
     ) {
+      setIsAutoToning(true);
       finish(rendered);
       return;
     }
 
     // 有 JPG 就直接采样 JPG，零成本且必成功。
     if (currentGroup.jpg?.path) {
+      setIsAutoToning(true);
       loadAndFinish(api.toAssetUrl(currentGroup.jpg.path));
       return;
     }
@@ -1096,6 +1105,7 @@ function AppShell() {
     // 明确说明，而不是丢一句"无法读取像素数据"。
     const rawPath = currentGroup.raw?.path;
     if (rawPath && lumenAvailable) {
+      setIsAutoToning(true);
       try {
         const prev = await api.getLumenPreview(rawPath, { width: 1024 });
         if (prev.previewPath) {
@@ -1107,10 +1117,11 @@ function AppShell() {
       }
     }
 
+    setIsAutoToning(false);
     toast.error(
       '无法读取该照片的像素数据：RAW 自动调色需要启用 LUMEN RAW 引擎（或同时选择 JPG 文件夹）。',
     );
-  }, [currentGroup, handleToneChange, toast, viewMode, lumenAvailable]);
+  }, [currentGroup, handleToneChange, isAutoToning, toast, viewMode, lumenAvailable]);
 
   /**
    * 统一保存调色：**一条命令、两个落点**。
@@ -1615,6 +1626,7 @@ function AppShell() {
               onChange={handleToneChange}
               onReset={handleResetTone}
               onAuto={handleAutoTone}
+              autoTonePending={isAutoToning}
               onSave={handleSaveTone}
               isSaving={isSavingTone}
               divergent={toneDivergent}

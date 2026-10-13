@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import { Keyboard } from 'lucide-react';
 import { Modal } from './Modal';
 
@@ -62,10 +62,39 @@ const MOUSE_ITEMS: Array<{ keys: string; label: string }> = [
  * The shortcut catalogue used to live as a 6-item strip in the status bar,
  * which is why most of the single-handed workflow was undiscoverable.
  */
+/**
+ * 快捷键条目是否命中查询。
+ *
+ * 纯函数，便于单测：中文按 label 匹配，键位按 keys 匹配（大小写与空格不敏感）。
+ */
+export function matchesShortcut(query: string, item: { keys: string; label: string }): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return (
+    item.label.toLowerCase().includes(q) || item.keys.toLowerCase().includes(q)
+  );
+}
+
 export const ShortcutHelpModal: React.FC<ShortcutHelpModalProps> = ({
   isOpen,
   onClose,
 }) => {
+  // UX-18：~20 项快捷键原先只能靠扫描。记不住键位的人打开这个弹窗是为了
+  // 找「打星是哪个键」，却必须逐行读 —— 加一个按 label/keys 子串过滤的输入框。
+  const [query, setQuery] = useState('');
+  const filtered = useMemo(
+    () =>
+      GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => matchesShortcut(query, i)) })).filter(
+        (g) => g.items.length > 0,
+      ),
+    [query],
+  );
+  const mouseFiltered = useMemo(
+    () => MOUSE_ITEMS.filter((i) => matchesShortcut(query, i)),
+    [query],
+  );
+  const total = filtered.reduce((n, g) => n + g.items.length, 0) + mouseFiltered.length;
+
   return (
     <Modal
       isOpen={isOpen}
@@ -82,8 +111,29 @@ export const ShortcutHelpModal: React.FC<ShortcutHelpModalProps> = ({
         </button>
       }
     >
+      <div className="mb-4">
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="搜索快捷键，例如「星级」「对比」「撤销」"
+          aria-label="搜索快捷键"
+          className="focus-ring w-full px-3 py-2 rounded-md bg-background-base border border-default text-white text-xs outline-none placeholder:text-white/40"
+        />
+        <p className="mt-1.5 text-[10px] text-white/50" role="status" aria-live="polite">
+          {query.trim()
+            ? `匹配 ${total} 项`
+            : `共 ${GROUPS.reduce((n, g) => n + g.items.length, 0) + MOUSE_ITEMS.length} 项`}
+        </p>
+      </div>
+
+      {total === 0 ? (
+        <p className="text-center text-xs text-white/60 py-8">
+          没有匹配「{query.trim()}」的快捷键，换个词试试。
+        </p>
+      ) : (
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-        {GROUPS.map((group) => (
+        {filtered.map((group) => (
           <section key={group.title}>
             <h3 className="text-[11px] font-semibold text-white/60 uppercase tracking-wide mb-2">
               {group.title}
@@ -113,7 +163,7 @@ export const ShortcutHelpModal: React.FC<ShortcutHelpModalProps> = ({
             鼠标
           </h3>
           <dl className="flex flex-col gap-1.5 sm:grid sm:grid-cols-3 sm:gap-3">
-            {MOUSE_ITEMS.map((item) => (
+            {mouseFiltered.map((item) => (
               <div key={item.keys} className="flex items-center gap-2">
                 <dt className="shrink-0">
                   <kbd className="bg-white/10 border border-white/15 px-1.5 py-0.5 rounded text-[10px] font-mono text-white/90 whitespace-nowrap">
@@ -126,6 +176,7 @@ export const ShortcutHelpModal: React.FC<ShortcutHelpModalProps> = ({
           </dl>
         </section>
       </div>
+      )}
     </Modal>
   );
 };

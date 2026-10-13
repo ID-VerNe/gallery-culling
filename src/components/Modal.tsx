@@ -33,6 +33,14 @@ const FOCUSABLE =
 const modalStack: symbol[] = [];
 
 /**
+ * scroll lock 状态。见下方 Modal 内的 effect 注释（为什么必须是计数而非存旧值）。
+ * `original` 只在**第一层**打开时捕获一次，避免最后一层关闭时把中间层的
+ * 'hidden' 当成原值写回去。
+ */
+let scrollLockDepth = 0;
+let scrollLockOriginal = '';
+
+/**
  * Shared modal shell: dialog semantics, initial focus, a Tab trap, Escape
  * to close and focus restore to the invoking element.
  *
@@ -58,6 +66,28 @@ export const Modal: React.FC<ModalProps> = ({
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   /** 本实例在弹窗栈中的标识。 */
   const instanceRef = useRef<symbol | null>(null);
+
+  // UX-17：弹窗打开时锁掉页面滚动。
+  // 此前完全依赖 App 根节点的 overflow-hidden 兜底 —— 那是 flex 布局约束，
+  // 不是模态期滚动锁；一旦布局改版或弹窗从别的容器渲染，背景就会跟着滚，
+  // 遮罩却不动，用户看到的是「遮罩钉住、内容滑走」的错位。
+  // 用**引用计数**而非「保存原值再恢复」：React 的 effect 执行顺序是子先父后，
+  // 嵌套模态里内层先捕获到原始值、外层后捕获到 'hidden'；内层先卸载就会把
+  // 原始值写回去，外层仍在开着却已经解锁。计数保证只有最后一层关闭才还原。
+  useEffect(() => {
+    if (!isOpen) return;
+    const root = document.documentElement;
+    if (scrollLockDepth === 0) scrollLockOriginal = root.style.overflow;
+    scrollLockDepth += 1;
+    root.style.overflow = 'hidden';
+    return () => {
+      scrollLockDepth -= 1;
+      if (scrollLockDepth === 0) {
+        root.style.overflow = scrollLockOriginal;
+        scrollLockOriginal = '';
+      }
+    };
+  }, [isOpen]);
 
   // 注册 / 注销弹窗栈。只依赖 isOpen：`onClose` 常是每次渲染新建的函数，
   // 若列为依赖会导致本实例被反复重新入栈、错误置顶抢走 Esc。
