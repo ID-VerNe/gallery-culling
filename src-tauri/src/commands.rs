@@ -13,7 +13,7 @@ use crate::models::{
     ToneWriteReport,
 };
 use crate::scanner::scan_folders;
-use crate::thumbnail::{get_cache_dir, get_or_create_thumbnail};
+use crate::thumbnail::get_cache_dir;
 use crate::xmp;
 use crate::xmp::{flag_from_xmp, read_xmp_full, write_xmp};
 
@@ -24,6 +24,20 @@ use crate::xmp::{flag_from_xmp, read_xmp_full, write_xmp};
 // generate_handler 在 lib.rs 里按名字找它们，`macro_rules!` 无法被 glob 带出，
 // 故下面每个模块都要显式转发它自己的那组宏。
 mod apps;
+mod settings;
+mod thumbnail;
+
+pub use settings::{
+    __cmd__get_settings_cmd, __cmd__load_session_cmd, __cmd__save_session_cmd,
+    __cmd__save_settings_cmd,
+    __tauri_command_name_get_settings_cmd, __tauri_command_name_load_session_cmd,
+    __tauri_command_name_save_session_cmd, __tauri_command_name_save_settings_cmd,
+    get_settings_cmd, load_session_cmd, save_session_cmd, save_settings_cmd,
+};
+
+pub use thumbnail::{
+    __cmd__get_thumbnail_cmd, __tauri_command_name_get_thumbnail_cmd, get_thumbnail_cmd,
+};
 
 pub use apps::{
     __cmd__open_in_default_app_cmd, __cmd__open_in_photoshop_cmd, __cmd__trash_photos_cmd,
@@ -240,16 +254,6 @@ pub async fn scan_folders_cmd(
         },
     );
     Ok(result)
-}
-
-#[tauri::command]
-pub async fn get_thumbnail_cmd(file_path: String, width: Option<u32>) -> Result<String, String> {
-    let target_width = width.unwrap_or(200);
-    blocking("生成缩略图任务异常", move || {
-        let path = Path::new(&file_path);
-        get_or_create_thumbnail(path, target_width)
-    })
-    .await
 }
 
 /// 单个文件复制失败的明细（替代原来 `.is_ok()` 静默吞掉的错误）。
@@ -613,51 +617,6 @@ pub fn export_items(
     );
     on_progress(total, total, "");
     Ok(staging.outcome)
-}
-
-#[tauri::command]
-pub fn get_settings_cmd(state: State<'_, AppState>) -> Result<AppSettings, String> {
-    state.db.load_settings()
-}
-
-#[tauri::command]
-pub fn save_settings_cmd(
-    settings: AppSettings,
-    state: State<'_, AppState>,
-) -> Result<bool, String> {
-    // 换了 lumen-cli 路径 = 指向了另一个 catalog，旧的同步游标不再有意义
-    // （否则冲突判定会拿旧引擎的值做基准）。清空是安全方向：最坏情况是
-    // 下次同步时按"首次见到"处理，不会误覆盖。
-    if let Ok(old) = state.db.load_settings() {
-        if old.lumen_cli_path.trim() != settings.lumen_cli_path.trim() {
-            let _ = state.db.clear_rating_sync();
-            state.lumen.shutdown();
-        }
-    }
-    state.db.save_settings(&settings)?;
-    Ok(true)
-}
-
-#[tauri::command]
-pub fn save_session_cmd(
-    jpg_folder: String,
-    raw_folder: String,
-    last_index: usize,
-    sort_order: String,
-    state: State<'_, AppState>,
-) -> Result<bool, String> {
-    state
-        .db
-        .save_session(&jpg_folder, &raw_folder, last_index, &sort_order)?;
-    Ok(true)
-}
-
-#[tauri::command]
-pub fn load_session_cmd(
-    jpg_folder: String,
-    state: State<'_, AppState>,
-) -> Result<Option<(usize, String)>, String> {
-    state.db.load_session(&jpg_folder)
 }
 
 #[tauri::command]
