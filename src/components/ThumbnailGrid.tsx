@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Star,
@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { PhotoGroupInfo } from '../types';
 import { api } from '../services/api';
+import { useGridKeyboard } from '../hooks/useGridKeyboard';
 
 /**
  * 宫格子格子的高度（px）。
@@ -102,11 +103,30 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   const [columns, setColumns] = useState<3 | 4>(3);
   const parentRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  /** B1：Shift 范围选择用的锚点（最近一次非 Shift 点选的格子下标）。 */
-  const anchorIndexRef = useRef<number>(-1);
   // 多选受控：宿主提供了回调才启用；否则保持既有单选语义。
   const multiSelectEnabled = !!onSelectionChange;
-  const activeIds = selectedIds ?? EMPTY_ID_SET;
+
+  /**
+   * 键盘导航 + 多选点击合在一个 hook：三者共享 Shift 锚点与当前选区，
+   * 拆到两个 hook 会引入跨 hook 的状态同步 bug。
+   */
+  const {
+    activeIds,
+    activeGroup,
+    handleCellClick,
+    handleListKeyDown,
+    handleSearchKeyDown,
+  } = useGridKeyboard({
+    groups,
+    columns,
+    selectedIndex,
+    onSelect,
+    onSelectionChange,
+    multiSelectEnabled,
+    selectedIds: selectedIds ?? EMPTY_ID_SET,
+    onSearchQueryChange,
+    onSearchOpenChange,
+  });
 
   // 每个宫格实例持有一份缩略图去重/缓存（滚动回来命中、并发共享），卸载即释放。
   // 用惰性初始化的 ref 而不是 useState：不需要触发重渲染，且实例稳定。
@@ -128,56 +148,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
     parentRef.current?.focus({ preventScroll: true });
   }, [searchOpen, searchFocusToken]);
 
-  // Escape inside the search field collapses it again.
-  const handleSearchKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      e.stopPropagation();
-      onSearchQueryChange?.('');
-      onSearchOpenChange?.(false);
-    }
-  };
 
-  /**
-   * B1：多选点击模型（仅当宿主启用多选时）。
-   * - 普通点击：单选，并把"当前照片"移过去（中心视口跟随）。
-   * - Ctrl/Cmd 点击：切换该格，不移动当前照片（便于原地组选区）。
-   * - Shift 点击：从锚点做范围选择。
-   */
-  const handleCellClick = useCallback(
-    (e: React.MouseEvent, index: number) => {
-      if (!multiSelectEnabled || !onSelectionChange) {
-        onSelect(index);
-        return;
-      }
-      const clicked = groups[index];
-      if (!clicked) return;
-
-      if (e.shiftKey && anchorIndexRef.current >= 0) {
-        const a = Math.min(anchorIndexRef.current, index);
-        const b = Math.max(anchorIndexRef.current, index);
-        const next = new Set<string>();
-        for (let i = a; i <= b; i++) next.add(groups[i].id);
-        onSelectionChange(next);
-        onSelect(index);
-        return;
-      }
-
-      if (e.ctrlKey || e.metaKey) {
-        const next = new Set(activeIds);
-        if (next.has(clicked.id)) next.delete(clicked.id);
-        else next.add(clicked.id);
-        if (next.size === 0) next.add(clicked.id);
-        anchorIndexRef.current = index;
-        onSelectionChange(next);
-        return;
-      }
-
-      anchorIndexRef.current = index;
-      onSelectionChange(new Set([clicked.id]));
-      onSelect(index);
-    },
-    [multiSelectEnabled, onSelectionChange, onSelect, groups, activeIds],
-  );
 
   // Split groups into rows for multi-column layout
   const rows = useMemo(() => {
@@ -212,55 +183,6 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
 
   // Roving-tabindex listbox keyboard model: Up/Down/Home/End move the
   // selection, Left/Right stay bound to the global prev/next photo.
-  const handleListKeyDown = (e: React.KeyboardEvent) => {
-    if (groups.length === 0) return;
-
-    // B1：Ctrl/Cmd+A 全选（仅多选启用时）。
-    if (
-      (e.ctrlKey || e.metaKey) &&
-      (e.key === 'a' || e.key === 'A') &&
-      onSelectionChange
-    ) {
-      e.preventDefault();
-      onSelectionChange(new Set(groups.map((g) => g.id)));
-      return;
-    }
-
-    const last = groups.length - 1;
-    let next = selectedIndex;
-
-    switch (e.key) {
-      // B3：宫格是"按行"排列的，上下键应跨行（±columns），与视觉行列一致；
-      // 左右键由全局 handler 绑到上/下一张照片。
-      case 'ArrowDown':
-        next = Math.min(selectedIndex + columns, last);
-        break;
-      case 'ArrowUp':
-        next = Math.max(selectedIndex - columns, 0);
-        break;
-      case 'Home':
-        next = 0;
-        break;
-      case 'End':
-        next = last;
-        break;
-      case 'PageDown':
-        next = Math.min(selectedIndex + columns * 3, last);
-        break;
-      case 'PageUp':
-        next = Math.max(selectedIndex - columns * 3, 0);
-        break;
-      default:
-        return;
-    }
-
-    e.preventDefault();
-    // 键盘移动把选区收拢为单张（roving），保持"当前照片"与高亮一致。
-    anchorIndexRef.current = next;
-    onSelectionChange?.(new Set([groups[next].id]));
-    onSelect(next);
-  };
-
   const isSearchFiltering = searchQuery.trim().length > 0;
   const isEmpty = groups.length === 0;
 
@@ -273,10 +195,6 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   const selectedRowRendered =
     selectedRowIndex < 0 ||
     virtualRows.some((v) => v.index === selectedRowIndex);
-  const activeGroup =
-    selectedIndex >= 0 && selectedIndex < groups.length
-      ? groups[selectedIndex]
-      : undefined;
 
   return (
     <div className="h-full w-full flex flex-col bg-background-base border-l border-default select-none">

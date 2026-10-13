@@ -39,7 +39,6 @@ function renderGrid(props: Partial<React.ComponentProps<typeof ThumbnailGrid>> =
   const utils = render(
     <ThumbnailGrid
       groups={GROUPS}
-      columns={3}
       selectedIndex={0}
       onSelect={onSelect}
       selectedIds={new Set()}
