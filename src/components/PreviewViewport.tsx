@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -15,18 +15,8 @@ import {
 import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
 import { api } from '../services/api';
 import { getToneFilterString } from '../utils/autoTone';
-import { zoomAtPoint } from '../utils/zoom';
-import {
-  ZOOM_STEP,
-  ZOOM_MIN,
-  ZOOM_MAX,
-  DOUBLE_CLICK_SCALE,
-  clampScale,
-  scaleLabel,
-  clampToPane,
-  dragGrab,
-  dragTarget,
-} from '../utils/viewportZoom';
+import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from '../utils/viewportZoom';
+import { useZoomPan } from '../hooks/useZoomPan';
 import { useLumenPreview } from '../hooks/useLumenPreview';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
@@ -89,90 +79,8 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
     description: '请选择存放 JPG 的文件夹用于浏览与选片；RAW 文件夹可选。',
   },
 }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const imgRef = useRef<HTMLImageElement | null>(null);
-  const [scale, setScale] = useState(1);
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-
-  // Reset zoom & pan when image changes
-  useEffect(() => {
-    setScale(1);
-    setPosition({ x: 0, y: 0 });
-  }, [group?.id]);
-
-  const zoomBy = useCallback((factor: number) => {
-    setScale((s) => clampScale(s * factor));
-  }, []);
-
-  const resetView = useCallback(() => {
-    setScale(1);
-    setPosition({ x: 0, y: 0 });
-  }, []);
-
-  // 同时把 <img> 交给宿主（直方图采样）并保留本地引用（拖拽夹紧要量测其渲染尺寸）。
-  const setImageRef = useCallback(
-    (el: HTMLImageElement | null) => {
-      imgRef.current = el;
-      onImageElement?.(el);
-    },
-    [onImageElement],
-  );
-
-  // C8：把平移夹紧到「照片不露出视口」的范围（实现与另两个视口同源，
-  // 见 utils/viewportZoom.ts 的 clampToPane）。
-  const clampPosition = useCallback((next: { x: number; y: number }, s: number) => {
-    return clampToPane(containerRef.current, imgRef.current, next, s);
-  }, []);
-
-  // Handle Wheel Zoom —— 命中光标（M-08）：改 scale 的同时按光标反算 pos，
-  // 光标下的图像点保持在指针下。与快捷键说明「滚轮 · 以指针为中心缩放」一致。
-  const handleWheel = useCallback(
-    (e: React.WheelEvent) => {
-      e.preventDefault();
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      const next = zoomAtPoint(e, rect, scale, position, {
-        min: ZOOM_MIN,
-        max: ZOOM_MAX,
-        step: ZOOM_STEP,
-      });
-      setScale(next.scale);
-      setPosition(next.pos);
-    },
-    [scale, position],
-  );
-
-  // Handle Pan Dragging（C8：Pointer 事件 + 指针捕获，快速拖到容器外也不丢拽）
-  // 坐标系：绝对系（详见 utils/viewportZoom.ts 的 dragGrab 注释）。
-  const handlePointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    // 覆盖层按钮 / EXIF 胶囊等交互元素不进入拖拽，避免抢走点击。
-    if (e.target !== e.currentTarget) return;
-    setIsDragging(true);
-    setDragStart(dragGrab(e.clientX, e.clientY, position));
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-  };
-
-  const handlePointerMove = (e: React.PointerEvent) => {
-    if (!isDragging) return;
-    setPosition(
-      clampPosition(dragTarget(e.clientX, e.clientY, dragStart), scale),
-    );
-  };
-
-  const handlePointerUp = (e: React.PointerEvent) => {
-    if (!isDragging) return;
-    setIsDragging(false);
-    const host = e.currentTarget as HTMLElement;
-    if (host.hasPointerCapture(e.pointerId)) host.releasePointerCapture(e.pointerId);
-  };
-
-  // Double click to toggle fit / 250%
-  const handleDoubleClick = () => {
-    setScale((s) => (s === 1 ? DOUBLE_CLICK_SCALE : 1));
-    setPosition({ x: 0, y: 0 });
-  };
+  // 缩放/平移机器（绝对系拖拽、命中光标缩放、夹紧、换图复位）。
+  const zoom = useZoomPan(group?.id, onImageElement);
 
   // RAW real-decode preview via LUMEN RAW sidecar (P0). Null → legacy path.
   const lumenPreview = useLumenPreview(group, lumenStatus ?? LUMEN_UNAVAILABLE, lumenPreviewWidth);
@@ -226,19 +134,19 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
   }
 
   // C6：scale=1 实为「适应窗口」，并非 1:1 像素，别显示误导性的 100%。
-  const zoomLabel = scaleLabel(scale);
+  const zoomLabel = scaleLabel(zoom.scale);
 
   return (
     <div
-      ref={containerRef}
-      onWheel={handleWheel}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
-      onDoubleClick={handleDoubleClick}
+      ref={zoom.containerRef}
+      onWheel={zoom.bind.onWheel}
+      onPointerDown={zoom.bind.onPointerDown}
+      onPointerMove={zoom.bind.onPointerMove}
+      onPointerUp={zoom.bind.onPointerUp}
+      onPointerCancel={zoom.bind.onPointerUp}
+      onDoubleClick={zoom.bind.onDoubleClick}
       className={`relative flex-1 bg-background-base overflow-hidden flex items-center justify-center select-none ${
-        isDragging ? 'cursor-grabbing' : 'cursor-grab'
+        zoom.isDragging ? 'cursor-grabbing' : 'cursor-grab'
       }`}
     >
       {/* Zoomable Image */}
@@ -253,7 +161,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
 
       {imageSrc && (
         <img
-          ref={setImageRef}
+          ref={zoom.imageRef}
           src={imageSrc}
           alt={group.baseName}
           draggable={false}
@@ -262,8 +170,8 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
             if (lumenPreview.url && !lumenBroken) setLumenBroken(true);
           }}
           style={{
-            transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
-            transition: isDragging ? 'none' : 'transform 0.08s ease-out',
+            transform: zoom.transform,
+            transition: zoom.isDragging ? 'none' : 'transform 0.08s ease-out',
             imageOrientation: 'from-image',
             filter: toneFilter,
           }}
@@ -399,8 +307,8 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           aria-label="缩放控制"
         >
           <button
-            onClick={() => zoomBy(1 / ZOOM_STEP)}
-            disabled={scale <= ZOOM_MIN}
+            onClick={() => zoom.zoomBy(1 / ZOOM_STEP)}
+            disabled={zoom.scale <= ZOOM_MIN}
             className="focus-ring tap-target p-1.5 text-white/60 hover:text-white hover:bg-white/10 active:scale-[0.96] disabled:opacity-40 disabled:cursor-not-allowed rounded-md transition-colors"
             title="缩小"
             aria-label="缩小"
@@ -414,8 +322,8 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
             {zoomLabel}
           </span>
           <button
-            onClick={() => zoomBy(ZOOM_STEP)}
-            disabled={scale >= ZOOM_MAX}
+            onClick={() => zoom.zoomBy(ZOOM_STEP)}
+            disabled={zoom.scale >= ZOOM_MAX}
             className="focus-ring tap-target p-1.5 text-white/60 hover:text-white hover:bg-white/10 active:scale-[0.96] disabled:opacity-40 disabled:cursor-not-allowed rounded-md transition-colors"
             title="放大"
             aria-label="放大"
@@ -423,7 +331,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
             <ZoomIn className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
           <button
-            onClick={resetView}
+            onClick={zoom.reset}
             className="focus-ring tap-target p-1.5 text-white/60 hover:text-white hover:bg-white/10 active:scale-[0.96] rounded-md transition-colors"
             title={`重置缩放与平移（当前 ${zoomLabel}）`}
             aria-label={`重置缩放与平移，当前 ${zoomLabel}`}
