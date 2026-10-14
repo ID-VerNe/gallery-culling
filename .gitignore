@@ -45,3 +45,6 @@ node_modules__pnpm_backup/
 # Tool-local state
 .freebuff/
 .workbuddy/
+
+# E2E generated fixtures + tauri dev log (recreated on every e2e run)
+e2e/.tmp/
