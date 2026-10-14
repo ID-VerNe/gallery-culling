@@ -13,8 +13,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [profile.release]
 strip = true
-lto = true
-codegen-units = 1
+# thin LTO：链接期优化可跨 codegen unit 并行，发版编译时间大幅缩短，
+# 代价是优化略弱于 fat LTO（产物体积/性能差异通常很小）。
+lto = "thin"
+# 与 thin LTO 配套：放开 codegen unit 数，让 20 核真正吃满并行度。
+# 配合 thin LTO，跨 unit 内联仍可进行，优化质量损失有限。
+codegen-units = 16
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
