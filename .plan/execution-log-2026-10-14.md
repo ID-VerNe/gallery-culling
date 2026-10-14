@@ -398,3 +398,57 @@ metadata（调用方为拿 `len()` 顺带），`thumbnail::file_mtime_secs(&Path
 5. **`cargo fmt` 不要裸跑**，它会重排整个 crate。每个 commit 前 `git diff --stat`。
 6. **LUMEN 全链路未实机验证**：e2e 测试全部 `ignored`，本轮动了几十条命令的归属。
    合入前实机走一遍扫描 → 调色保存 → 预设 → AI 蒙版。
+
+---
+
+## 16. FE-03b 三视口共享层（`51ee720` → `27bf24c`，5 个 commit）
+
+### 16.1 先补网再动手（`51ee720`）
+
+`ViewportZoomGestures.test.tsx` 9 条：Preview 双击切换/拖偏后回正/滚轮触底夹紧；
+Split 联动/独立双击；BA 联动/独立双击/滚轮命中口径。**实证网有效**：把三处
+`handleDoubleClick` 故意改坏（Preview 2.5→2 且去掉回正；Split/BA 忽略 sync 分支），
+对应 4 条立刻红、未碰的逻辑保持绿，还原后全绿。
+
+### 16.2 step1-4（`ff763dc` / `4fb5ced` / `b50cfd7` / `27bf24c`）
+
+| step | 产出 | 视口改动 |
+|---|---|---|
+| 1 | `utils/viewportZoom.ts`：三视口缩放几何单一真值 | 三视口删本地常量 |
+| 2 | `hooks/useZoomPan.ts` + Preview 改接 | PreviewViewport 482 → 370 |
+| 3 | `hooks/useDualZoomPan.ts` + Split/BA 改接 | Split 665 → 460、BA 643 → 448 |
+| 4 | `utils/viewportImage.ts`（纯函数）+ `hooks/useViewportImage.ts` | 三视口图片解析收编 |
+
+**总量（诚实口径）**：三个视口 1790 → 1278 行（**净减 512**）；新增共享层生产
+代码 605 行、测试 314 行；全局生产代码净 **+89 行**。handoff 里「净减 600-700」
+指视口内重复 Machinery 的消除量（实际 512），不是全局行数——共享层带完整 JSDoc
+与类型，行数换来了单一真值与可测性：C2 规则、绝对系拖拽、M-08 命中锚点、联动
+夹紧公共边界，从此只写一处、只测一处。
+
+两处语义偏差在**自查中发现并修正后才提交**（useDualZoomPan 初版，未入 commit）：
+① 联动分支 `zoomBy` 误加 `pos: FIT` 回正（原实现只改比例、不动平移）；
+② 默认 activePane 用了第一栏——BA 的调色结果在右侧，加 `initialActivePane`
+参数传 `PANES[1]`。另外拖拽抓取偏移从 React state 改 **ref**：绝对系下拖动期间
+恒定，少一次 state 更新，结构上排除读到旧 dragStart。
+
+step4 的 Preview RAW-only 路径此前**零覆盖**，补 4 条（解码成功/解码失败/引擎
+未启用/onError latch 回落占位）后做变异验证：A（C2 规则改坏——RAW-only 无 LUMEN
+时回落 .NEF）→ 5 条精准红；B（`markBroken` 置空）→ latch 测试精准红。还原后全绿。
+
+### 16.3 step5 裁决：RatingFlagBar / ZoomControls 均不抽
+
+按「最简实现（不投机抽象）」与 FE-01 Button 原子先例，实测三变体后裁决**不做**，
+理由记录备查：
+
+- **RatingFlagBar**：Preview 与 BA 字符级相同（仅 3 个令牌级差异：分组 div 的
+  `border-r pr-3`、按钮 `border` 摆放位置、未选中 `bg-white/10` vs
+  `bg-transparent`），但 Split 是**结构性不同**的 UI——窗格内小胶囊
+  （bottom-3 / px-3.5 / gap-2.5 / 无 shadow）、w-3.5 图标、单层 aria +
+  baseName 模板、`onRate(group, n)` 回调签名、保留/淘汰中文文案。覆盖三者的
+  组件需要 6-8 个 prop + variant 开关，典型「为抽象而抽象」。
+- **ZoomControls**：唯一同构的一对（Split/BA 顶栏胶囊）差异全在读数文案
+  （L/R vs 前/后、aria 的「双图」后缀、text-white/60 vs /45）。外壳抽取要把
+  读数做成 ReactNode 逃生阀——抽完最重复的读数条件块仍在调用方，净省 ~20 行。
+  Preview 的结构（底部操作条内、单读数、无联动概念）无法入列。
+
+前端测试 316 → 336（+20）。Rust 未触（126/126 与 clippy 零告警维持基线）。
