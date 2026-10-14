@@ -16,6 +16,17 @@ import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
 import { api } from '../services/api';
 import { getToneFilterString } from '../utils/autoTone';
 import { zoomAtPoint } from '../utils/zoom';
+import {
+  ZOOM_STEP,
+  ZOOM_MIN,
+  ZOOM_MAX,
+  DOUBLE_CLICK_SCALE,
+  clampScale,
+  scaleLabel,
+  clampToPane,
+  dragGrab,
+  dragTarget,
+} from '../utils/viewportZoom';
 import { useLumenPreview } from '../hooks/useLumenPreview';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
@@ -57,10 +68,6 @@ export interface ViewportEmptyState {
   onAction?: () => void;
 }
 
-const MIN_SCALE = 0.2;
-const MAX_SCALE = 10;
-const ZOOM_STEP = 1.25;
-
 export const PreviewViewport: React.FC<PreviewViewportProps> = ({
   group,
   tone,
@@ -96,7 +103,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
   }, [group?.id]);
 
   const zoomBy = useCallback((factor: number) => {
-    setScale((s) => Math.min(Math.max(s * factor, MIN_SCALE), MAX_SCALE));
+    setScale((s) => clampScale(s * factor));
   }, []);
 
   const resetView = useCallback(() => {
@@ -113,18 +120,10 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
     [onImageElement],
   );
 
-  // C8：把平移夹紧到「照片不露出视口」的范围。缩放后图像超出容器的半边宽度
-  // 即为最大可平移量；不超出（适应窗口）则锁死居中。
+  // C8：把平移夹紧到「照片不露出视口」的范围（实现与另两个视口同源，
+  // 见 utils/viewportZoom.ts 的 clampToPane）。
   const clampPosition = useCallback((next: { x: number; y: number }, s: number) => {
-    const container = containerRef.current;
-    const img = imgRef.current;
-    if (!container || !img) return next;
-    const maxX = Math.max(0, (img.offsetWidth * s - container.clientWidth) / 2);
-    const maxY = Math.max(0, (img.offsetHeight * s - container.clientHeight) / 2);
-    return {
-      x: Math.min(Math.max(next.x, -maxX), maxX),
-      y: Math.min(Math.max(next.y, -maxY), maxY),
-    };
+    return clampToPane(containerRef.current, imgRef.current, next, s);
   }, []);
 
   // Handle Wheel Zoom —— 命中光标（M-08）：改 scale 的同时按光标反算 pos，
@@ -134,8 +133,8 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
       e.preventDefault();
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
       const next = zoomAtPoint(e, rect, scale, position, {
-        min: MIN_SCALE,
-        max: MAX_SCALE,
+        min: ZOOM_MIN,
+        max: ZOOM_MAX,
         step: ZOOM_STEP,
       });
       setScale(next.scale);
@@ -145,19 +144,20 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
   );
 
   // Handle Pan Dragging（C8：Pointer 事件 + 指针捕获，快速拖到容器外也不丢拽）
+  // 坐标系：绝对系（详见 utils/viewportZoom.ts 的 dragGrab 注释）。
   const handlePointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     // 覆盖层按钮 / EXIF 胶囊等交互元素不进入拖拽，避免抢走点击。
     if (e.target !== e.currentTarget) return;
     setIsDragging(true);
-    setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
+    setDragStart(dragGrab(e.clientX, e.clientY, position));
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!isDragging) return;
     setPosition(
-      clampPosition({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y }, scale),
+      clampPosition(dragTarget(e.clientX, e.clientY, dragStart), scale),
     );
   };
 
@@ -170,7 +170,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
 
   // Double click to toggle fit / 250%
   const handleDoubleClick = () => {
-    setScale((s) => (s === 1 ? 2.5 : 1));
+    setScale((s) => (s === 1 ? DOUBLE_CLICK_SCALE : 1));
     setPosition({ x: 0, y: 0 });
   };
 
@@ -225,9 +225,8 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
     );
   }
 
-  const zoomPercent = `${Math.round(scale * 100)}%`;
   // C6：scale=1 实为「适应窗口」，并非 1:1 像素，别显示误导性的 100%。
-  const zoomLabel = Math.abs(scale - 1) < 0.001 ? '适应' : zoomPercent;
+  const zoomLabel = scaleLabel(scale);
 
   return (
     <div
@@ -401,7 +400,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
         >
           <button
             onClick={() => zoomBy(1 / ZOOM_STEP)}
-            disabled={scale <= MIN_SCALE}
+            disabled={scale <= ZOOM_MIN}
             className="focus-ring tap-target p-1.5 text-white/60 hover:text-white hover:bg-white/10 active:scale-[0.96] disabled:opacity-40 disabled:cursor-not-allowed rounded-md transition-colors"
             title="缩小"
             aria-label="缩小"
@@ -416,7 +415,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           </span>
           <button
             onClick={() => zoomBy(ZOOM_STEP)}
-            disabled={scale >= MAX_SCALE}
+            disabled={scale >= ZOOM_MAX}
             className="focus-ring tap-target p-1.5 text-white/60 hover:text-white hover:bg-white/10 active:scale-[0.96] disabled:opacity-40 disabled:cursor-not-allowed rounded-md transition-colors"
             title="放大"
             aria-label="放大"

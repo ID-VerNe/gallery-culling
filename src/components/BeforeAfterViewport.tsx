@@ -16,6 +16,16 @@ import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
 import { api } from '../services/api';
 import { getToneFilterString } from '../utils/autoTone';
 import { zoomAtPoint } from '../utils/zoom';
+import {
+  ZOOM_STEP,
+  ZOOM_MIN,
+  ZOOM_MAX,
+  DOUBLE_CLICK_SCALE,
+  clampScale,
+  scaleLabel,
+  dragGrab,
+  dragTarget,
+} from '../utils/viewportZoom';
 import { useLumenPreview } from '../hooks/useLumenPreview';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import type { ViewportEmptyState } from './PreviewViewport';
@@ -38,13 +48,7 @@ interface BeforeAfterViewportProps {
   emptyState?: ViewportEmptyState;
 }
 
-const MIN_SCALE = 0.2;
-const MAX_SCALE = 10;
-const ZOOM_STEP = 1.25;
 const LUMEN_PANE_WIDTH = 1600;
-
-/** C6/C12：scale=1 实为适应窗口；复位措辞统一为「重置缩放与平移」。 */
-const scaleLabel = (s: number) => (Math.abs(s - 1) < 0.001 ? '适应' : `${Math.round(s * 100)}%`);
 
 type PaneSide = 'before' | 'after';
 
@@ -99,8 +103,6 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
     setLumenBroken(false);
   }, [group?.id]);
 
-  const clampScale = (s: number) => Math.min(Math.max(s, MIN_SCALE), MAX_SCALE);
-
   const zoomBy = useCallback(
     (factor: number) => {
       if (syncLock) {
@@ -129,7 +131,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
     e.preventDefault();
     setActivePane(side);
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const opts = { min: MIN_SCALE, max: MAX_SCALE, step: ZOOM_STEP };
+    const opts = { min: ZOOM_MIN, max: ZOOM_MAX, step: ZOOM_STEP };
 
     if (syncLock) {
       const next = zoomAtPoint(e, rect, beforeScale, beforePos, opts);
@@ -184,14 +186,14 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
     setIsDragging(true);
     setActivePane(side);
     const origin = side === 'before' ? beforePos : afterPos;
-    setDragStart({ x: e.clientX - origin.x, y: e.clientY - origin.y });
+    setDragStart(dragGrab(e.clientX, e.clientY, origin));
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!isDragging) return;
     // 绝对系：由客户端坐标与抓取偏移反解目标平移量，与 dragStart 是否已提交无关。
-    const target = { x: e.clientX - dragStart.x, y: e.clientY - dragStart.y };
+    const target = dragTarget(e.clientX, e.clientY, dragStart);
 
     if (syncLock) {
       // 联动平移两栏：夹紧取两栏的公共边界，避免任一栏露空。
@@ -223,7 +225,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
   const handleDoubleClick = (side: PaneSide) => {
     setActivePane(side);
     const currentScale = side === 'before' ? beforeScale : afterScale;
-    const targetScale = currentScale === 1 ? 2.5 : 1;
+    const targetScale = currentScale === 1 ? DOUBLE_CLICK_SCALE : 1;
     if (syncLock) {
       setBeforeScale(targetScale);
       setAfterScale(targetScale);
@@ -317,7 +319,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
           <div className="flex items-center gap-0.5 bg-white/10 rounded text-[11px]">
             <button
               onClick={() => zoomBy(1 / ZOOM_STEP)}
-              disabled={effectiveScale <= MIN_SCALE}
+              disabled={effectiveScale <= ZOOM_MIN}
               className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-l active:scale-[0.96] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               title="缩小"
               aria-label="缩小"
@@ -349,7 +351,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
             )}
             <button
               onClick={() => zoomBy(ZOOM_STEP)}
-              disabled={effectiveScale >= MAX_SCALE}
+              disabled={effectiveScale >= ZOOM_MAX}
               className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 active:scale-[0.96] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               title="放大"
               aria-label="放大"
