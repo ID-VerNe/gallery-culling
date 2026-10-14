@@ -452,3 +452,34 @@ step4 的 Preview RAW-only 路径此前**零覆盖**，补 4 条（解码成功/
   Preview 的结构（底部操作条内、单读数、无联动概念）无法入列。
 
 前端测试 316 → 336（+20）。Rust 未触（126/126 与 clippy 零告警维持基线）。
+
+## 17. FE-06 剩余 hook：useLumenOrchestration + useExternalApps（commit 见 git log）
+
+边界按 handoff 5.3 第 2 条执行，两个 hook 把 App.tsx 里四类散落状态收拢成两个
+域。App.tsx 净减 159 行（46 insertions / 205 deletions），前端测试维持 336/336。
+
+### 17.1 hook 边界与裁决
+
+- **useLumenOrchestration**（caps 探测 effect + masks state + syncRatings 40 行
+  回调 + gridThumbs 派生值）：四件事在原文件里是「一个 state + 一个 effect +
+  一个派生值 + 一个 40 行回调」，但同属 LUMEN 域且互相引用（caps 决定预设/
+  蒙版入口，masks 由 useToneEditing 写入、TonalAdjuster 读取）。口径逐字保留：
+  探测只在 `available` 变化时发；同步后有变化才重扫且走调用方 handleScan；
+  目录兜底顺序 folder → defaultRawFolder → groupPath(currentGroup)。
+- **useExternalApps**（viewMode + isLuminarRunning + openExternal +
+  toggleCompare/BeforeAfter + openLuminar）：viewMode 入住本 hook 的裁决理由
+  记录在 hook JSDoc——**Luminar 往返的终点就是切视图**（成功后自动进前后对照），
+  两者是同一个交互单元；拆开就要为「往返完成」建一个回调桥，反而多一层间接。
+- openLuminar 的 `setGroups(map)` 改为复用 App 已有的 `patchGroup` 乐观更新
+  入口（与评级/调色保存/批量操作同一入口），不再另开一条集合写回路。
+
+### 17.2 提交前自查修正
+
+- tsc 首跑报 5 处残留（isCompareNav、三处 viewMode JSX 分支、BottomBar 的
+  onOpenExternal）——edit 分批替换时漏掉的消费点，逐一改接 `external.*` 后全绿。
+- 删除旧代码后 `api`/`groupPath`/`useEffect`/`ViewMode`/`PhotoFileInfo`/
+  `LumenCapabilities` 六个 import 失业，noUnusedLocals 会报错，一并清理。
+- 孤儿注释清点：调色保存/UX-12 两条（已随 useToneEditing 迁移，原文在 hook 内）、
+  M-10 副本、Compute compare groups、B1 批量确认说明——均删除，真值只在宿主处。
+
+Rust 未触（126/126 与 clippy 零告警维持基线）。

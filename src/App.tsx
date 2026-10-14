@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { TopBar } from './components/TopBar';
 import { ThumbnailGrid } from './components/ThumbnailGrid';
 import { PreviewViewport } from './components/PreviewViewport';
@@ -24,18 +24,15 @@ import { useRatingFlagSync } from './hooks/useRatingFlagSync';
 import { useToneEditing } from './hooks/useToneEditing';
 import { useSessionDebounce } from './hooks/useSessionDebounce';
 import { useLumenStatus } from './hooks/useLumenStatus';
+import { useLumenOrchestration } from './hooks/useLumenOrchestration';
+import { useExternalApps } from './hooks/useExternalApps';
 import type { ViewportEmptyState } from './components/PreviewViewport';
 import {
-  LumenCapabilities,
-  PhotoFileInfo,
   PhotoGroupInfo,
   SortOrder,
-  ViewMode,
   ToneAdjustments,
 } from './types';
-import { api } from './services/api';
 import { DEFAULT_TONE } from './utils/autoTone';
-import { groupPath } from './utils/groupPath';
 
 
 function AppShell() {
@@ -51,30 +48,11 @@ function AppShell() {
     });
   const { dialog: updateDialog } = useAutoUpdate();
 
-  // B1：批量打分/标记的进度。前端逐张写盘、自行推进度条（无后端进度事件），
-// 与扫描互不干扰。
-
-  const [viewMode, setViewMode] = useState<ViewMode>('single');
+  // 模态框开关（导出 / 设置 / 元数据 / 快捷键帮助）。
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMetadataOpen, setIsMetadataOpen] = useState(false);
   const [isShortcutHelpOpen, setIsShortcutHelpOpen] = useState(false);
-  /** XMP 与 LUMEN RAW 工程两侧调色是否不一致（统一管线的分歧标记） */
-  /** 工程里现有的 AI 蒙版 */
-  const [lumenMasks, setLumenMasks] = useState<
-    Array<{ index?: number; name?: string; kind?: string }>
-  >([]);
-
-  /**
-   * B1：宫格多选集合（受控）。空集 = 沿用单选取值。
-   * 有 ≥2 张时按 `1..5 / P / X` 走批量写盘（带确认与进度）。
-   */
-  /** A1：更新下载/安装进行中（弹窗保持可见并显示进度）。 */
-
-  // Grid search (progressive disclosure; owned here so the TopBar toggle and
-  // the grid can share it across the tonal-panel swap).
-
-  // Tonal & Luminar state
 
   const collection = useCollection();
   const {
@@ -203,13 +181,7 @@ function AppShell() {
     setSortOrder,
     dismissScanError,
   } = scan;
-  /** 调色保存进行中：禁用保存按钮并挡住重入，避免连点写两次 XMP/工程。 */
-  /** UX-12：auto-tone 计算中。RAW-only 要等 LUMEN 预览渲染，采样也是异步的，
-      全程数秒无任何反馈，按钮看起来像没生效。 */
-  const [isLuminarRunning, setIsLuminarRunning] = useState(false);
   const [isHoldOriginal, setIsHoldOriginal] = useState(false);
-
-
 
   // LUMEN RAW engine handshake (P0). Zero requests while disabled — the hook
   // itself owns the 1.5s delay and the silent degradation.
@@ -223,38 +195,29 @@ function AppShell() {
   );
   // 只有握手成功（版本 1.6.0 匹配）才出现 LUMEN RAW 专属入口
   const lumenAvailable = lumenStatus.available;
-  // sidecar 真实能力（命令表/预设/AI）。只在握手成功时探测一次。
-  const [lumenCaps, setLumenCaps] = useState<LumenCapabilities | null>(null);
-  useEffect(() => {
-    if (!lumenAvailable) {
-      setLumenCaps(null);
-      return;
-    }
-    let active = true;
-    api
-      .getLumenCapabilities()
-      .then((c) => active && setLumenCaps(c))
-      .catch((e) => console.warn('LUMEN 能力探测失败:', e));
-    return () => {
-      active = false;
-    };
-  }, [lumenAvailable]);
-  // 宫格引擎开关：仅在设置开启且引擎握手成功时才切到 lumen 渲染
-  const lumenGridThumbs =
-    (settings?.lumenGridThumbnails ?? false) && lumenAvailable;
-
-
-
-
-
+  // LUMEN 前端编排（FE-06）：能力探测、AI 蒙版、宫格开关、评级同步。
+  const lumen = useLumenOrchestration({
+    available: lumenAvailable,
+    gridThumbnails: settings?.lumenGridThumbnails ?? false,
+    defaultRawFolder: settings?.defaultRawFolder,
+    currentGroup,
+    onRescan: handleScan,
+    jpgFolder,
+  });
+  // 外部应用交互与视图模式（FE-06）：Luminar 往返的终点就是切视图，同单元。
+  const external = useExternalApps({
+    currentGroup,
+    photoshopPath: settings?.photoshopPath,
+    onGroupPatched: patchGroup,
+  });
 
   const tone = useToneEditing({
     currentGroup,
-    viewMode,
+    viewMode: external.viewMode,
     lumenAvailable,
-    lumenCapsAiMasks: lumenCaps?.aiMasks,
+    lumenCapsAiMasks: lumen.caps?.aiMasks,
     onGroupsPatched: patchGroup,
-    onMasksLoaded: setLumenMasks,
+    onMasksLoaded: lumen.onMasksLoaded,
   });
   const {
     toneMap,
@@ -311,7 +274,7 @@ function AppShell() {
   // 「有基准且基准在左」的对比模式下，± 与宫格点击作用在**对比候选**而非当前
   // 照片 —— 用户此时盯着右窗格。判定留在 AppShell（它是唯一同时持有
   // viewMode / pinnedId / isPinnedOnLeft 的地方），useCollection 只管改索引。
-  const isCompareNav = viewMode === 'split' && !!pinnedId && isPinnedOnLeft;
+  const isCompareNav = external.viewMode === 'split' && !!pinnedId && isPinnedOnLeft;
   const handlePrev = useCallback(
     () => selectPrev(isCompareNav),
     [selectPrev, isCompareNav],
@@ -330,51 +293,6 @@ function AppShell() {
     [selectPhoto, isCompareNav, pinnedId, filteredGroups.length],
   );
 
-  /**
-   * M-10：调色面板的**单一真值**。
-   *
-   * `showTonalPanel` 是「用户意图」，`currentGroup` 是「当前是否有可调对象」，
-   * 可见性 = 二者与。此前显示层只读 `showTonalPanel`，于是筛选变空时会出现
-   * 「按钮说开着、屏幕显示着宫格」，且再按 E 看似失灵。所有显示与传参统一用
-   * 这个派生值；`showTonalPanel` 保持为意图（筛选恢复后面板自动回来）。
-   */
-
-  // Compute compare groups based on pinned reference.
-
-
-
-
-
-  // Open in Photoshop / External app
-  const handleOpenExternal = useCallback(async () => {
-    if (!currentGroup) return;
-    const targetPath = groupPath(currentGroup);
-    if (!targetPath) return;
-
-    try {
-      await api.openInPhotoshop(targetPath, settings?.photoshopPath);
-    } catch (e) {
-      console.warn('Photoshop failed, falling back to default:', e);
-      try {
-        await api.openInDefaultApp(targetPath);
-      } catch (fallbackErr) {
-        toast.error(
-          `无法打开该照片：${String(fallbackErr)}\n请在「设置」中确认 Photoshop 路径，或安装一个能打开此格式的程序。`,
-        );
-      }
-    }
-  }, [currentGroup, settings?.photoshopPath, toast]);
-
-  // View mode toggles
-  const handleToggleCompare = useCallback(() => {
-    setViewMode((m) => (m === 'split' ? 'single' : 'split'));
-  }, []);
-
-  const handleToggleBeforeAfter = useCallback(() => {
-    setViewMode((m) => (m === 'before_after' ? 'single' : 'before_after'));
-  }, []);
-
-
   const handleHoldOriginalStart = useCallback(() => {
     setIsHoldOriginal(true);
   }, []);
@@ -382,86 +300,6 @@ function AppShell() {
   const handleHoldOriginalEnd = useCallback(() => {
     setIsHoldOriginal(false);
   }, []);
-
-  const handleSyncLumenRatings = useCallback(
-    async (folder: string): Promise<number> => {
-      const target =
-        folder ||
-        settings?.defaultRawFolder ||
-        groupPath(currentGroup) ||
-        '';
-      if (!target) {
-        toast.error('没有可同步的路径，请先设置默认 RAW 目录。');
-        return 0;
-      }
-      // 取所在目录（同时兼容 / 与 \ 分隔符）
-      const lastSlash = Math.max(
-        target.lastIndexOf('/'),
-        target.lastIndexOf(String.fromCharCode(92)),
-      );
-      const folderPath = lastSlash > 0 ? target.slice(0, lastSlash) : '';
-      if (!folderPath) {
-        toast.error('无法确定所在目录，请先设置默认 RAW 目录。');
-        return 0;
-      }
-      const result = await api.syncLumenRatings(folderPath);
-      if (result.updated.length > 0) {
-        toast.success(`已从 LUMEN RAW 同步 ${result.updated.length} 张的评级。`);
-        // 评级变了 → 星级排序与边框都要跟着变，重新扫描当前目录
-        if (jpgFolder) await handleScan();
-      }
-      if (result.conflicts.length > 0) {
-        const first = result.conflicts[0];
-        toast.error(
-          `${result.conflicts.length} 张照片在两边都被改过，已保持本机值不覆盖。\n` +
-            `例如 ${first.path}：本机 ${first.hostRating}★/${first.hostFlag}，` +
-            `LUMEN RAW ${first.lumenRating}★/${first.lumenFlag}。`,
-        );
-      }
-      return result.updated.length;
-    },
-    // `handleScan` 依赖 jpgFolder/rawFolder/sortOrder
-    [settings, currentGroup, toast, jpgFolder, handleScan],
-  );
-
-  // Luminar AI Roundtrip Handler
-  const handleOpenLuminar = useCallback(async () => {
-    if (!currentGroup) return;
-    const targetPath = groupPath(currentGroup);
-    if (!targetPath) return;
-
-    setIsLuminarRunning(true);
-    try {
-      const editedPath = await api.openInLuminarRoundtrip(targetPath);
-      const ext = editedPath.split('.').pop() || 'tif';
-      const editedInfo: PhotoFileInfo = {
-        path: editedPath,
-        name: editedPath.split(/[/\\]/).pop() || 'edited.tif',
-        extension: ext,
-        size: 0,
-        mtime: Date.now() / 1000,
-      };
-
-      setGroups((prev) =>
-        prev.map((g) =>
-          g.id === currentGroup.id ? { ...g, edited: editedInfo } : g,
-        ),
-      );
-
-      // Automatically switch to Before/After comparison view to review result!
-      setViewMode('before_after');
-      toast.success(
-        'Luminar AI 精修完成，已切换到前后对照视图查看效果。',
-      );
-    } catch (err) {
-      console.error('Luminar roundtrip failed:', err);
-      toast.error(
-        `调用 Luminar AI 失败或未完成：${String(err)}\n请确认 Luminar AI 已安装，并已在「设置」中允许作为 Photoshop 插件运行。`,
-      );
-    } finally {
-      setIsLuminarRunning(false);
-    }
-  }, [currentGroup, toast]);
 
   // Save session when index changes — debounced (M-17).
   //
@@ -534,15 +372,15 @@ function AppShell() {
     onFlag: applyFlag,
     // B2：`0`/`U` 走合并后的单次写盘（清除评级 + 旗标）。
     onClear: () => void handleClearRatingFlag(),
-    onOpenExternal: handleOpenExternal,
-    onToggleCompare: handleToggleCompare,
+    onOpenExternal: external.openExternal,
+    onToggleCompare: external.toggleCompare,
     onSwapCompare: handleSwapCompare,
     onTogglePinReference: handleTogglePinBenchmark,
     onPinLeft: handleTogglePinLeft,
     onPinRight: handleTogglePinRight,
     onTogglePinCurrent: handleTogglePinCurrent,
     onOpenMetadataModal: () => setIsMetadataOpen(true),
-    onToggleBeforeAfter: handleToggleBeforeAfter,
+    onToggleBeforeAfter: external.toggleBeforeAfter,
     onToggleTonalPanel: handleToggleTonalPanel,
     onHoldOriginalStart: handleHoldOriginalStart,
     onHoldOriginalEnd: handleHoldOriginalEnd,
@@ -579,8 +417,6 @@ function AppShell() {
     };
   }, [groups.length, filteredGroups.length, handleBrowseJpg]);
 
-  // B1：批量确认框里的一句话说明。放在 JSX 外，避免在属性里做类型收窄。
-
   return (
     <div className="flex flex-col h-screen w-screen bg-background-base text-white overflow-hidden antialiased">
       {/* Top Controls Bar */}
@@ -605,15 +441,15 @@ function AppShell() {
         filterCounts={filterCounts}
         sortOrder={sortOrder}
         onSortChange={setSortOrder}
-        viewMode={viewMode}
-        onViewModeChange={setViewMode}
+        viewMode={external.viewMode}
+        onViewModeChange={external.setViewMode}
         onOpenExportModal={() => setIsExportOpen(true)}
         onOpenSettingsModal={() => setIsSettingsOpen(true)}
         onToggleTonalAdjuster={handleToggleTonalPanel}
         tonalPanelVisible={tonalPanelVisible}
         tonalToggleDisabled={!currentGroup}
-        onOpenLuminar={handleOpenLuminar}
-        isLuminarRunning={isLuminarRunning}
+        onOpenLuminar={external.openLuminar}
+        isLuminarRunning={external.isLuminarRunning}
       />
 
       {/* Scan progress (M-05) — 空闲时不渲染，不留空白条 */}
@@ -643,7 +479,7 @@ function AppShell() {
       {/* Main Content Area */}
       <div className="flex-1 flex overflow-hidden">
         {/* Center Viewport */}
-        {viewMode === 'single' && (
+        {external.viewMode === 'single' && (
           <PreviewViewport
             group={currentGroup}
             tone={currentTone}
@@ -653,33 +489,33 @@ function AppShell() {
             onNext={guardedNext}
             onRate={applyRating}
             onFlag={applyFlag}
-            onOpenExternal={handleOpenExternal}
-            onOpenLuminar={handleOpenLuminar}
+            onOpenExternal={external.openExternal}
+            onOpenLuminar={external.openLuminar}
             onToggleTonalAdjuster={handleToggleTonalPanel}
             isTonalPanelOpen={tonalPanelVisible}
-            isLuminarRunning={isLuminarRunning}
+            isLuminarRunning={external.isLuminarRunning}
             emptyState={viewportEmptyState}
             onImageElement={setPreviewImage}
           />
         )}
 
-        {viewMode === 'before_after' && (
+        {external.viewMode === 'before_after' && (
           <BeforeAfterViewport
             group={currentGroup}
             tone={currentTone}
             isHoldOriginal={isHoldOriginal}
             onRate={applyRating}
             onFlag={applyFlag}
-            onOpenLuminar={handleOpenLuminar}
+            onOpenLuminar={external.openLuminar}
             onToggleTonalAdjuster={handleToggleTonalPanel}
             isTonalPanelOpen={tonalPanelVisible}
-            isLuminarRunning={isLuminarRunning}
+            isLuminarRunning={external.isLuminarRunning}
             emptyState={viewportEmptyState}
             lumenStatus={lumenStatus}
           />
         )}
 
-        {viewMode === 'split' && (
+        {external.viewMode === 'split' && (
           <SplitCompareViewport
             leftGroup={leftCompareGroup}
             rightGroup={rightCompareGroup}
@@ -708,14 +544,14 @@ function AppShell() {
               onSave={handleSaveTone}
               isSaving={isSavingTone}
               divergent={toneDivergent}
-              masks={lumenMasks}
+              masks={lumen.masks}
               onApplyMask={
-                lumenCaps?.aiMasks && lumenAvailable
+                lumen.caps?.aiMasks && lumenAvailable
                   ? handleApplyLumenMask
                   : undefined
               }
-              lumenPresets={lumenCaps?.presets ?? []}
-              aiAvailable={lumenCaps?.aiMasks ?? false}
+              lumenPresets={lumen.caps?.presets ?? []}
+              aiAvailable={lumen.caps?.aiMasks ?? false}
               onApplyPreset={lumenAvailable ? handleApplyLumenPreset : undefined}
               onClose={closeTonePanel}
               dirty={toneDirty}
@@ -737,7 +573,7 @@ function AppShell() {
                 else setGridSearchFocusToken((t) => t + 1);
               }}
               totalLoaded={filteredGroups.length}
-              lumenThumbnails={lumenGridThumbs}
+              lumenThumbnails={lumen.gridThumbs}
               candidateId={rightCompareGroup?.id}
               /* B1：多选（Ctrl/Shift 点选、Ctrl+A、方向键重置为单选） */
               selectedIds={selectedIds}
@@ -755,7 +591,7 @@ function AppShell() {
         currentGroup={currentGroup}
         currentIndex={selectedIndex}
         totalCount={filteredGroups.length}
-        onOpenExternal={handleOpenExternal}
+        onOpenExternal={external.openExternal}
         onOpenMetadataModal={() => setIsMetadataOpen(true)}
         onOpenShortcutHelp={() => setIsShortcutHelpOpen(true)}
         searchActive={gridSearch.trim().length > 0}
@@ -780,8 +616,8 @@ function AppShell() {
         onSettingsSaved={applySettings}
         onError={(m) => toast.error(m)}
         lumenStatus={lumenStatus}
-        capabilities={lumenCaps}
-        onSyncRatings={lumenStatus?.available ? handleSyncLumenRatings : undefined}
+        capabilities={lumen.caps}
+        onSyncRatings={lumenAvailable ? lumen.syncRatings : undefined}
         savedLumenEnabled={settings?.lumenEnabled ?? false}
       />
 
