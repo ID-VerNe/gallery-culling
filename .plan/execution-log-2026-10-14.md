@@ -483,3 +483,47 @@ step4 的 Preview RAW-only 路径此前**零覆盖**，补 4 条（解码成功/
   M-10 副本、Compute compare groups、B1 批量确认说明——均删除，真值只在宿主处。
 
 Rust 未触（126/126 与 clippy 零告警维持基线）。
+
+## 18. FE-07 收尾：测试块归位 + lib.rs 显式导入（commit 见 git log）
+
+Rust 侧最后一项。commands.rs 的 `mod tests`（290 行，7 条用例 + 3 个 helper）
+按「测试与被测物同模块」拆分归位，`lib.rs` 的 glob 导入改显式列表。
+
+### 18.1 归位拆分
+
+- **export.rs** ← 6 条 export_items 用例 + `unique_dir` / `item_with_jpg` /
+  `dir_entries` 三个 helper（+278 行）。被测物 `export_items` 与清单常量
+  `EXPORT_MANIFEST_NAME` / `EXPORT_TMP_PREFIX` 都在本文件，断言口径
+  （拒绝同目录 / 跳过同名 / 失败记账 / 取消零污染 / 预置文件不动）逐字保留。
+- **lumencmds.rs** ← 1 条 probe 用例（+38 行）。适配点：不再先建临时目录
+  再引用其中不存在的文件，改用「进程 id + 纳秒时间戳」组成全局唯一且从不
+  创建的路径——少一次磁盘写入与清理，命中的仍是同一条「路径不存在」分支。
+- **commands.rs** 净减 314 行：删 `mod tests` 全块、删两个 `#[cfg(test)]`
+  再导出（`probe_lumen_impl` / `export_items`+两常量——grep 确认全 crate
+  仅测试块消费它们）、删 4 个仅测试需要的 import（fs / Path / Ordering /
+  ExportItem）。测试路径从 `commands::tests::*` 变为
+  `commands::export::tests::*` 与 `commands::lumencmds::tests::*`，
+  grep 确认无外部引用依赖旧路径。
+- **lib.rs**：`use commands::*` → `use commands::{AppState,
+  open_in_luminar_roundtrip_cmd};`。glob 实际提供的未限定名只有这两个
+  （generate_handler 里全是 `commands::` 限定路径），显式列表让依赖可读尽。
+
+### 18.2 执行方式与验证
+
+- 按 handoff 5.5 教训（批量删顶层 item 勿两次独立切片）：写一次性 Python
+  脚本「读全文 → 切两段 → 拼回」，自带断言（标记唯一性、commands.rs 不得
+  残留 mod tests / export_items / #[cfg(test)] 等字样）。脚本执行后删除，
+  `.plan` 保持只放文档的惯例。
+- 变异验证（迁移后测试网是否真的在测新家的代码）：A 改坏 export 同目录
+  拒绝文案 → `export_rejects_target_equal_to_source_dir` 精准红；B 把
+  probe 的「路径不存在」改成「此路不通」→ probe 测试精准红。两变体均
+  无误伤（125 passed / 1 failed → 124/2），还原后 126/126。
+  插曲：B 的第一版只是在原文前加前缀，`contains("路径不存在")` 照旧
+  通过——变异必须替换断言瞄准的子串，加前缀是无效变异。
+- 门禁：`cargo test --lib` 126/126（2 ignored 维持基线）；
+  `cargo clippy --all-targets -- -D warnings` exit 0。clippy 输出里的
+  "error deleting lock file ... 拒绝访问 (os error 5)" 是 Windows
+  incremental 编译锁的环境噪音（rustc/cargo 基础设施层，非 lint，
+  `-D warnings` 不阻断），grep 证实无任何指向源码的 lint 告警。
+- fmt：未跑。基线本身就有 48 处 rustfmt 差异（多为项目刻意保留的
+  `#[cfg(test)]` import 交错风格），按「cargo fmt 不裸跑」红线不动。

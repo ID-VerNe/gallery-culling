@@ -468,3 +468,41 @@ pub async fn lumen_list_masks_cmd(
     })
     .await
 }
+
+/// `probe_lumen_impl` 的单测（FE-07 从 commands.rs 的 `mod tests` 归位到此）。
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `probe_lumen_cmd` 对不存在的路径：`available=false` 且带 `error`。
+    /// 直接调用实现体（async），无需 tauri 运行时。
+    ///
+    /// 路径用「进程 id + 纳秒时间戳」保证全局唯一且从不创建——比迁移前
+    ///    （先建临时目录、再引用其中不存在的文件）少一次磁盘写入与清理，
+    /// 命中的仍是同一条「路径不存在」分支。
+    #[test]
+    fn probe_lumen_reports_error_for_missing_path() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let missing = std::env::temp_dir().join(format!(
+            "gallery_probe_test_{}_{}.exe",
+            std::process::id(),
+            nanos
+        ));
+        let res = tauri::async_runtime::block_on(probe_lumen_impl(Some(
+            missing.to_string_lossy().to_string(),
+        )))
+        .expect("命令本身不应 Err（不可用走 Ok + available=false）");
+
+        assert!(!res.available, "不存在的路径必须 available=false");
+        assert!(res.version.is_none());
+        let err = res.error.expect("必须带 error 说明原因");
+        assert!(
+            err.contains("路径不存在"),
+            "必须命中「路径不存在」分支（而非其他降级理由），实际: {}",
+            err
+        );
+    }
+}

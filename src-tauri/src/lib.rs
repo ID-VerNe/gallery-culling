@@ -7,7 +7,11 @@ mod scanner;
 mod thumbnail;
 pub mod xmp;
 
-use commands::*;
+// FE-07：显式导入替代 glob。此前 `use commands::*` 把 8 个子模块转发的全部
+// 命令宏一并卷入本作用域，而 generate_handler 里用的都是 `commands::` 限定
+// 路径——glob 实际提供的未限定名只有这两个。显式列表让「本文件到底依赖
+// commands 的什么」可一眼读尽，新增命令时也不会被 glob 悄悄放行。
+use commands::{AppState, open_in_luminar_roundtrip_cmd};
 use db::Database;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
