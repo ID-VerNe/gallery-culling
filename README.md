@@ -46,7 +46,7 @@ A high-performance desktop photo culling application built with **Tauri 2.0 + Ru
 *   **Desktop Shell:** Tauri 2.0 (`tauri`, `protocol-asset`)
 *   **Backend Core:** Rust (`image`, `fast_image_resize`, `kamadak-exif`, `rusqlite`, `trash`, `rayon`, `tokio`)
 *   **Frontend:** React 19, TypeScript, Vite 6, Tailwind CSS
-*   **Package Manager:** `pnpm`
+*   **Package Manager:** `npm`
 *   **Legacy Archive:** The original Python Flask version is safely archived in `legacy_flask/`.
 
 ---
@@ -55,7 +55,7 @@ A high-performance desktop photo culling application built with **Tauri 2.0 + Ru
 
 ### Prerequisites
 *   **Node.js** >= 18 (v20+ recommended)
-*   **pnpm** >= 9 (v10+ recommended)
+*   **npm** >= 10 (bundled with Node.js v20+)
 *   **Rust** >= 1.77 (`rustc` & `cargo`)
 
 ### Quick Start
@@ -67,18 +67,23 @@ A high-performance desktop photo culling application built with **Tauri 2.0 + Ru
     ```
 2.  Install dependencies:
     ```bash
-    pnpm install
+    npm install
     ```
 3.  Launch development environment:
     ```bash
-    pnpm tauri dev
+    npm run tauri dev
     ```
 
 ### Release Build
 ```bash
-pnpm tauri build
+npm run tauri build
 ```
 The compiled standalone executable and installer will be generated in `src-tauri/target/release/`.
+
+For a signed release that also produces the auto-update metadata (`updater.json`), run:
+```bash
+node scripts/release.mjs
+```
 
 ---
 

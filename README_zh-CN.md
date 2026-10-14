@@ -46,7 +46,7 @@
 *   **桌面框架：** Tauri 2.0 (`tauri`, `protocol-asset`)
 *   **后端核心：** Rust (`image`, `fast_image_resize`, `kamadak-exif`, `rusqlite`, `trash`, `rayon`, `tokio`)
 *   **前端框架：** React 19, TypeScript, Vite 6, Tailwind CSS
-*   **包管理器：** `pnpm`
+*   **包管理器：** `npm`
 *   **旧版归档：** 原 Python Flask 实现已完整归档在 `legacy_flask/` 目录下。
 
 ---
@@ -55,7 +55,7 @@
 
 ### 先决条件
 *   **Node.js** >= 18 (推荐 v20+)
-*   **pnpm** >= 9 (推荐 v10+)
+*   **npm** >= 10 (随 Node.js v20+ 附带)
 *   **Rust** >= 1.77 (`rustc` 与 `cargo`)
 
 ### 快速启动
@@ -67,18 +67,23 @@
     ```
 2.  安装前端依赖：
     ```bash
-    pnpm install
+    npm install
     ```
 3.  启动开发环境：
     ```bash
-    pnpm tauri dev
+    npm run tauri dev
     ```
 
 ### 编译打包单可执行文件 (Release Build)
 ```bash
-pnpm tauri build
+npm run tauri build
 ```
 编译生成的便携版 `.exe` 与安装程序将输出在 `src-tauri/target/release/`。
+
+如需产出带签名、并生成自动更新元数据（`updater.json`）的正式发版包，运行：
+```bash
+node scripts/release.mjs
+```
 
 ---
 
