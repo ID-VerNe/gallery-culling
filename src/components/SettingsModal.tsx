@@ -1,42 +1,93 @@
-import React, { useState, useEffect } from 'react';
-import { X, Settings, FolderOpen, Save } from 'lucide-react';
-import { AppSettings } from '../types';
+import React, { useState, useEffect, useRef } from 'react';
+import { Settings, Save } from 'lucide-react';
+import { EditorPathSection, LumenSettingsSection, ThumbnailSection } from './SettingsSections';
+import { AppSettings, LumenCapabilities, LumenStatus } from '../types';
 import { api } from '../services/api';
 import { open } from '@tauri-apps/plugin-dialog';
+import { Modal } from './Modal';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSettingsSaved: (settings: AppSettings) => void;
+  onError?: (message: string) => void;
+  /** LUMEN RAW 握手状态（App 层已有，透传避免重复探测） */
+  lumenStatus?: LumenStatus | null;
+  /** sidecar 能力（含 aiMasks —— 按磁盘事实判定） */
+  capabilities?: LumenCapabilities | null;
+  /** 把 LUMEN RAW 的评级拉回侧边栏（返回被更新的文件数） */
+  onSyncRatings?: (folder: string) => Promise<number>;
+  /**
+   * App 侧**已保存**的 `lumenEnabled` 真值。
+   * 状态行与 GPU 能力警告都以它为准（能力探测只对已保存配置有意义），
+   * 避免"本地刚勾上、尚未保存"时冒出与勾选矛盾的死文案。
+   * 缺省时退回本地值（保持向后兼容）。
+   */
+  savedLumenEnabled?: boolean;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
   onSettingsSaved,
+  onError,
+  lumenStatus,
+  capabilities,
+  onSyncRatings,
+  savedLumenEnabled,
 }) => {
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  /** 加载成功时的基线快照 —— 用于脏检查。 */
+  const loadedRef = useRef<AppSettings | null>(null);
+  /** 「放弃未保存的更改？」确认弹窗。 */
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  /** D3：读取设置失败的原始错误；非 null 时渲染错误态 + 「重试」。 */
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  /** 读取设置：成功 → 载入表单；失败 → 记录错误，交由 UI 渲染「重试」。 */
+  const loadSettings = () => {
+    setLoadError(null);
+    setSettings(null);
+    api
+      .getSettings()
+      .then((s) => {
+        setSettings(s);
+        // 基线快照：AppSettings 九个字段全是原始类型，浅拷贝即可用于逐键比较。
+        loadedRef.current = { ...s };
+      })
+      .catch((e) => {
+        // D3：失败必须可重试 —— 不能永远停在「正在读取设置…」。
+        setLoadError(String(e));
+        onError?.(`读取设置失败：${String(e)}`);
+      });
+  };
 
   useEffect(() => {
-    if (isOpen) {
-      api.getSettings().then(setSettings);
-    }
+    if (isOpen) loadSettings();
+    // `onError` is a toast callback and intentionally not a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+  const isDirty =
+    settings != null &&
+    loadedRef.current != null &&
+    (Object.keys(settings) as (keyof AppSettings)[]).some(
+      (k) => settings[k] !== loadedRef.current![k],
+    );
 
-  if (!isOpen || !settings) return null;
+  /**
+   * 所有关闭路径（取消 / X / Esc）都走这里：脏则先确认，未脏直接关。
+   * 保存成功那条路不经此处——`handleSave` 自己调用 `onClose`。
+   */
+  const requestClose = () => {
+    if (isDirty) setConfirmOpen(true);
+    else onClose();
+  };
 
   const handleBrowsePhotoshop = async () => {
+    if (!settings) return;
     const selected = await open({
       multiple: false,
       title: '选择 Photoshop 可执行文件 (Photoshop.exe)',
@@ -48,109 +99,119 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleSave = async () => {
+    if (!settings) return;
+    setIsSaving(true);
     try {
       await api.saveSettings(settings);
       onSettingsSaved(settings);
       onClose();
     } catch (e) {
-      alert(`保存设置失败: ${e}`);
+      onError?.(`保存设置失败：${String(e)}`);
+    } finally {
+      setIsSaving(false);
     }
   };
 
+  // M-06：状态行的「门控」与「数据源」统一到同一份真值。
+  // `savedLumenEnabled` 缺省时退回本地值（向后兼容）。
+  const effectiveSavedLumenEnabled =
+    savedLumenEnabled ?? settings?.lumenEnabled ?? false;
+  /** 本地勾选与已保存值不一致 —— 状态行文案要标注「保存后生效」。 */
+  const lumenEnabledPending =
+    settings != null && settings.lumenEnabled !== effectiveSavedLumenEnabled;
+  const showLumenStatusRow =
+    settings != null &&
+    (effectiveSavedLumenEnabled || settings.lumenEnabled);
+  const lumenStatusText = lumenStatus?.available
+    ? `已连接 LUMEN RAW ${lumenStatus.foundVersion ?? ''}`.trim()
+    : lumenStatus?.detail ?? '正在探测引擎…';
+  const lumenStatusDisplay = lumenEnabledPending
+    ? `${lumenStatusText}（保存后生效）`
+    : lumenStatusText;
+
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="settings-modal-title"
-      className="fixed inset-0 z-50 bg-background-base/70 backdrop-blur-sm flex items-center justify-center p-4 select-none"
-    >
-      <div className="bg-background-panel border border-border-default rounded-xl w-full max-w-md shadow-2xl flex flex-col overflow-hidden text-white text-xs">
-        {/* Header */}
-        <div className="h-12 border-b border-white/10 px-4 flex items-center justify-between bg-background-header">
-          <div className="flex items-center gap-2 font-semibold text-sm text-white">
-            <Settings className="w-4 h-4 text-white" aria-hidden="true" />
-            <h2 id="settings-modal-title">首选项与工具设置</h2>
-          </div>
+    <>
+    <Modal
+      isOpen={isOpen}
+      onClose={requestClose}
+      title="设置"
+      maxWidth="max-w-md"
+      icon={<Settings className="w-4 h-4" aria-hidden="true" />}
+      footer={
+        <>
           <button
-            onClick={onClose}
-            className="text-white/60 hover:text-white p-1 rounded hover:bg-white/5 active:scale-[0.96] transition"
-            aria-label="关闭设置弹窗"
-          >
-            <X className="w-4 h-4" aria-hidden="true" />
-          </button>
-        </div>
-
-        {/* Body */}
-        <div className="p-4 flex flex-col gap-4">
-          {/* Photoshop Path */}
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="settings-photoshop-path" className="text-white/80 font-medium cursor-pointer">
-              Photoshop 可执行程序路径：
-            </label>
-            <div className="flex items-center gap-2">
-              <input
-                id="settings-photoshop-path"
-                type="text"
-                value={settings.photoshopPath}
-                onChange={(e) =>
-                  setSettings({ ...settings, photoshopPath: e.target.value })
-                }
-                className="flex-1 bg-background-base border border-border-default rounded-md px-3 py-1.5 text-white outline-none font-mono text-[11px] focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50"
-              />
-              <button
-                onClick={handleBrowsePhotoshop}
-                className="px-3 py-1.5 bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white rounded-md flex items-center gap-1 transition-transform"
-                title="选择 Photoshop 路径"
-                aria-label="选择 Photoshop 路径"
-              >
-                <FolderOpen className="w-3.5 h-3.5" aria-hidden="true" />
-              </button>
-            </div>
-            <p className="text-[10px] text-white/40">
-              用于快捷键 'O' 或点击“打开 RAW”时直接通过 Photoshop 打开对应相机 RAW 文件。
-            </p>
-          </div>
-
-          {/* Thumbnail Width */}
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="settings-thumbnail-width" className="text-white/80 font-medium cursor-pointer">
-              缩略图默认生成尺寸 (宽度像素)：
-            </label>
-            <input
-              id="settings-thumbnail-width"
-              type="number"
-              min={100}
-              max={600}
-              step={50}
-              value={settings.thumbnailWidth}
-              onChange={(e) =>
-                setSettings({
-                  ...settings,
-                  thumbnailWidth: parseInt(e.target.value, 10) || 200,
-                })
-              }
-              className="w-32 bg-background-base border border-border-default rounded-md px-3 py-1.5 text-white outline-none font-mono text-[11px] focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50"
-            />
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="h-12 border-t border-white/10 px-4 flex items-center justify-end gap-2 bg-background-header">
-          <button
-            onClick={onClose}
-            className="px-3.5 py-1.5 rounded-md bg-white/5 hover:bg-white/10 active:scale-[0.96] text-white/80 transition-transform"
+            onClick={requestClose}
+            className="focus-ring px-3.5 py-1.5 rounded-md bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white/80 transition-colors"
           >
             取消
           </button>
           <button
             onClick={handleSave}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-white hover:bg-white/90 text-black active:scale-[0.96] disabled:bg-white/10 disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-transform shadow-sm"
+            disabled={isSaving || !settings}
+            className="focus-ring flex items-center gap-1.5 px-3.5 py-1.5 bg-white hover:bg-white/90 text-black active:scale-[0.96] disabled:bg-white/10 disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-transform shadow-sm"
           >
             <Save className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>保存设置</span>
+            <span>{isSaving ? '保存中…' : '保存设置'}</span>
+          </button>
+        </>
+      }
+    >
+      {loadError !== null ? (
+        // D3：读取失败 → 可读错误 + 「重试」，不再永久停在加载态。
+        <div
+          role="alert"
+          className="flex flex-col items-start gap-3 rounded-lg border border-rose-800/50 bg-rose-950/30 p-3 text-rose-200/90"
+        >
+          <p className="text-xs leading-relaxed">读取设置失败：{loadError}</p>
+          <button
+            type="button"
+            onClick={loadSettings}
+            className="focus-ring px-3 py-1.5 rounded-md bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white/80 transition-colors"
+          >
+            重试
           </button>
         </div>
-      </div>
-    </div>
+      ) : !settings ? (
+        <p className="text-white/60 text-xs" role="status">
+          正在读取设置…
+        </p>
+      ) : (
+        <>
+          <EditorPathSection
+            photoshopPath={settings.photoshopPath}
+            onChange={(v) => setSettings({ ...settings, photoshopPath: v })}
+            onBrowse={handleBrowsePhotoshop}
+          />
+
+          <LumenSettingsSection
+            settings={settings}
+            onChange={setSettings}
+            lumenStatus={lumenStatus}
+            capabilities={capabilities}
+            effectiveSavedLumenEnabled={effectiveSavedLumenEnabled}
+            onSync={onSyncRatings ? () => onSyncRatings('') : undefined}
+            onReport={onError}
+            lumenStatusDisplay={lumenStatusDisplay}
+            showLumenStatusRow={showLumenStatusRow}
+          />
+
+          <ThumbnailSection
+            width={settings.thumbnailWidth}
+            onChange={(v) => setSettings({ ...settings, thumbnailWidth: v })}
+          />
+        </>
+      )}
+    </Modal>
+    <ConfirmDialog
+      isOpen={confirmOpen}
+      onClose={() => setConfirmOpen(false)}
+      onConfirm={onClose}
+      title="放弃未保存的更改？"
+      message="你对设置所做的修改尚未保存。放弃这些更改并关闭？"
+      confirmLabel="放弃更改"
+      cancelLabel="继续编辑"
+      destructive
+    />
+    </>
   );
 };

@@ -5,6 +5,9 @@ node_modules/
 # Rust / Tauri build artifacts
 src-tauri/target/
 
+# LUMEN RAW sidecar (184MB, built by .plan/patches/build_lumen_sidecar.ps1)
+src-tauri/binaries/
+
 # Frontend build outputs
 dist/
 dist-ssr/
@@ -30,3 +33,18 @@ app_cache/
 history.json
 *.db
 updater.key
+
+# Vendored third-party source: clone of github.com/hety0211/lumen-raw
+# (build input for the sidecar; the 184MB built artifact is already ignored above)
+lumen-raw/
+
+# Stale pnpm dependency backup left behind by the pnpm -> npm migration.
+# `npm ci` regenerates everything; safe to delete. Kept out of git either way.
+node_modules__pnpm_backup/
+
+# Tool-local state
+.freebuff/
+.workbuddy/
+
+# E2E generated fixtures + tauri dev log (recreated on every e2e run)
+e2e/.tmp/

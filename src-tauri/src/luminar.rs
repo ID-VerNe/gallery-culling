@@ -8,7 +8,12 @@ pub fn find_luminar_executable() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         if let Ok(output) = Command::new("reg")
-            .args(["query", r"HKLM\SOFTWARE\Skylum\Luminar AI", "/v", "ApplicationPath"])
+            .args([
+                "query",
+                r"HKLM\SOFTWARE\Skylum\Luminar AI",
+                "/v",
+                "ApplicationPath",
+            ])
             .output()
         {
             if output.status.success() {
@@ -29,7 +34,12 @@ pub fn find_luminar_executable() -> Option<PathBuf> {
 
         // 2. Query HKCU\SOFTWARE\Skylum\Luminar AI
         if let Ok(output) = Command::new("reg")
-            .args(["query", r"HKCU\SOFTWARE\Skylum\Luminar AI", "/v", "ApplicationPath"])
+            .args([
+                "query",
+                r"HKCU\SOFTWARE\Skylum\Luminar AI",
+                "/v",
+                "ApplicationPath",
+            ])
             .output()
         {
             if output.status.success() {
@@ -118,7 +128,12 @@ pub async fn edit_in_luminar(file_path: &Path) -> Result<PathBuf, String> {
         .arg("photoshop")
         .arg("")
         .arg("origname")
-        .arg(file_path.file_name().and_then(|n| n.to_str()).unwrap_or(stem))
+        .arg(
+            file_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(stem),
+        )
         .arg("document")
         .arg("Gallery Culling")
         .arg("display_dialog")

@@ -27,3 +27,167 @@
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-scrollbar-thumb-hover);
 }
+
+@layer components {
+  /* ---------------------------------------------------------------
+     Focus visibility (WCAG 2.4.7)
+     One ring for every interactive element, keyboard-only so the
+     pointer never sees it. Replaces the UA default that Tailwind's
+     preflight suppresses on form controls.
+     --------------------------------------------------------------- */
+  .focus-ring {
+    @apply outline-none;
+  }
+  .focus-ring:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+    border-radius: inherit;
+  }
+
+  /* ---------------------------------------------------------------
+     Tone sliders
+     A 4px drawn track on a 24px hit area. The native `h-1` range is
+     only 4px tall — well under any comfortable pointer target.
+
+     T-06：命中区从 20px 提到 24px，达 WCAG 2.2 SC 2.5.8 的最低要求
+     （20px 是 F-17 修复时停下的位置，仍低于 24px 下限）。绘制轨道
+     仍是 4px，不改视觉重量，只扩大可点区域。
+     --------------------------------------------------------------- */
+  .tone-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 24px;
+    background: transparent;
+    cursor: pointer;
+    @apply outline-none;
+  }
+  .tone-slider:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  .tone-slider::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 9999px;
+    background: rgb(255 255 255 / 14%);
+  }
+  .tone-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    margin-top: -4px;
+    border: none;
+    border-radius: 9999px;
+    background: #ffffff;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 45%);
+  }
+  .tone-slider::-moz-range-track {
+    height: 4px;
+    border-radius: 9999px;
+    background: rgb(255 255 255 / 14%);
+  }
+  .tone-slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border: none;
+    border-radius: 9999px;
+    background: #ffffff;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 45%);
+  }
+  .tone-slider:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+}
+
+/* ---------------------------------------------------------------
+   Reduced motion (WCAG 2.2.2 / 2.3.3, Apple "Reduced Motion")
+   Drop the infinite pulse, flatten the active-scale press and let
+   colour/opacity affordances carry state on their own.
+   --------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-pulse,
+  .animate-spin,
+  .animate-bounce {
+    animation: none !important;
+  }
+
+  .active\:scale-95:active,
+  .active\:scale-\[0\.96\]:active,
+  .active\:scale-\[0\.98\]:active {
+    transform: none !important;
+  }
+
+  .hover\:scale-125:hover {
+    transform: none !important;
+  }
+
+  /* E4：不确定进度条在降级（无动画）后，用静态斜纹 + 半透明区分于"卡住的确定进度"。
+     该规则只在 reduced-motion 下生效，正常动效时仍由 animate-pulse 表达。 */
+  .progress-indeterminate {
+    background-color: transparent !important;
+    background-image: repeating-linear-gradient(
+      45deg,
+      rgb(255 255 255 / 55%) 0,
+      rgb(255 255 255 / 55%) 6px,
+      rgb(255 255 255 / 22%) 6px,
+      rgb(255 255 255 / 22%) 12px
+    );
+  }
+}
+
+/* ---------------------------------------------------------------
+   Forced colors / High contrast (WCAG 1.4.3 / 1.4.11, E8)
+   Windows 高对比度模式下浏览器会强制系统色；这里保证自定义的
+   焦点环、进度条、结构线在强制色下依然可辨识。
+   --------------------------------------------------------------- */
+@media (forced-colors: active) {
+  .focus-ring:focus-visible,
+  .tone-slider:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  /* 进度条：轨道加系统色描边、填充改用 Highlight，避免 bg-white/xx 被强制后消失。 */
+  [role='progressbar'] {
+    border: 1px solid CanvasText;
+  }
+  [role='progressbar'] > * {
+    background-color: Highlight;
+  }
+}
+
+/* ---------------------------------------------------------------
+   触控目标（WCAG 2.2 SC 2.5.8）
+   星标 / 缩放 / 图标小按钮在密集工具条里普遍只有 16-22px。SC 2.5.8
+   的最低要求是 24x24 CSS px（AAA 建议 44x44）；本项目是桌面端鼠标为主
+   的摄影工具，故按 24px 下限设工具类，把「实际可点区域」从视觉尺寸里解耦。
+   用 min-width/height 而非固定尺寸，不破坏既有布局。
+   --------------------------------------------------------------- */
+@layer components {
+  .tap-target {
+    min-width: 24px;
+    min-height: 24px;
+  }
+}
+
+/* 提高对比度偏好（E8）：在既有令牌基础上进一步抬高结构性边框与次要分隔线。 */
+@media (prefers-contrast: more) {
+  :root {
+    --color-border-subtle: rgb(255 255 255 / 22%);
+    --color-border-default: rgb(255 255 255 / 45%);
+    --color-border-strong: rgb(255 255 255 / 70%);
+    --color-scrollbar-thumb: rgb(255 255 255 / 40%);
+  }
+}

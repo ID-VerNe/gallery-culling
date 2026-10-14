@@ -1,43 +1,21 @@
 import React from 'react';
-import {
-  FolderOpen,
-  RefreshCw,
-  SlidersHorizontal,
-  Download,
-  Columns2,
-  Maximize2,
-  Settings,
-  Sliders,
-  Split,
-  Sparkles,
-} from 'lucide-react';
-import { FilterMode, SortOrder, ViewMode } from '../types';
+import { SourceRow, type SourceRowProps } from './SourceRow';
+import { ToolbarRow, type ToolbarRowProps } from './ToolbarRow';
 
-interface TopBarProps {
-  jpgFolder: string;
-  rawFolder: string;
-  onJpgFolderChange: (val: string) => void;
-  onRawFolderChange: (val: string) => void;
-  onBrowseJpg: () => void;
-  onBrowseRaw: () => void;
-  onScan: () => void;
-  isLoading: boolean;
-  filterMode: FilterMode;
-  onFilterChange: (val: FilterMode) => void;
-  sortOrder: SortOrder;
-  onSortChange: (val: SortOrder) => void;
-  viewMode: ViewMode;
-  onViewModeChange: (val: ViewMode) => void;
-  onOpenExportModal: () => void;
-  onOpenSettingsModal: () => void;
-  onOpenMetadataModal?: () => void;
-  onToggleTonalAdjuster?: () => void;
-  showTonalPanel?: boolean;
-  onOpenLuminar?: () => void;
-  isLuminarRunning?: boolean;
-}
+/**
+ * 顶栏 = 两行语义独立的胶水。
+ *
+ * Row 1（SourceRow）回答"照片从哪来"，Row 2（ToolbarRow）回答"看什么 / 做什么"。
+ * 拆分前本文件是 359 行的单组件，两个 `<div>` 之间不共享任何局部变量，
+ * 边界天然，因此直接按语义切分而不引入任何中间抽象。
+ *
+ * props 刻意**显式转发**而不是 `{...props}` 铺开：两行各自的 prop 面
+ * 是这次拆分要澄清的东西，铺开会让边界重新糊回去。
+ */
+export type TopBarProps = SourceRowProps & ToolbarRowProps;
 
 export const TopBar: React.FC<TopBarProps> = ({
+  // Row 1 — SourceRow
   jpgFolder,
   rawFolder,
   onJpgFolderChange,
@@ -46,227 +24,70 @@ export const TopBar: React.FC<TopBarProps> = ({
   onBrowseRaw,
   onScan,
   isLoading,
+  scanProgress,
+  scanError,
+  onDismissScanError,
+  onOpenSettingsModal,
+
+  // Row 2 — ToolbarRow
   filterMode,
   onFilterChange,
+  filterCounts,
   sortOrder,
   onSortChange,
   viewMode,
   onViewModeChange,
   onOpenExportModal,
-  onOpenSettingsModal,
-  onOpenMetadataModal,
   onToggleTonalAdjuster,
-  showTonalPanel,
+  tonalPanelVisible,
+  tonalToggleDisabled,
   onOpenLuminar,
   isLuminarRunning,
-}) => {
-  return (
-    <header className="h-14 bg-background-base/80 backdrop-blur-md border-b border-white/10 flex items-center justify-between px-3 gap-6 shrink-0 text-xs">
-      {/* Folder Inputs */}
-      <div className="flex items-center gap-2 flex-1 min-w-0 max-w-3xl">
-        {/* JPG Folder */}
-        <div className="flex items-center gap-1.5 flex-1 min-w-[140px] bg-white/5 rounded-md px-2.5 py-1 focus-within:bg-white/10 transition">
-          <label htmlFor="topbar-jpg-input" className="text-white/60 font-semibold whitespace-nowrap cursor-pointer">
-            JPG:
-          </label>
-          <input
-            id="topbar-jpg-input"
-            type="text"
-            className="bg-transparent border-none outline-none text-white w-full font-mono text-[11px]"
-            value={jpgFolder}
-            onChange={(e) => onJpgFolderChange(e.target.value)}
-            placeholder="选择或输入 JPG 文件夹路径..."
-            aria-label="JPG 照片文件夹路径"
-          />
-          <button
-            onClick={onBrowseJpg}
-            className="text-white/60 hover:text-white p-1 rounded hover:bg-white/10 active:scale-[0.96] transition"
-            title="浏览 JPG 文件夹"
-            aria-label="浏览选择 JPG 文件夹"
-          >
-            <FolderOpen className="w-3.5 h-3.5" aria-hidden="true" />
-          </button>
-        </div>
+}) => (
+  <header
+    aria-label="Gallery Culling 应用工具栏"
+    className="bg-background-base/80 backdrop-blur-md border-b border-default flex flex-col gap-1 px-3 py-1.5 shrink-0 text-xs"
+  >
+    {/* -----------------------------------------------------------
+        Row 1 — where the photos come from.
+        Two independent rows instead of one 56px bar: the previous
+        single row needed ~1272px of content, so on a 1180px window
+        the path fields collapsed to their labels and the scan button
+        stacked its text vertically (F-01).
+        ----------------------------------------------------------- */}
+    <SourceRow
+      jpgFolder={jpgFolder}
+      rawFolder={rawFolder}
+      onJpgFolderChange={onJpgFolderChange}
+      onRawFolderChange={onRawFolderChange}
+      onBrowseJpg={onBrowseJpg}
+      onBrowseRaw={onBrowseRaw}
+      onScan={onScan}
+      isLoading={isLoading}
+      scanProgress={scanProgress}
+      scanError={scanError}
+      onDismissScanError={onDismissScanError}
+      onOpenSettingsModal={onOpenSettingsModal}
+    />
 
-        {/* RAW Folder */}
-        <div className="flex items-center gap-1.5 flex-1 min-w-[140px] bg-white/5 rounded-md px-2.5 py-1 focus-within:bg-white/10 transition">
-          <label htmlFor="topbar-raw-input" className="text-white/60 font-semibold whitespace-nowrap cursor-pointer">
-            RAW:
-          </label>
-          <input
-            id="topbar-raw-input"
-            type="text"
-            className="bg-transparent border-none outline-none text-white w-full font-mono text-[11px]"
-            value={rawFolder}
-            onChange={(e) => onRawFolderChange(e.target.value)}
-            placeholder="可选：RAW 文件夹路径..."
-            aria-label="RAW 原片文件夹路径 (可选)"
-          />
-          <button
-            onClick={onBrowseRaw}
-            className="text-white/60 hover:text-white p-1 rounded hover:bg-white/10 active:scale-[0.96] transition"
-            title="浏览 RAW 文件夹"
-            aria-label="浏览选择 RAW 文件夹"
-          >
-            <FolderOpen className="w-3.5 h-3.5" aria-hidden="true" />
-          </button>
-        </div>
-
-        {/* Scan / Refresh */}
-        <button
-          onClick={onScan}
-          disabled={isLoading || !jpgFolder.trim()}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 bg-white hover:bg-white/90 text-black active:scale-[0.96] disabled:bg-white/10 disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-transform shadow-sm"
-          aria-label={isLoading ? '正在扫描照片目录' : '扫描照片目录'}
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} aria-hidden="true" />
-          <span className="pb-[1px]">{isLoading ? '扫描中...' : '扫描照片'}</span>
-        </button>
-      </div>
-
-      {/* Center Controls: Filter & Sort */}
-      <div className="flex items-center gap-2 shrink-0">
-        {/* Filter */}
-        <div className="flex items-center gap-1.5 bg-background-base border border-white/10 rounded-md px-2.5 py-1 text-white/80">
-          <SlidersHorizontal className="w-3.5 h-3.5 text-white/60" aria-hidden="true" />
-          <select
-            value={filterMode}
-            onChange={(e) => onFilterChange(e.target.value as FilterMode)}
-            aria-label="照片筛选过滤"
-            className="bg-transparent border-none outline-none text-white cursor-pointer text-xs"
-          >
-            <option value="all" className="bg-background-base">全部照片</option>
-            <option value="pick" className="bg-background-base">仅已保留 (Pick)</option>
-            <option value="reject" className="bg-background-base">已淘汰 (Reject)</option>
-            <option value="unmarked" className="bg-background-base">未标记</option>
-            <option value="star3" className="bg-background-base">★3 星以上</option>
-            <option value="star5" className="bg-background-base">★5 星精选</option>
-          </select>
-        </div>
-
-        {/* Sort */}
-        <div className="bg-background-base border border-white/10 rounded-md px-2.5 py-1 text-white/80">
-          <select
-            value={sortOrder}
-            onChange={(e) => onSortChange(e.target.value as SortOrder)}
-            aria-label="照片排序方式"
-            className="bg-transparent border-none outline-none text-white cursor-pointer text-xs"
-          >
-            <option value="time_filename" className="bg-background-base">拍摄时间排序</option>
-            <option value="filename" className="bg-background-base">文件名排序</option>
-            <option value="rating" className="bg-background-base">星级最高优先</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Right Controls: View Modes & Export & Settings */}
-      <div className="flex items-center gap-2 shrink-0">
-        {/* View mode toggle group */}
-        <div className="flex items-center bg-white/5 rounded-md p-0.5" role="group" aria-label="视图检视模式">
-          <button
-            onClick={() => onViewModeChange('single')}
-            className={`p-1.5 rounded ${
-              viewMode === 'single'
-                ? 'bg-white text-black font-medium shadow-sm'
-                : 'text-white/60 hover:text-white hover:bg-white/10'
-            } active:scale-[0.96] transition`}
-            title="单图大图检视"
-            aria-label="单图大图检视模式"
-            aria-pressed={viewMode === 'single'}
-          >
-            <Maximize2 className="w-3.5 h-3.5" aria-hidden="true" />
-          </button>
-          <button
-            onClick={() => onViewModeChange('split')}
-            className={`p-1.5 rounded ${
-              viewMode === 'split'
-                ? 'bg-white text-black font-medium shadow-sm'
-                : 'text-white/60 hover:text-white hover:bg-white/10'
-            } active:scale-[0.96] transition`}
-            title="双图对比 (C)"
-            aria-label="跨图连拍对比模式"
-            aria-pressed={viewMode === 'split'}
-          >
-            <Columns2 className="w-3.5 h-3.5" aria-hidden="true" />
-          </button>
-          <button
-            onClick={() => onViewModeChange('before_after')}
-            className={`p-1.5 rounded ${
-              viewMode === 'before_after'
-                ? 'bg-white text-black font-medium shadow-sm'
-                : 'text-white/60 hover:text-white hover:bg-white/10'
-            } active:scale-[0.96] transition`}
-            title="前后对照 (Y) | 按住 \ 看原片"
-            aria-label="本张照片前后对照模式"
-            aria-pressed={viewMode === 'before_after'}
-          >
-            <Split className="w-3.5 h-3.5" aria-hidden="true" />
-          </button>
-        </div>
-
-        {/* Tonal Adjuster Toggle */}
-        {onToggleTonalAdjuster && (
-          <button
-            onClick={onToggleTonalAdjuster}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md active:scale-[0.96] transition-transform font-medium ${
-              showTonalPanel
-                ? 'bg-white text-black shadow-sm'
-                : 'bg-white/5 hover:bg-white/10 text-white'
-            }`}
-            title="调色 (E)"
-            aria-label="轻量调色预检面板"
-          >
-            <SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
-            <span className="pb-[1px]">调色</span>
-          </button>
-        )}
-
-        {/* Luminar AI Roundtrip */}
-        {onOpenLuminar && (
-          <button
-            onClick={onOpenLuminar}
-            disabled={isLuminarRunning}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 disabled:opacity-50 text-white rounded-md active:scale-[0.96] transition-transform font-medium"
-            title="Luminar AI 精修"
-            aria-label="Luminar AI 精修"
-          >
-            <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
-            <span className="pb-[1px]">{isLuminarRunning ? '运行中...' : 'Luminar AI'}</span>
-          </button>
-        )}
-
-        {/* Manual Lens / Metadata Editor */}
-        <button
-          onClick={onOpenMetadataModal}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white rounded-md active:scale-[0.96] transition-transform font-medium"
-          title="编辑镜头元数据 (M)"
-          aria-label="手动镜头与元数据批量编辑"
-        >
-          <Sliders className="w-3.5 h-3.5" aria-hidden="true" />
-          <span className="pb-[1px]">镜头信息</span>
-        </button>
-
-        {/* Batch Export */}
-        <button
-          onClick={onOpenExportModal}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white rounded-md active:scale-[0.96] transition-transform font-medium"
-          title="批量导出"
-          aria-label="批量挑选导出照片"
-        >
-          <Download className="w-3.5 h-3.5" aria-hidden="true" />
-          <span className="pb-[1px]">导出</span>
-        </button>
-
-        {/* Settings */}
-        <button
-          onClick={onOpenSettingsModal}
-          className="p-1.5 text-white/60 hover:text-white hover:bg-white/5 rounded-md active:scale-[0.96] transition-transform"
-          title="首选项与工具设置"
-          aria-label="首选项与工具设置"
-        >
-          <Settings className="w-4 h-4" aria-hidden="true" />
-        </button>
-      </div>
-    </header>
-  );
-};
+    {/* -----------------------------------------------------------
+        Row 2 — what to look at and what to do with it.
+        Wraps instead of clipping when the window is narrow.
+        ----------------------------------------------------------- */}
+    <ToolbarRow
+      filterMode={filterMode}
+      onFilterChange={onFilterChange}
+      filterCounts={filterCounts}
+      sortOrder={sortOrder}
+      onSortChange={onSortChange}
+      viewMode={viewMode}
+      onViewModeChange={onViewModeChange}
+      onOpenExportModal={onOpenExportModal}
+      onToggleTonalAdjuster={onToggleTonalAdjuster}
+      tonalPanelVisible={tonalPanelVisible}
+      tonalToggleDisabled={tonalToggleDisabled}
+      onOpenLuminar={onOpenLuminar}
+      isLuminarRunning={isLuminarRunning}
+    />
+  </header>
+);

@@ -1,279 +1,203 @@
-use std::fs;
-use std::path::Path;
-use std::process::Command;
-use tauri::State;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::db::Database;
-use crate::models::{AppSettings, ExportItem, FolderScanResult};
-use crate::scanner::scan_folders;
-use crate::thumbnail::get_or_create_thumbnail;
-use crate::xmp::{update_xmp_metadata, write_xmp};
+use crate::lumen;
+
+use crate::models::AppSettings;
+
+// ---- 子模块：按领域拆分的命令 ----
+// 命名：xmprw = XMP 读写。刻意不叫 `xmp`，否则与顶层的 `use crate::xmp` 同名。
+//
+// `#[tauri::command]` 生成的宏带 `#[macro_export]`，落在**定义它的模块**里。
+// generate_handler 在 lib.rs 里按名字找它们，`macro_rules!` 无法被 glob 带出，
+// 故下面每个模块都要显式转发它自己的那组宏。
+mod apps;
+mod export;
+mod lumencmds;
+mod tone;
+mod scanner;
+mod settings;
+mod thumbnail;
+
+pub use settings::{
+    __cmd__get_settings_cmd, __cmd__load_session_cmd, __cmd__save_session_cmd,
+    __cmd__save_settings_cmd,
+    __tauri_command_name_get_settings_cmd, __tauri_command_name_load_session_cmd,
+    __tauri_command_name_save_session_cmd, __tauri_command_name_save_settings_cmd,
+    get_settings_cmd, load_session_cmd, save_session_cmd, save_settings_cmd,
+};
+
+pub use thumbnail::{
+    __cmd__get_thumbnail_cmd, __tauri_command_name_get_thumbnail_cmd, get_thumbnail_cmd,
+};
+
+pub use scanner::{
+    __cmd__cancel_scan_cmd, __cmd__scan_folders_cmd,
+    __tauri_command_name_cancel_scan_cmd, __tauri_command_name_scan_folders_cmd,
+    cancel_scan_cmd, scan_folders_cmd,
+};
+
+pub use lumencmds::{
+    __cmd__lumen_status_cmd, __tauri_command_name_lumen_status_cmd,
+    __cmd__probe_lumen_cmd, __tauri_command_name_probe_lumen_cmd,
+    __cmd__lumen_preview_cmd, __tauri_command_name_lumen_preview_cmd,
+    __cmd__lumen_sync_ratings_cmd, __tauri_command_name_lumen_sync_ratings_cmd,
+    __cmd__lumen_get_recipe_cmd, __tauri_command_name_lumen_get_recipe_cmd,
+    __cmd__lumen_apply_recipe_cmd, __tauri_command_name_lumen_apply_recipe_cmd,
+    __cmd__lumen_capabilities_cmd, __tauri_command_name_lumen_capabilities_cmd,
+    __cmd__lumen_apply_preset_cmd, __tauri_command_name_lumen_apply_preset_cmd,
+    __cmd__lumen_apply_mask_cmd, __tauri_command_name_lumen_apply_mask_cmd,
+    __cmd__lumen_list_masks_cmd, __tauri_command_name_lumen_list_masks_cmd,
+    lumen_status_cmd,
+    probe_lumen_cmd,
+    lumen_preview_cmd,
+    lumen_sync_ratings_cmd,
+    lumen_get_recipe_cmd,
+    lumen_apply_recipe_cmd,
+    lumen_capabilities_cmd,
+    lumen_apply_preset_cmd,
+    lumen_apply_mask_cmd,
+    lumen_list_masks_cmd,
+};
+
+pub use tone::{
+    __cmd__apply_tone_cmd, __cmd__get_tone_state_cmd,
+    __tauri_command_name_apply_tone_cmd, __tauri_command_name_get_tone_state_cmd,
+    apply_tone_cmd, get_tone_state_cmd,
+};
+
+pub use export::{
+    __cmd__batch_export_cmd, __cmd__cancel_export_cmd,
+    __tauri_command_name_batch_export_cmd, __tauri_command_name_cancel_export_cmd,
+    batch_export_cmd, cancel_export_cmd,
+};
+
+pub use apps::{
+    __cmd__open_in_default_app_cmd, __cmd__open_in_photoshop_cmd, __cmd__trash_photos_cmd,
+    __tauri_command_name_open_in_default_app_cmd,
+    __tauri_command_name_open_in_photoshop_cmd,
+    __tauri_command_name_trash_photos_cmd,
+    open_in_default_app_cmd, open_in_photoshop_cmd, trash_photos_cmd,
+};
+mod xmprw;
+
+pub use xmprw::{
+    __cmd__batch_update_metadata_cmd, __cmd__update_rating_flag_cmd,
+    __tauri_command_name_batch_update_metadata_cmd,
+    __tauri_command_name_update_rating_flag_cmd,
+    batch_update_metadata_cmd, update_rating_flag_cmd,
+};
 
 pub struct AppState {
     pub db: Database,
+    /// LUMEN RAW 常驻运行时（A 通道）：spawn 一次、握手、复用
+    pub lumen: lumen::LumenRuntime,
+    /// 扫描取消标志（协作式轮询）。置位后扫描在下一个安全点尽早返回。
+    pub scan_cancel: Arc<AtomicBool>,
+    /// 导出取消标志（协作式轮询）。置位后导出丢弃临时目录，目标目录零污染。
+    pub export_cancel: Arc<AtomicBool>,
 }
 
-#[tauri::command]
-pub async fn scan_folders_cmd(
-    jpg_folder: String,
-    raw_folder: Option<String>,
-    sort_order: Option<String>,
-) -> Result<FolderScanResult, String> {
-    let sort = sort_order.unwrap_or_else(|| "time_filename".to_string());
-    tokio::task::spawn_blocking(move || scan_folders(&jpg_folder, raw_folder.as_deref(), &sort))
+/// 进度节流器。
+///
+/// 万张规模下每张都 `emit` 会淹掉 IPC（前端主线程忙于解码事件），因此只在
+/// **阶段切换 / 首个 / 末个 / 累计 ≥32 项 / 距上次 ≥80ms** 时放行一次。
+struct ProgressThrottle {
+    last_emit: std::time::Instant,
+    last_count: usize,
+    last_phase: String,
+}
+
+impl ProgressThrottle {
+    fn new() -> Self {
+        Self {
+            last_emit: std::time::Instant::now(),
+            last_count: 0,
+            last_phase: String::new(),
+        }
+    }
+
+    fn should_emit(&mut self, phase: &str, processed: usize, total: usize) -> bool {
+        let phase_changed = phase != self.last_phase.as_str();
+        let due = self.last_emit.elapsed() >= Duration::from_millis(80)
+            || processed.saturating_sub(self.last_count) >= 32
+            || processed == 0
+            || (total > 0 && processed >= total);
+        if phase_changed || due {
+            self.last_emit = std::time::Instant::now();
+            self.last_count = processed;
+            self.last_phase = phase.to_string();
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// 当前 Unix 秒（清单文件用）。
+fn now_epoch_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// 把一次 `spawn_blocking` 收进统一的 JoinError→String 包装。
+///
+/// `msg` 是**任务描述前缀**，最终错误文本为 `"{msg}: {join_error}"` —— 与
+/// 重构前逐字一致（勿改文案）。闭包的错误类型 `E` 泛型化：`lumen_preview_cmd`
+/// 的闭包返回 `Result<_, LumenError>`，其余为 `Result<_, String>`。
+async fn blocking<F, T, E>(msg: &str, f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, E> + Send + 'static,
+    T: Send + 'static,
+    E: std::fmt::Display + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(r) => r.map_err(|e| e.to_string()),
+        Err(e) => Err(format!("{}: {}", msg, e)),
+    }
+}
+
+/// 闭包**本身不返回 Result**（只可能因 JoinError 失败）的专用。
+///
+/// 覆盖 `query_version -> Option<String>` / `read_project_tone -> Option<..>` /
+/// `list_masks -> Vec<Value>` —— 这三个 lumen 公开方法都不是 `Result`，
+/// 硬塞进 `blocking` 需要伪造错误类型，属于投机抽象。
+async fn blocking_value<F, T>(msg: &str, f: F) -> Result<T, String>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
         .await
-        .map_err(|e| format!("扫描任务异常: {}", e))?
+        .map_err(|e| format!("{}: {}", msg, e))
 }
 
-#[tauri::command]
-pub async fn get_thumbnail_cmd(file_path: String, width: Option<u32>) -> Result<String, String> {
-    let target_width = width.unwrap_or(200);
-    tokio::task::spawn_blocking(move || {
-        let path = Path::new(&file_path);
-        get_or_create_thumbnail(path, target_width)
-    })
-    .await
-    .map_err(|e| format!("生成缩略图任务异常: {}", e))?
-}
-
-#[tauri::command]
-pub async fn update_rating_flag_cmd(
-    file_path: String,
-    rating: u8,
-    flag: String,
-    sync_xmp: bool,
-) -> Result<bool, String> {
-    tokio::task::spawn_blocking(move || {
-        let path = Path::new(&file_path);
-        if sync_xmp {
-            write_xmp(path, rating, &flag)?;
-        }
-        Ok(true)
-    })
-    .await
-    .map_err(|e| format!("更新评级任务异常: {}", e))?
-}
-
-#[tauri::command]
-pub async fn batch_update_metadata_cmd(
-    file_paths: Vec<String>,
-    lens_model: Option<String>,
-    focal_length: Option<String>,
-    aperture: Option<String>,
-) -> Result<usize, String> {
-    tokio::task::spawn_blocking(move || {
-        let mut count = 0;
-        let lens = lens_model.as_deref();
-        let focal = focal_length.as_deref();
-        let ap = aperture.as_deref();
-
-        for file_path in file_paths {
-            let path = Path::new(&file_path);
-            if path.exists() {
-                if update_xmp_metadata(path, lens, focal, ap).is_ok() {
-                    count += 1;
-                }
-            }
-        }
-        Ok(count)
-    })
-    .await
-    .map_err(|e| format!("批量更新元数据任务异常: {}", e))?
-}
-
-#[tauri::command]
-pub async fn open_in_photoshop_cmd(
-    file_path: String,
-    custom_ps_path: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<bool, String> {
-    let settings = state.db.load_settings().unwrap_or_default();
-    let raw_ps_path = custom_ps_path
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or(settings.photoshop_path);
-
-    let ps_path = raw_ps_path
-        .trim_matches(|c| c == '"' || c == '\'' || c == ' ')
-        .to_string();
-
-    if !Path::new(&ps_path).exists() {
-        // Fallback to default app
-        return open_in_default_app_cmd(file_path).await;
+/// Lumen 引擎「可用性」判定，**不可用即 Err**，两条错误文案逐字保留。
+///
+/// 与 `lumen_exe` 的区别只在于"说什么"：本函数用于必须走引擎路径的命令
+/// （写 recipe / 探测能力 / 应用预设 / 应用蒙版），不可用就是调用失败。
+fn require_lumen(settings: &AppSettings) -> Result<PathBuf, String> {
+    if !settings.lumen_enabled {
+        return Err("未启用 LUMEN RAW 引擎".to_string());
     }
-
-    Command::new(&ps_path)
-        .arg(&file_path)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("启动 Photoshop 失败 ({}): {}", ps_path, e))?;
-
-    Ok(true)
+    lumen::find_lumen_cli(&settings.lumen_cli_path).ok_or_else(|| "未找到 lumen-cli".to_string())
 }
 
-#[tauri::command]
-pub async fn open_in_default_app_cmd(file_path: String) -> Result<bool, String> {
-    #[cfg(target_os = "windows")]
-    {
-        Command::new("cmd")
-            .args(["/c", "start", "", &file_path])
-            .spawn()
-            .map_err(|e| format!("无法使用系统默认程序打开文件: {}", e))?;
+/// Lumen 引擎「可用性」判定，**不可用即 None**，降级语义由调用方自己决定。
+///
+/// 「引擎未启用」与「未找到 lumen-cli」在全部调用点都导向同一个后续动作
+/// （放弃引擎路径），差异仅在降级文案，因此可安全合并为一次判定。
+/// 调用方返回各自的 `Ok(降级值)`（status / preview / recipe / 蒙版…）。
+fn lumen_exe(settings: &AppSettings) -> Option<PathBuf> {
+    if !settings.lumen_enabled {
+        return None;
     }
-
-    #[cfg(target_os = "macos")]
-    {
-        Command::new("open")
-            .arg(&file_path)
-            .spawn()
-            .map_err(|e| format!("无法使用系统默认程序打开文件: {}", e))?;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        Command::new("xdg-open")
-            .arg(&file_path)
-            .spawn()
-            .map_err(|e| format!("无法使用系统默认程序打开文件: {}", e))?;
-    }
-
-    Ok(true)
-}
-
-#[tauri::command]
-pub async fn trash_photos_cmd(file_paths: Vec<String>) -> Result<usize, String> {
-    tokio::task::spawn_blocking(move || {
-        let mut count = 0;
-        for path_str in file_paths {
-            let path = Path::new(&path_str);
-            if path.exists() {
-                if trash::delete(path).is_ok() {
-                    count += 1;
-                }
-            }
-        }
-        Ok(count)
-    })
-    .await
-    .map_err(|e| format!("移动至回收站失败: {}", e))?
-}
-
-#[tauri::command]
-pub async fn batch_export_cmd(
-    items: Vec<ExportItem>,
-    target_folder: String,
-    include_raw: bool,
-    include_jpg: bool,
-) -> Result<usize, String> {
-    tokio::task::spawn_blocking(move || {
-        let target_dir = Path::new(&target_folder);
-        if !target_dir.exists() {
-            fs::create_dir_all(target_dir).map_err(|e| format!("创建目标导出目录失败: {}", e))?;
-        }
-
-        let mut exported = 0;
-        for item in items {
-            // Copy JPG if requested
-            if include_jpg {
-                if let Some(jpg_path_str) = &item.jpg_path {
-                    let src = Path::new(jpg_path_str);
-                    if src.exists() {
-                        if let Some(file_name) = src.file_name() {
-                            let dst = target_dir.join(file_name);
-                            if fs::copy(src, dst).is_ok() {
-                                exported += 1;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Copy RAW if requested
-            if include_raw {
-                if let Some(raw_path_str) = &item.raw_path {
-                    let src = Path::new(raw_path_str);
-                    if src.exists() {
-                        if let Some(file_name) = src.file_name() {
-                            let dst = target_dir.join(file_name);
-                            if fs::copy(src, dst).is_ok() {
-                                exported += 1;
-                            }
-                        }
-                        // Also copy matching .xmp if exists
-                        let xmp_src = src.with_extension("xmp");
-                        if xmp_src.exists() {
-                            if let Some(xmp_name) = xmp_src.file_name() {
-                                let xmp_dst = target_dir.join(xmp_name);
-                                let _ = fs::copy(xmp_src, xmp_dst);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(exported)
-    })
-    .await
-    .map_err(|e| format!("批量导出任务异常: {}", e))?
-}
-
-#[tauri::command]
-pub fn get_settings_cmd(state: State<'_, AppState>) -> Result<AppSettings, String> {
-    state.db.load_settings()
-}
-
-#[tauri::command]
-pub fn save_settings_cmd(
-    settings: AppSettings,
-    state: State<'_, AppState>,
-) -> Result<bool, String> {
-    state.db.save_settings(&settings)?;
-    Ok(true)
-}
-
-#[tauri::command]
-pub fn save_session_cmd(
-    jpg_folder: String,
-    raw_folder: String,
-    last_index: usize,
-    sort_order: String,
-    state: State<'_, AppState>,
-) -> Result<bool, String> {
-    state
-        .db
-        .save_session(&jpg_folder, &raw_folder, last_index, &sort_order)?;
-    Ok(true)
-}
-
-#[tauri::command]
-pub fn load_session_cmd(
-    jpg_folder: String,
-    state: State<'_, AppState>,
-) -> Result<Option<(usize, String)>, String> {
-    state.db.load_session(&jpg_folder)
-}
-
-#[tauri::command]
-pub async fn update_tone_adjustments_cmd(
-    file_path: String,
-    tone: crate::models::ToneAdjustments,
-) -> Result<bool, String> {
-    tokio::task::spawn_blocking(move || {
-        let path = Path::new(&file_path);
-        crate::xmp::update_xmp_tone(
-            path,
-            Some(tone.exposure),
-            Some(tone.highlights),
-            Some(tone.shadows),
-            Some(tone.temperature),
-            Some(tone.tint),
-            Some(tone.contrast),
-        )?;
-        Ok(true)
-    })
-    .await
-    .map_err(|e| format!("写入调色参数任务异常: {}", e))?
+    lumen::find_lumen_cli(&settings.lumen_cli_path)
 }
 
 #[tauri::command]

@@ -1,7 +1,0 @@
-# --- ADD: Required Python packages ---
-Flask>=2.0.0
-Pillow>=9.0.0
-python-dotenv>=0.19.0
-# For running Tkinter dialog on Windows in a separate thread (might need win32api/win32con if packaging Tkinter)
-# PyWin32 # If needed for Windows specific thread/GUI interactions in final executable bundling
-# --- END ADD ---

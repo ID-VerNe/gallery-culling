@@ -190,3 +190,13 @@ export function getToneFilterString(tone?: ToneAdjustments): string {
 
   return filters.join(' ');
 }
+
+/**
+ * C3：调色逐字段严格比较。
+ *
+ * 滑杆值都是量化后的整数/定点数（见 models 侧），严格相等即可，不需要容差。
+ * 与 `DEFAULT_TONE` 同处一文件是因为它们回答同一个问题：「当前调色值是什么」。
+ */
+export function toneEquals(a: ToneAdjustments, b: ToneAdjustments): boolean {
+  return (Object.keys(a) as Array<keyof ToneAdjustments>).every((k) => a[k] === b[k]);
+}

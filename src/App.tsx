@@ -1,6 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
-import { check } from '@tauri-apps/plugin-updater';
-import { relaunch } from '@tauri-apps/plugin-process';
+import { useState, useMemo, useCallback } from 'react';
 import { TopBar } from './components/TopBar';
 import { ThumbnailGrid } from './components/ThumbnailGrid';
 import { PreviewViewport } from './components/PreviewViewport';
@@ -11,337 +9,289 @@ import { BottomBar } from './components/BottomBar';
 import { BatchExportModal } from './components/BatchExportModal';
 import { SettingsModal } from './components/SettingsModal';
 import { MetadataEditorModal } from './components/MetadataEditorModal';
+import { ShortcutHelpModal } from './components/ShortcutHelpModal';
+import { ConfirmDialog } from './components/ConfirmDialog';
+import { ToastProvider, useToast } from './components/Toast';
+import { TaskProgressBar } from './components/TaskProgressBar';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { useAppSettings } from './hooks/useAppSettings';
+import { useAutoUpdate } from './hooks/useAutoUpdate';
+import { useCollection } from './hooks/useCollection';
+import { useComparePin } from './hooks/useComparePin';
+import { useFolderScan } from './hooks/useFolderScan';
+import { useBatchOps } from './hooks/useBatchOps';
+import { useRatingFlagSync } from './hooks/useRatingFlagSync';
+import { useToneEditing } from './hooks/useToneEditing';
+import { useSessionDebounce } from './hooks/useSessionDebounce';
+import { useLumenStatus } from './hooks/useLumenStatus';
+import { useLumenOrchestration } from './hooks/useLumenOrchestration';
+import { useExternalApps } from './hooks/useExternalApps';
+import type { ViewportEmptyState } from './components/PreviewViewport';
 import {
-  AppSettings,
-  FilterMode,
-  PhotoFileInfo,
   PhotoGroupInfo,
   SortOrder,
-  ViewMode,
   ToneAdjustments,
 } from './types';
-import { api } from './services/api';
-import { computeAutoTone, DEFAULT_TONE } from './utils/autoTone';
+import { DEFAULT_TONE } from './utils/autoTone';
 
-export default function App() {
-  const [jpgFolder, setJpgFolder] = useState('');
-  const [rawFolder, setRawFolder] = useState('');
-  const [groups, setGroups] = useState<PhotoGroupInfo[]>([]);
-  const [selectedIndex, setSelectedIndex] = useState<number>(0);
-  const [compareIndex, setCompareIndex] = useState<number>(1);
-  const [pinnedId, setPinnedId] = useState<string | null>(null);
-  const [isPinnedOnLeft, setIsPinnedOnLeft] = useState<boolean>(true);
-  const [isLoading, setIsLoading] = useState(false);
-  const [viewMode, setViewMode] = useState<ViewMode>('single');
-  const [filterMode, setFilterMode] = useState<FilterMode>('all');
-  const [sortOrder, setSortOrder] = useState<SortOrder>('time_filename');
-  const [isExportOpen, setIsExportOpen] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isMetadataOpen, setIsMetadataOpen] = useState(false);
-  const [settings, setSettings] = useState<AppSettings | null>(null);
 
-  // Tonal & Luminar state
-  const [toneMap, setToneMap] = useState<Record<string, ToneAdjustments>>({});
-  const [showTonalPanel, setShowTonalPanel] = useState(false);
-  const [isLuminarRunning, setIsLuminarRunning] = useState(false);
-  const [isHoldOriginal, setIsHoldOriginal] = useState(false);
+function AppShell() {
+  const toast = useToast();
 
-  // Load initial settings and default paths on startup
-  useEffect(() => {
-    api.getSettings().then((s) => {
-      setSettings(s);
+  // 读回设置并回填默认目录。必须在 jpgFolder/rawFolder/sortOrder 的 state
+  // 声明之后挂载，所以放在它们后面。
+  const { settings, applySettings, persistFolders, lumenRefreshToken } =
+    useAppSettings((s) => {
       if (s.defaultJpgFolder) setJpgFolder(s.defaultJpgFolder);
       if (s.defaultRawFolder) setRawFolder(s.defaultRawFolder);
       if (s.sortOrder) setSortOrder(s.sortOrder as SortOrder);
     });
+  const { dialog: updateDialog } = useAutoUpdate();
 
-    // Check for updates
-    const checkForUpdates = async () => {
-      try {
-        const update = await check();
-        if (update) {
-          const yes = window.confirm(`🎉 发现新版本 ${update.version}！\n\n更新日志：\n${update.body || '修复已知问题，优化体验。'}\n\n是否立即下载并升级？`);
-          if (yes) {
-            await update.downloadAndInstall();
-            await relaunch();
-          }
-        }
-      } catch (err) {
-        console.error('Failed to check for updates:', err);
-      }
-    };
-    // small delay to not block initial render
-    setTimeout(checkForUpdates, 1000);
-  }, []);
+  // 模态框开关（导出 / 设置 / 元数据 / 快捷键帮助）。
+  const [isExportOpen, setIsExportOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isMetadataOpen, setIsMetadataOpen] = useState(false);
+  const [isShortcutHelpOpen, setIsShortcutHelpOpen] = useState(false);
 
-  // Filtered list of groups
-  const filteredGroups = useMemo(() => {
-    return groups.filter((g) => {
-      switch (filterMode) {
-        case 'pick':
-          return g.flag === 'pick';
-        case 'reject':
-          return g.flag === 'reject';
-        case 'unmarked':
-          return g.flag === 'none' && g.rating === 0;
-        case 'star3':
-          return g.rating >= 3;
-        case 'star5':
-          return g.rating === 5;
-        case 'all':
-        default:
-          return true;
-      }
-    });
-  }, [groups, filterMode]);
+  const collection = useCollection();
+  const {
+    groups,
+    filteredGroups,
+    filterCounts,
+    visibleGroups,
+    selectedVisibleIndex,
+    selectedIndex,
+    compareIndex,
+    currentGroup,
+    filterMode,
+    selectedIds,
+    gridSearch,
+    gridSearchOpen,
+    gridSearchFocusToken,
+    handleFilterChange,
+    handlePrev: selectPrev,
+    handleNext: selectNext,
+    handleSelectPhoto: selectPhoto,
+    setGroups,
+    setSelectedIndex,
+    setCompareIndex,
+    setSelectedIds,
+    setFilterMode,
+    setGridSearch,
+    setGridSearchOpen,
+    setGridSearchFocusToken,
+  } = collection;
 
-  const currentGroup = filteredGroups[selectedIndex] || undefined;
 
-  // Compute compare groups based on pinned reference
-  const { leftCompareGroup, rightCompareGroup, isLeftPinned, isRightPinned } = useMemo(() => {
-    const leftBase = filteredGroups[selectedIndex];
-    const rightDefault =
-      filteredGroups[compareIndex] ||
-      filteredGroups[selectedIndex + 1] ||
-      filteredGroups[0];
+  /** 乐观更新落回集合：评级、调色保存、AI 蒙版三处共用同一入口。 */
+  const patchGroup = useCallback(
+    (id: string, patch: Partial<PhotoGroupInfo>) => {
+      setGroups((prev) => prev.map((g) => (g.id === id ? { ...g, ...patch } : g)));
+    },
+    [],
+  );
 
-    if (!pinnedId) {
-      return {
-        leftCompareGroup: leftBase,
-        rightCompareGroup: rightDefault,
-        isLeftPinned: false,
-        isRightPinned: false,
-      };
-    }
+  /**
+   * 扫描成功后的集合/对比状态更新。
+   *
+   * 独立成 useCallback：它是 useFolderScan 的入参，每次渲染新建函数会让
+   * handleScan 的 identity 抖动，进而触发重扫 effect。
+   */
+  const rating = useRatingFlagSync({
+    currentGroup,
+    onGroupPatched: patchGroup,
+    selectedCount: selectedIds.size,
+  });
+  const {
+    unsyncedIds,
+    pendingBatch,
+    setPendingBatch,
+    canUndo,
+    markSynced,
+    markUnsynced,
+    rate: handleRate,
+    setFlag: handleFlag,
+    applyRating,
+    applyFlag,
+    rememberRating,
+    retrySync: handleRetrySync,
+    clearRatingFlag: handleClearRatingFlag,
+    undo: handleUndo,
+    clearRatingUndo,
+  } = rating;
 
-    const pinnedGroup = filteredGroups.find((g) => g.id === pinnedId) || leftBase;
+  const batch = useBatchOps({
+    filteredGroups,
+    selectedIds,
+    onGroupPatched: patchGroup,
+    markSynced,
+    markUnsynced,
+    rememberRating,
+    pendingBatch,
+  });
+  const {
+    batchProgress,
+    batchCancelling,
+    pendingBatchSummary,
+    runBatch,
+    skipRemaining,
+  } = batch;
 
-    if (isPinnedOnLeft) {
-      return {
-        leftCompareGroup: pinnedGroup,
-        rightCompareGroup: filteredGroups[compareIndex] || rightDefault,
-        isLeftPinned: true,
-        isRightPinned: false,
-      };
-    } else {
-      return {
-        leftCompareGroup: filteredGroups[selectedIndex] || leftBase,
-        rightCompareGroup: pinnedGroup,
-        isLeftPinned: false,
-        isRightPinned: true,
-      };
-    }
-  }, [filteredGroups, selectedIndex, compareIndex, pinnedId, isPinnedOnLeft]);
-
-  // Pin / Unpin Left as Reference
-  const handleTogglePinLeft = useCallback(() => {
-    if (isLeftPinned) {
-      setPinnedId(null);
-    } else if (leftCompareGroup) {
-      setPinnedId(leftCompareGroup.id);
-      setIsPinnedOnLeft(true);
-    }
-  }, [isLeftPinned, leftCompareGroup]);
-
-  // Pin / Unpin Right as Reference
-  const handleTogglePinRight = useCallback(() => {
-    if (isRightPinned) {
-      setPinnedId(null);
-    } else if (rightCompareGroup) {
-      setPinnedId(rightCompareGroup.id);
-      setIsPinnedOnLeft(false);
-    }
-  }, [isRightPinned, rightCompareGroup]);
-
-  // Swap A / B (Candidate becomes new pinned benchmark or swap positions)
-  const handleSwapCompare = useCallback(() => {
-    if (pinnedId) {
-      if (isPinnedOnLeft && rightCompareGroup) {
-        setPinnedId(rightCompareGroup.id);
-      } else if (!isPinnedOnLeft && leftCompareGroup) {
-        setPinnedId(leftCompareGroup.id);
-      }
-    } else {
-      const temp = selectedIndex;
-      setSelectedIndex(compareIndex);
-      setCompareIndex(temp);
-    }
-  }, [pinnedId, isPinnedOnLeft, leftCompareGroup, rightCompareGroup, selectedIndex, compareIndex]);
-
-  // Benchmark toggle shortcut (B)
-  const handleTogglePinBenchmark = useCallback(() => {
-    if (pinnedId) {
-      setPinnedId(null);
-    } else if (leftCompareGroup) {
-      setPinnedId(leftCompareGroup.id);
-      setIsPinnedOnLeft(true);
-    }
-  }, [pinnedId, leftCompareGroup]);
-
-  // Folder scanning handler
-  const handleScan = useCallback(async () => {
-    if (!jpgFolder.trim()) return;
-    setIsLoading(true);
-
-    try {
-      const res = await api.scanFolders(jpgFolder, rawFolder, sortOrder);
-      setGroups(res.groups);
-
-      // Populate initial tones from XMP
-      const initialTones: Record<string, ToneAdjustments> = {};
-      res.groups.forEach((g) => {
-        if (g.tone) initialTones[g.id] = g.tone;
-      });
-      setToneMap(initialTones);
-
-      // Check session history for this folder
-      const history = await api.loadSession(jpgFolder);
-      if (history && history[0] < res.groups.length) {
-        setSelectedIndex(history[0]);
-        setCompareIndex(Math.min(history[0] + 1, res.groups.length - 1));
+  const handleScanned = useCallback(
+    (
+      scanned: PhotoGroupInfo[],
+      initialTones: Record<string, ToneAdjustments>,
+      historyIndex: number | null,
+    ) => {
+      setGroups(scanned);
+      toneSeed(initialTones);
+      if (historyIndex !== null && historyIndex < scanned.length) {
+        setSelectedIndex(historyIndex);
+        setCompareIndex(Math.min(historyIndex + 1, scanned.length - 1));
       } else {
         setSelectedIndex(0);
-        setCompareIndex(res.groups.length > 1 ? 1 : 0);
+        setCompareIndex(scanned.length > 1 ? 1 : 0);
       }
+      // Drop anything pinned to a photo that no longer exists.
+      setPinnedId(null);
+    },
+    [],
+  );
 
-      // Save as default in settings
-      if (settings) {
-        api.saveSettings({
-          ...settings,
-          defaultJpgFolder: jpgFolder,
-          defaultRawFolder: rawFolder,
-          sortOrder,
-        });
-      }
-    } catch (err) {
-      alert(`扫描失败: ${err}`);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [jpgFolder, rawFolder, sortOrder, settings]);
+  const scan = useFolderScan({
+    onScanned: handleScanned,
+    // 重新扫描后旧快照指向的照片可能已不在列表里，撤销会写到一个不该碰的文件上。
+    beforeScan: clearRatingUndo,
+    persistFolders,
+  });
+  const {
+    jpgFolder,
+    rawFolder,
+    sortOrder,
+    isLoading,
+    scanError,
+    scanTask,
+    handleScan,
+    handleCancelScan,
+    handleBrowseJpg,
+    handleBrowseRaw,
+    setJpgFolder,
+    setRawFolder,
+    setSortOrder,
+    dismissScanError,
+  } = scan;
+  const [isHoldOriginal, setIsHoldOriginal] = useState(false);
 
-  // Folder picker handlers
-  const handleBrowseJpg = async () => {
-    const selected = await api.selectFolderDialog(jpgFolder);
-    if (selected) {
-      setJpgFolder(selected);
-    }
-  };
+  // LUMEN RAW engine handshake (P0). Zero requests while disabled — the hook
+  // itself owns the 1.5s delay and the silent degradation.
+  // N-12：主动重探令牌。`useLumenStatus` 依赖 `enabled`/`cliPath`，但用户可能在
+  // 弹窗里改了路径又撤销，或引擎在运行中才装好——保存设置后自增这个令牌，让
+  // 引擎状态**当场刷新**，而不是停留在启动时的陈旧快照。
+  const lumenStatus = useLumenStatus(
+    settings?.lumenEnabled ?? false,
+    settings?.lumenCliPath ?? '',
+    lumenRefreshToken,
+  );
+  // 只有握手成功（版本 1.6.0 匹配）才出现 LUMEN RAW 专属入口
+  const lumenAvailable = lumenStatus.available;
+  // LUMEN 前端编排（FE-06）：能力探测、AI 蒙版、宫格开关、评级同步。
+  const lumen = useLumenOrchestration({
+    available: lumenAvailable,
+    gridThumbnails: settings?.lumenGridThumbnails ?? false,
+    defaultRawFolder: settings?.defaultRawFolder,
+    currentGroup,
+    onRescan: handleScan,
+    jpgFolder,
+  });
+  // 外部应用交互与视图模式（FE-06）：Luminar 往返的终点就是切视图，同单元。
+  const external = useExternalApps({
+    currentGroup,
+    photoshopPath: settings?.photoshopPath,
+    onGroupPatched: patchGroup,
+  });
 
-  const handleBrowseRaw = async () => {
-    const selected = await api.selectFolderDialog(rawFolder);
-    if (selected) {
-      setRawFolder(selected);
-    }
-  };
+  const tone = useToneEditing({
+    currentGroup,
+    viewMode: external.viewMode,
+    lumenAvailable,
+    lumenCapsAiMasks: lumen.caps?.aiMasks,
+    onGroupsPatched: patchGroup,
+    onMasksLoaded: lumen.onMasksLoaded,
+  });
+  const {
+    toneMap,
+    tonalPanelVisible,
+    toneDivergent,
+    isSavingTone,
+    isAutoToning,
+    pendingLeaveTone,
+    currentTone,
+    setPreviewImage,
+    handleToggleTonalPanel,
+    handleToneChange,
+    handleResetTone,
+    guardToneLeave,
+    closeTonePanel,
+    handleAutoTone,
+    handleSaveTone,
+    handleApplyLumenPreset,
+    handleApplyLumenMask,
+    setPendingLeaveTone,
+    setShowTonalPanel,
+    seedToneMap: toneSeed,
+    toneDirty,
+  } = tone;
 
-  // Selection navigation (aware of pinned compare mode)
-  const handlePrev = useCallback(() => {
-    if (viewMode === 'split' && pinnedId && isPinnedOnLeft) {
-      setCompareIndex((prev) => (prev > 0 ? prev - 1 : prev));
-    } else {
-      setSelectedIndex((prev) => (prev > 0 ? prev - 1 : prev));
-    }
-  }, [viewMode, pinnedId, isPinnedOnLeft]);
+  const swapIndices = useCallback(() => {
+    const temp = selectedIndex;
+    setSelectedIndex(compareIndex);
+    setCompareIndex(temp);
+  }, [selectedIndex, compareIndex]);
 
-  const handleNext = useCallback(() => {
-    if (viewMode === 'split' && pinnedId && isPinnedOnLeft) {
-      setCompareIndex((prev) =>
-        prev < filteredGroups.length - 1 ? prev + 1 : prev,
-      );
-    } else {
-      setSelectedIndex((prev) =>
-        prev < filteredGroups.length - 1 ? prev + 1 : prev,
-      );
-    }
-  }, [viewMode, pinnedId, isPinnedOnLeft, filteredGroups.length]);
+  const pin = useComparePin({
+    filteredGroups,
+    selectedIndex,
+    compareIndex,
+    currentGroup,
+    onSwapIndices: swapIndices,
+  });
+  const {
+    pinnedId,
+    isPinnedOnLeft,
+    isLeftPinned,
+    isRightPinned,
+    leftCompareGroup,
+    rightCompareGroup,
+    togglePinLeft: handleTogglePinLeft,
+    togglePinRight: handleTogglePinRight,
+    togglePinCurrent: handleTogglePinCurrent,
+    togglePinBenchmark: handleTogglePinBenchmark,
+    swap: handleSwapCompare,
+    setPinnedId,
+  } = pin;
 
-  // Select photo from thumbnail list
+  // 「有基准且基准在左」的对比模式下，± 与宫格点击作用在**对比候选**而非当前
+  // 照片 —— 用户此时盯着右窗格。判定留在 AppShell（它是唯一同时持有
+  // viewMode / pinnedId / isPinnedOnLeft 的地方），useCollection 只管改索引。
+  const isCompareNav = external.viewMode === 'split' && !!pinnedId && isPinnedOnLeft;
+  const handlePrev = useCallback(
+    () => selectPrev(isCompareNav),
+    [selectPrev, isCompareNav],
+  );
+  const handleNext = useCallback(
+    () => selectNext(isCompareNav, filteredGroups.length),
+    [selectNext, isCompareNav, filteredGroups.length],
+  );
   const handleSelectPhoto = useCallback(
-    (idx: number) => {
-      if (viewMode === 'split' && pinnedId && isPinnedOnLeft) {
-        setCompareIndex(idx);
-      } else {
-        setSelectedIndex(idx);
-        if (viewMode === 'split' && !pinnedId) {
-          setCompareIndex(Math.min(idx + 1, filteredGroups.length - 1));
-        }
-      }
-    },
-    [viewMode, pinnedId, isPinnedOnLeft, filteredGroups.length],
+    (visibleIndex: number) =>
+      selectPhoto(visibleIndex, {
+        isCompareNav,
+        hasPinned: !!pinnedId,
+        total: filteredGroups.length,
+      }),
+    [selectPhoto, isCompareNav, pinnedId, filteredGroups.length],
   );
-
-  // Update Rating & Flag (syncs to XMP)
-  const handleRate = useCallback(
-    async (rating: number, targetGroup: PhotoGroupInfo = currentGroup!) => {
-      if (!targetGroup) return;
-      const targetPath = targetGroup.raw?.path || targetGroup.jpg?.path;
-      if (!targetPath) return;
-
-      // Update in local state
-      setGroups((prev) =>
-        prev.map((g) => (g.id === targetGroup.id ? { ...g, rating } : g)),
-      );
-
-      // Sync to XMP in background
-      try {
-        await api.updateRatingFlag(targetPath, rating, targetGroup.flag, true);
-      } catch (err) {
-        console.error('XMP update error:', err);
-      }
-    },
-    [currentGroup],
-  );
-
-  const handleFlag = useCallback(
-    async (
-      flag: 'pick' | 'reject' | 'none',
-      targetGroup: PhotoGroupInfo = currentGroup!,
-    ) => {
-      if (!targetGroup) return;
-      const targetPath = targetGroup.raw?.path || targetGroup.jpg?.path;
-      if (!targetPath) return;
-
-      setGroups((prev) =>
-        prev.map((g) => (g.id === targetGroup.id ? { ...g, flag } : g)),
-      );
-
-      try {
-        await api.updateRatingFlag(targetPath, targetGroup.rating, flag, true);
-      } catch (err) {
-        console.error('XMP update error:', err);
-      }
-    },
-    [currentGroup],
-  );
-
-  // Open in Photoshop / External app
-  const handleOpenExternal = useCallback(async () => {
-    if (!currentGroup) return;
-    const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
-    if (!targetPath) return;
-
-    try {
-      await api.openInPhotoshop(targetPath, settings?.photoshopPath);
-    } catch (e) {
-      console.warn('Photoshop failed, falling back to default:', e);
-      await api.openInDefaultApp(targetPath);
-    }
-  }, [currentGroup, settings?.photoshopPath]);
-
-  // View mode toggles
-  const handleToggleCompare = useCallback(() => {
-    setViewMode((m) => (m === 'split' ? 'single' : 'split'));
-  }, []);
-
-  const handleToggleBeforeAfter = useCallback(() => {
-    setViewMode((m) => (m === 'before_after' ? 'single' : 'before_after'));
-  }, []);
-
-  const handleToggleTonalPanel = useCallback(() => {
-    setShowTonalPanel((prev) => !prev);
-  }, []);
 
   const handleHoldOriginalStart = useCallback(() => {
     setIsHoldOriginal(true);
@@ -351,118 +301,26 @@ export default function App() {
     setIsHoldOriginal(false);
   }, []);
 
-  // Tone adjustments state and handlers
-  const currentTone = currentGroup
-    ? toneMap[currentGroup.id] || currentGroup.tone || DEFAULT_TONE
-    : undefined;
-
-  const handleToneChange = useCallback(
-    (newTone: ToneAdjustments) => {
-      if (!currentGroup) return;
-      setToneMap((prev) => ({ ...prev, [currentGroup.id]: newTone }));
-      setGroups((prev) =>
-        prev.map((g) => (g.id === currentGroup.id ? { ...g, tone: newTone } : g))
-      );
-    },
-    [currentGroup],
-  );
-
-  const handleResetTone = useCallback(() => {
-    if (!currentGroup) return;
-    setToneMap((prev) => ({ ...prev, [currentGroup.id]: { ...DEFAULT_TONE } }));
-    setGroups((prev) =>
-      prev.map((g) =>
-        g.id === currentGroup.id ? { ...g, tone: { ...DEFAULT_TONE } } : g
-      )
-    );
-  }, [currentGroup]);
-
-  const handleAutoTone = useCallback(() => {
-    if (!currentGroup) return;
-    const src = currentGroup.jpg?.path
-      ? api.toAssetUrl(currentGroup.jpg.path)
-      : currentGroup.raw?.path
-      ? api.toAssetUrl(currentGroup.raw.path)
-      : null;
-    if (!src) return;
-
-    const img = document.querySelector(
-      `img[alt="${currentGroup.baseName}"]`
-    ) as HTMLImageElement | null;
-    if (img && img.complete && img.naturalWidth > 0) {
-      const autoTone = computeAutoTone(img);
-      handleToneChange(autoTone);
-    } else {
-      const tempImg = new Image();
-      tempImg.crossOrigin = 'anonymous';
-      tempImg.onload = () => {
-        const autoTone = computeAutoTone(tempImg);
-        handleToneChange(autoTone);
-      };
-      tempImg.src = src;
-    }
-  }, [currentGroup, handleToneChange]);
-
-  const handleSaveToneToXmp = useCallback(async () => {
-    if (!currentGroup) return;
-    const toneToSave = toneMap[currentGroup.id] || currentGroup.tone || DEFAULT_TONE;
-    const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
-    if (!targetPath) return;
-
-    try {
-      await api.updateToneAdjustments(targetPath, toneToSave);
-      setGroups((prev) =>
-        prev.map((g) =>
-          g.id === currentGroup.id ? { ...g, hasXmp: true, tone: toneToSave } : g
-        )
-      );
-      alert('调色参数已成功写入同名 .xmp 文件！\nPhotoshop / ACR 打开时将自动载入该调色效果。');
-    } catch (err) {
-      alert(`写入 XMP 失败: ${err}`);
-    }
-  }, [currentGroup, toneMap]);
-
-  // Luminar AI Roundtrip Handler
-  const handleOpenLuminar = useCallback(async () => {
-    if (!currentGroup) return;
-    const targetPath = currentGroup.raw?.path || currentGroup.jpg?.path;
-    if (!targetPath) return;
-
-    setIsLuminarRunning(true);
-    try {
-      const editedPath = await api.openInLuminarRoundtrip(targetPath);
-      const ext = editedPath.split('.').pop() || 'tif';
-      const editedInfo: PhotoFileInfo = {
-        path: editedPath,
-        name: editedPath.split(/[/\\]/).pop() || 'edited.tif',
-        extension: ext,
-        size: 0,
-        mtime: Date.now() / 1000,
-      };
-
-      setGroups((prev) =>
-        prev.map((g) => (g.id === currentGroup.id ? { ...g, edited: editedInfo } : g))
-      );
-
-      // Automatically switch to Before/After comparison view to review result!
-      setViewMode('before_after');
-    } catch (err) {
-      alert(`调用 Luminar AI 失败或未完成: ${err}`);
-    } finally {
-      setIsLuminarRunning(false);
-    }
-  }, [currentGroup]);
-
-  // Save session when index changes
-  useEffect(() => {
-    if (jpgFolder && selectedIndex >= 0) {
-      api.saveSession(jpgFolder, rawFolder, selectedIndex, sortOrder);
-    }
-  }, [selectedIndex, jpgFolder, rawFolder, sortOrder]);
+  // Save session when index changes — debounced (M-17).
+  //
+  // 原先 `selectedIndex` 每变一次就一次 IPC + 一次 SQLite 写：连按方向键约
+  // 10 张/秒 = 每秒 10 次磁盘写，而只有最后一次索引有价值。防抖窗口与四个
+  // flush 点（目录切换 / 卸载 / 页面隐藏 / Tauri 关闭请求）都在 hook 内部。
+  useSessionDebounce({
+    jpgFolder,
+    rawFolder,
+    lastIndex: selectedIndex,
+    sortOrder,
+  });
 
   // Metadata batch updated handler
   const handleMetadataUpdated = useCallback(
-    (targetIds: string[], lensModel: string, focalLength: string, aperture: string) => {
+    (
+      targetIds: string[],
+      lensModel: string,
+      focalLength: string,
+      aperture: string,
+    ) => {
       setGroups((prev) =>
         prev.map((g) => {
           if (targetIds.includes(g.id)) {
@@ -484,24 +342,80 @@ export default function App() {
     [],
   );
 
+  // C3：切图/选片也走保护 —— 调色有未保存改动时先确认，避免切走即丢失。
+  const guardedPrev = useCallback(
+    () => guardToneLeave(handlePrev),
+    [guardToneLeave, handlePrev],
+  );
+  const guardedNext = useCallback(
+    () => guardToneLeave(handleNext),
+    [guardToneLeave, handleNext],
+  );
+  const guardedSelect = useCallback(
+    (i: number) => guardToneLeave(() => handleSelectPhoto(i)),
+    [guardToneLeave, handleSelectPhoto],
+  );
+
+  const handleFocusSearch = useCallback(() => {
+    // The grid has to be mounted for the field to exist.
+    setShowTonalPanel(false);
+    setGridSearchOpen(true);
+    setGridSearchFocusToken((t) => t + 1);
+  }, [setShowTonalPanel]);
+
   // Register single-handed keyboard shortcuts
   useKeyboardShortcuts({
-    onPrev: handlePrev,
-    onNext: handleNext,
-    onRate: (r) => handleRate(r),
-    onFlag: (f) => handleFlag(f),
-    onOpenExternal: handleOpenExternal,
-    onToggleCompare: handleToggleCompare,
+    onPrev: guardedPrev,
+    onNext: guardedNext,
+    // B1：打分/旗标入口分流 —— 多选 ≥2 时弹批量确认，否则单张即时写入。
+    onRate: applyRating,
+    onFlag: applyFlag,
+    // B2：`0`/`U` 走合并后的单次写盘（清除评级 + 旗标）。
+    onClear: () => void handleClearRatingFlag(),
+    onOpenExternal: external.openExternal,
+    onToggleCompare: external.toggleCompare,
     onSwapCompare: handleSwapCompare,
     onTogglePinReference: handleTogglePinBenchmark,
     onPinLeft: handleTogglePinLeft,
     onPinRight: handleTogglePinRight,
+    onTogglePinCurrent: handleTogglePinCurrent,
     onOpenMetadataModal: () => setIsMetadataOpen(true),
-    onToggleBeforeAfter: handleToggleBeforeAfter,
+    onToggleBeforeAfter: external.toggleBeforeAfter,
     onToggleTonalPanel: handleToggleTonalPanel,
     onHoldOriginalStart: handleHoldOriginalStart,
     onHoldOriginalEnd: handleHoldOriginalEnd,
+    onFocusSearch: handleFocusSearch,
+    onOpenShortcutHelp: () => setIsShortcutHelpOpen(true),
+    onUndo: () => void handleUndo(),
   });
+
+  // Empty-state copy. "No folder loaded" and "filter matched nothing" are
+  // different problems and must not share a message.
+  const viewportEmptyState = useMemo<ViewportEmptyState>(() => {
+    if (groups.length === 0) {
+      return {
+        title: '未加载照片',
+        // A5/A7：说清楚"该选什么"，去掉无操作信息的营销辞令。
+        description:
+          '请选择存放 JPG 的文件夹用于浏览与选片；RAW 文件夹为可选，选了即可用 LUMEN RAW 引擎预览原片。',
+        actionLabel: '选择 JPG 文件夹',
+        onAction: handleBrowseJpg,
+      };
+    }
+    if (filteredGroups.length === 0) {
+      return {
+        title: '当前筛选下没有照片',
+        description:
+          '还没有照片匹配这个筛选条件。先给照片打星或标记保留，或者切换到「全部照片」。',
+        actionLabel: '显示全部照片',
+        onAction: () => setFilterMode('all'),
+      };
+    }
+    return {
+      title: '未选择照片',
+      description: '从右侧宫格列表中选择一张照片。',
+    };
+  }, [groups.length, filteredGroups.length, handleBrowseJpg]);
 
   return (
     <div className="flex flex-col h-screen w-screen bg-background-base text-white overflow-hidden antialiased">
@@ -514,62 +428,94 @@ export default function App() {
         onBrowseJpg={handleBrowseJpg}
         onBrowseRaw={handleBrowseRaw}
         onScan={handleScan}
-        isLoading={isLoading}
+        isLoading={isLoading || scanTask.isRunning}
+        scanProgress={
+          scanTask.progress
+            ? { processed: scanTask.progress.processed, total: scanTask.progress.total }
+            : undefined
+        }
+        scanError={scanError}
+        onDismissScanError={dismissScanError}
         filterMode={filterMode}
-        onFilterChange={setFilterMode}
+        onFilterChange={handleFilterChange}
+        filterCounts={filterCounts}
         sortOrder={sortOrder}
-        onSortChange={(order) => {
-          setSortOrder(order);
-          // Auto re-scan or sort
-          handleScan();
-        }}
-        viewMode={viewMode}
-        onViewModeChange={setViewMode}
+        onSortChange={setSortOrder}
+        viewMode={external.viewMode}
+        onViewModeChange={external.setViewMode}
         onOpenExportModal={() => setIsExportOpen(true)}
         onOpenSettingsModal={() => setIsSettingsOpen(true)}
-        onOpenMetadataModal={() => setIsMetadataOpen(true)}
         onToggleTonalAdjuster={handleToggleTonalPanel}
-        showTonalPanel={showTonalPanel}
-        onOpenLuminar={handleOpenLuminar}
-        isLuminarRunning={isLuminarRunning}
+        tonalPanelVisible={tonalPanelVisible}
+        tonalToggleDisabled={!currentGroup}
+        onOpenLuminar={external.openLuminar}
+        isLuminarRunning={external.isLuminarRunning}
+      />
+
+      {/* Scan progress (M-05) — 空闲时不渲染，不留空白条 */}
+      <TaskProgressBar
+        className="px-4 py-2 border-b border-default bg-background-header shrink-0"
+        isRunning={scanTask.isRunning}
+        processed={scanTask.progress?.processed ?? 0}
+        total={scanTask.progress?.total ?? 0}
+        label="正在扫描照片"
+        onCancel={handleCancelScan}
+        cancelRequested={scanTask.cancelRequested}
+        cancelStalled={scanTask.cancelStalled}
+        onForceFinish={scanTask.finish}
+      />
+
+      {/* B1：批量写盘进度（逐张写 XMP，可跳过剩余） */}
+      <TaskProgressBar
+        className="px-4 py-2 border-b border-default bg-background-header shrink-0"
+        isRunning={batchProgress !== null}
+        processed={batchProgress?.processed ?? 0}
+        total={batchProgress?.total ?? 0}
+        label="正在批量写入 XMP"
+        onCancel={skipRemaining}
+        cancelRequested={batchCancelling}
       />
 
       {/* Main Content Area */}
       <div className="flex-1 flex overflow-hidden">
         {/* Center Viewport */}
-        {viewMode === 'single' && (
+        {external.viewMode === 'single' && (
           <PreviewViewport
             group={currentGroup}
             tone={currentTone}
             isHoldOriginal={isHoldOriginal}
-            onPrev={handlePrev}
-            onNext={handleNext}
-            onRate={(r) => handleRate(r)}
-            onFlag={(f) => handleFlag(f)}
-            onOpenExternal={handleOpenExternal}
-            onOpenLuminar={handleOpenLuminar}
+            lumenStatus={lumenStatus}
+            onPrev={guardedPrev}
+            onNext={guardedNext}
+            onRate={applyRating}
+            onFlag={applyFlag}
+            onOpenExternal={external.openExternal}
+            onOpenLuminar={external.openLuminar}
             onToggleTonalAdjuster={handleToggleTonalPanel}
-            isLuminarRunning={isLuminarRunning}
-            onBrowseJpg={handleBrowseJpg}
+            isTonalPanelOpen={tonalPanelVisible}
+            isLuminarRunning={external.isLuminarRunning}
+            emptyState={viewportEmptyState}
+            onImageElement={setPreviewImage}
           />
         )}
 
-        {viewMode === 'before_after' && (
+        {external.viewMode === 'before_after' && (
           <BeforeAfterViewport
             group={currentGroup}
             tone={currentTone}
             isHoldOriginal={isHoldOriginal}
-            onPrev={handlePrev}
-            onNext={handleNext}
-            onRate={(r) => handleRate(r)}
-            onFlag={(f) => handleFlag(f)}
-            onOpenLuminar={handleOpenLuminar}
+            onRate={applyRating}
+            onFlag={applyFlag}
+            onOpenLuminar={external.openLuminar}
             onToggleTonalAdjuster={handleToggleTonalPanel}
-            isLuminarRunning={isLuminarRunning}
+            isTonalPanelOpen={tonalPanelVisible}
+            isLuminarRunning={external.isLuminarRunning}
+            emptyState={viewportEmptyState}
+            lumenStatus={lumenStatus}
           />
         )}
 
-        {viewMode === 'split' && (
+        {external.viewMode === 'split' && (
           <SplitCompareViewport
             leftGroup={leftCompareGroup}
             rightGroup={rightCompareGroup}
@@ -580,31 +526,61 @@ export default function App() {
             onSwap={handleSwapCompare}
             onRate={(g, r) => handleRate(r, g)}
             onFlag={(g, f) => handleFlag(f, g)}
-            onSelectLeft={() => {}}
-            onSelectRight={() => {
-              if (compareIndex >= 0 && compareIndex < filteredGroups.length) {
-                setSelectedIndex(compareIndex);
-              }
-            }}
+            lumenStatus={lumenStatus}
+            getTone={(g) => toneMap[g.id] || g.tone}
+            /* C7：对比视图补翻页入口，与单图一致 */
+            onPrev={guardedPrev}
+            onNext={guardedNext}
           />
-        )}
-        {/* Right Sidebar (Thumbnail Grid OR Tonal Adjuster) */}
+        )}        {/* Right Sidebar (Thumbnail Grid OR Tonal Adjuster) */}
         <div className="w-[390px] h-full shrink-0 bg-background-base">
-          {showTonalPanel && currentGroup ? (
+          {tonalPanelVisible ? (
             <TonalAdjuster
               tone={currentTone || DEFAULT_TONE}
               onChange={handleToneChange}
               onReset={handleResetTone}
               onAuto={handleAutoTone}
-              onSaveXmp={handleSaveToneToXmp}
-              onClose={() => setShowTonalPanel(false)}
+              autoTonePending={isAutoToning}
+              onSave={handleSaveTone}
+              isSaving={isSavingTone}
+              divergent={toneDivergent}
+              masks={lumen.masks}
+              onApplyMask={
+                lumen.caps?.aiMasks && lumenAvailable
+                  ? handleApplyLumenMask
+                  : undefined
+              }
+              lumenPresets={lumen.caps?.presets ?? []}
+              aiAvailable={lumen.caps?.aiMasks ?? false}
+              onApplyPreset={lumenAvailable ? handleApplyLumenPreset : undefined}
+              onClose={closeTonePanel}
+              dirty={toneDirty}
             />
           ) : (
             <ThumbnailGrid
-              groups={filteredGroups}
-              selectedIndex={selectedIndex}
+              groups={visibleGroups}
+              selectedIndex={selectedVisibleIndex}
               pinnedId={pinnedId}
-              onSelect={handleSelectPhoto}
+              onSelect={guardedSelect}
+              searchQuery={gridSearch}
+              searchOpen={gridSearchOpen}
+              searchFocusToken={gridSearchFocusToken}
+              onSearchQueryChange={setGridSearch}
+              onFilterReset={() => setFilterMode('all')}
+              onSearchOpenChange={(open) => {
+                setGridSearchOpen(open);
+                if (!open) setGridSearch('');
+                else setGridSearchFocusToken((t) => t + 1);
+              }}
+              totalLoaded={filteredGroups.length}
+              lumenThumbnails={lumen.gridThumbs}
+              candidateId={rightCompareGroup?.id}
+              /* B1：多选（Ctrl/Shift 点选、Ctrl+A、方向键重置为单选） */
+              selectedIds={selectedIds}
+              onSelectionChange={setSelectedIds}
+              /* B6：写盘失败的照片显示持久"未同步"角标 + 点击重试 */
+              unsyncedIds={unsyncedIds}
+              onRetrySync={handleRetrySync}
             />
           )}
         </div>
@@ -615,8 +591,13 @@ export default function App() {
         currentGroup={currentGroup}
         currentIndex={selectedIndex}
         totalCount={filteredGroups.length}
-        onOpenExternal={handleOpenExternal}
+        onOpenExternal={external.openExternal}
         onOpenMetadataModal={() => setIsMetadataOpen(true)}
+        onOpenShortcutHelp={() => setIsShortcutHelpOpen(true)}
+        searchActive={gridSearch.trim().length > 0}
+        searchResultCount={visibleGroups.length}
+        onUndo={() => void handleUndo()}
+        canUndo={canUndo}
       />
 
       {/* Batch Export Modal */}
@@ -624,13 +605,20 @@ export default function App() {
         isOpen={isExportOpen}
         onClose={() => setIsExportOpen(false)}
         groups={groups}
+        onError={(m) => toast.error(m)}
+        onSuccess={(m) => toast.success(m)}
       />
 
       {/* Settings Modal */}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
-        onSettingsSaved={(s) => setSettings(s)}
+        onSettingsSaved={applySettings}
+        onError={(m) => toast.error(m)}
+        lumenStatus={lumenStatus}
+        capabilities={lumen.caps}
+        onSyncRatings={lumenAvailable ? lumen.syncRatings : undefined}
+        savedLumenEnabled={settings?.lumenEnabled ?? false}
       />
 
       {/* Manual Lens Metadata Editor Modal */}
@@ -641,7 +629,58 @@ export default function App() {
         filteredGroups={filteredGroups}
         allGroups={groups}
         onMetadataUpdated={handleMetadataUpdated}
+        onError={(m) => toast.error(m)}
+      />
+
+      {/* Keyboard & mouse reference */}
+      <ShortcutHelpModal
+        isOpen={isShortcutHelpOpen}
+        onClose={() => setIsShortcutHelpOpen(false)}
+      />
+
+      {updateDialog}
+
+      {/* B1：批量写盘前的确认（≥2 张才进入这里，写盘不可轻易回退） */}
+      <ConfirmDialog
+        isOpen={pendingBatch !== null}
+        onClose={() => setPendingBatch(null)}
+        onConfirm={() => {
+          const action = pendingBatch;
+          setPendingBatch(null);
+          if (action) void runBatch(action);
+        }}
+        title="确认批量修改"
+        message={`${pendingBatchSummary}\n\n改动会立即写入每张照片的 XMP 侧边栏，无法整批撤销。`}
+        confirmLabel="写入 XMP"
+        cancelLabel="取消"
+        destructive={pendingBatch?.kind === 'clear'}
+      />
+
+      {/* C3：调色未保存时离开（翻页/切换照片/关面板）需要二次确认 */}
+      <ConfirmDialog
+        isOpen={pendingLeaveTone !== null}
+        onClose={() => setPendingLeaveTone(null)}
+        onConfirm={() => {
+          const action = pendingLeaveTone;
+          setPendingLeaveTone(null);
+          action?.run();
+        }}
+        title="调色改动尚未保存"
+        message={
+          '当前照片的调色改动还没有保存到 XMP / 工程，离开后这些改动会丢失。\n\n是否放弃改动并继续？'
+        }
+        confirmLabel="放弃改动"
+        cancelLabel="继续编辑"
+        destructive
       />
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <ToastProvider>
+      <AppShell />
+    </ToastProvider>
   );
 }
