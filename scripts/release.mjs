@@ -27,13 +27,15 @@ try {
   console.log('🔨 正在执行 Tauri Build 构建应用，这可能需要几分钟...');
   // 通过环境变量传入私钥内容
   const privateKey = fs.existsSync(keyPath) ? fs.readFileSync(keyPath, 'utf8') : '';
-  execSync('pnpm tauri build', { 
-    stdio: 'inherit', 
+  // 用 npm 而不是 pnpm：项目已从 pnpm 迁到 npm（仓库里没有 pnpm-lock.yaml），
+  // 用 pnpm 会按它自己的解析规则重装一遍依赖，与 node_modules 现状分叉。
+  execSync('npm run tauri build', {
+    stdio: 'inherit',
     cwd: rootDir,
-    env: { 
-      ...process.env, 
+    env: {
+      ...process.env,
       TAURI_SIGNING_PRIVATE_KEY: privateKey,
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: '' 
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
     }
   });
 
