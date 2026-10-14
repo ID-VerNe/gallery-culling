@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import {
   Columns2,
   Link,
@@ -16,7 +16,7 @@ import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
 import { api } from '../services/api';
 import { getToneFilterString } from '../utils/autoTone';
 import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from '../utils/viewportZoom';
-import { useLumenPreview } from '../hooks/useLumenPreview';
+import { useViewportImage } from '../hooks/useViewportImage';
 import { useDualZoomPan } from '../hooks/useDualZoomPan';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import type { ViewportEmptyState } from './PreviewViewport';
@@ -64,37 +64,18 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
   // 调色结果在右侧，独立模式的默认作用栏是 after。
   const zoom = useDualZoomPan(PANES, group?.id, PANES[1]);
 
-  // RAW 真实解码（有 JPG 时零请求）；与单图/对比视图同口径。
-  const lumenPreview = useLumenPreview(group, lumenStatus ?? LUMEN_UNAVAILABLE, LUMEN_PANE_WIDTH);
-  const [lumenBroken, setLumenBroken] = useState(false);
-
-  // Reset the LUMEN fallback latch on photo change（缩放/平移的复位归 hook）。
-  useEffect(() => {
-    setLumenBroken(false);
-  }, [group?.id]);
-
-  // Original image source (Before): LUMEN RAW preview when available, else jpg/raw.
-  const hasJpg = Boolean(group?.jpg?.path);
-  const hasRaw = Boolean(group?.raw?.path);
-  const lumenActive = Boolean(lumenPreview.url && !lumenBroken);
-  // RAW-only（无 JPG）分组：引擎不可用时不再回落 .NEF 资产 URL（C2，会永久破图）。
-  const rawOnly = !hasJpg && hasRaw;
-  const legacySrc = group?.jpg?.path
-    ? api.toAssetUrl(group.jpg.path)
-    : group?.raw?.path
-    ? api.toAssetUrl(group.raw.path)
-    : null;
-  const beforeSrc = rawOnly ? (lumenActive ? lumenPreview.url : null) : legacySrc;
+  // 图片源解析（LUMEN 预览 + 失败 latch + C2 口径，三视口共用）。
+  const beforeImage = useViewportImage(group, lumenStatus ?? LUMEN_UNAVAILABLE, LUMEN_PANE_WIDTH);
 
   // After image source: If Luminar AI edited version exists, use it; otherwise use base image with tone filter
   const hasLuminarEdit = !!group?.edited?.path;
   const afterSrc = group?.edited?.path
     ? api.toAssetUrl(group.edited.path)
-    : beforeSrc;
+    : beforeImage.src;
 
   // LUMEN 命中时不再叠加 CSS 滤镜（否则 develop 两次）；edited 成品与按住原片同样不套。
   const toneFilter =
-    !hasLuminarEdit && !isHoldOriginal && !lumenActive
+    !hasLuminarEdit && !isHoldOriginal && !beforeImage.lumenActive
       ? getToneFilterString(tone)
       : 'none';
   // C5：未做任何调色时左右逐像素相同，需给出提示而非误标 Before/After。
@@ -106,11 +87,11 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
   }
 
   // RAW-only：解码中 → 渲染主视图并显示横幅；失败/未启用 → 明确占位而非破图（C2）。
-  if (!beforeSrc && !(rawOnly && lumenPreview.loading)) {
+  if (!beforeImage.src && !(beforeImage.rawOnly && beforeImage.loading)) {
     return (
       <ViewportEmptyStateView
         emptyState={
-          rawOnly
+          beforeImage.rawOnly
             ? {
                 title: '该 RAW 需启用 LUMEN RAW 引擎',
                 description:
@@ -278,15 +259,13 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
             />
           )}
 
-          {beforeSrc && (
+          {beforeImage.src && (
             <img
               ref={zoom.imgRef('before')}
-              src={beforeSrc}
+              src={beforeImage.src}
               alt={`${group.baseName} 调色前原片`}
               draggable={false}
-              onError={() => {
-                if (lumenPreview.url && !lumenBroken) setLumenBroken(true);
-              }}
+              onError={beforeImage.markBroken}
               style={{
                 transform: zoom.transformOf('before'),
                 transition: zoom.isDragging ? 'none' : 'transform 0.05s ease-out',
@@ -296,7 +275,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
             />
           )}
 
-          {lumenPreview.loading && (
+          {beforeImage.loading && (
             <div
               role="status"
               className="absolute top-3 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3 py-1 rounded-md text-[11px] font-semibold text-white/80 border border-default pointer-events-none"

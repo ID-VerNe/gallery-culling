@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect } from 'react';
 import {
   Columns2,
   Link,
@@ -16,10 +16,9 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
-import { api } from '../services/api';
 import { getToneFilterString } from '../utils/autoTone';
 import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from '../utils/viewportZoom';
-import { useLumenPreview, type UseLumenPreviewResult } from '../hooks/useLumenPreview';
+import { useViewportImage, type ViewportImage } from '../hooks/useViewportImage';
 import { useDualZoomPan } from '../hooks/useDualZoomPan';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
@@ -68,19 +67,15 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
   // 两栏 id 任一变化都算换图（F-03：不复位会 zoom 进新图的空白里）。
   const zoom = useDualZoomPan(PANES, `${leftGroup?.id ?? ''}|${rightGroup?.id ?? ''}`);
 
-  // C8：拖拽夹紧需要量测各栏容器与图像的渲染尺寸（refs 归 hook 内部持有）。
-  // 两个窗格各自持有 LUMEN 解码实例（有 JPG 时 hook 内短路 → 零请求、零额外成本）。
-  const leftLumen = useLumenPreview(leftGroup, lumenStatus ?? LUMEN_UNAVAILABLE, LUMEN_PANE_WIDTH);
-  const rightLumen = useLumenPreview(rightGroup, lumenStatus ?? LUMEN_UNAVAILABLE, LUMEN_PANE_WIDTH);
-  // 陈旧预览解码失败时静默回落到静态路径（与单图视图同语义）。
-  const [leftLumenBroken, setLeftLumenBroken] = useState(false);
-  const [rightLumenBroken, setRightLumenBroken] = useState(false);
-
-  // Reset the LUMEN fallback latches whenever either pane shows a different photo.
-  useEffect(() => {
-    setLeftLumenBroken(false);
-    setRightLumenBroken(false);
-  }, [leftGroup?.id, rightGroup?.id]);
+  // 两个窗格各自的图片源（LUMEN 预览 + 失败 latch + C2 口径，三视口共用；
+  // 有 JPG 时 hook 内短路 → 零请求、零额外成本）。
+  // 在组件体调两次再传进 renderPane —— 守 hook 规则（不在循环/条件里调 hook）。
+  const leftImage = useViewportImage(leftGroup, lumenStatus ?? LUMEN_UNAVAILABLE, LUMEN_PANE_WIDTH);
+  const rightImage = useViewportImage(
+    rightGroup,
+    lumenStatus ?? LUMEN_UNAVAILABLE,
+    LUMEN_PANE_WIDTH,
+  );
 
   // 翻页/钉基准后，把焦点指向「当前会变的那一侧」，
   // 避免独立模式下 ± 去动一张静止的基准图（M-01 风险项）。
@@ -93,22 +88,8 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
     group: PhotoGroupInfo | undefined,
     isLeft: boolean,
     transform: string,
-    lumen: UseLumenPreviewResult,
-    lumenBroken: boolean,
-    markLumenBroken: () => void,
+    image: ViewportImage,
   ) => {
-    const hasJpg = Boolean(group?.jpg?.path);
-    const hasRaw = Boolean(group?.raw?.path);
-    const lumenActive = Boolean(lumen.url && !lumenBroken);
-    // RAW-only（无 JPG）分组：引擎不可用时不再回落 .NEF 资产 URL（C2，会永久破图）。
-    const rawOnly = !hasJpg && hasRaw;
-    const legacySrc = group?.jpg?.path
-      ? api.toAssetUrl(group.jpg.path)
-      : group?.raw?.path
-      ? api.toAssetUrl(group.raw.path)
-      : null;
-    const src = rawOnly ? (lumenActive ? lumen.url : null) : legacySrc;
-
     if (!group) {
       return (
         <ViewportEmptyStateView
@@ -122,12 +103,12 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
     }
 
     // RAW-only：解码中 → 渲染窗格并显示横幅；失败/未启用 → 明确占位而非破图（C2）。
-    if (!src && !(rawOnly && lumen.loading)) {
+    if (!image.src && !(image.rawOnly && image.loading)) {
       return (
         <ViewportEmptyStateView
           variant="pane"
           emptyState={
-            rawOnly
+            image.rawOnly
               ? {
                   title: '该 RAW 需启用 LUMEN RAW 引擎',
                   description: '启用 LUMEN RAW 引擎后即可在此实时预览。',
@@ -144,7 +125,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
     }
 
     // LUMEN 命中时不再叠加 CSS 滤镜（否则会把图像 develop 两次）——与单图视图同规则。
-    const toneFilter = lumenActive ? 'none' : getToneFilterString(getTone?.(group));
+    const toneFilter = image.lumenActive ? 'none' : getToneFilterString(getTone?.(group));
 
     const isPinned = isLeft ? isLeftPinned : isRightPinned;
     const onTogglePin = isLeft ? onTogglePinLeft : onTogglePinRight;
@@ -175,16 +156,13 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
           />
         )}
 
-        {src && (
+        {image.src && (
           <img
             ref={zoom.imgRef(pane)}
-            src={src}
+            src={image.src}
             alt={group.baseName}
             draggable={false}
-            onError={() => {
-              // 陈旧的 LUMEN 预览不能把窗格变空。
-              if (lumen.url && !lumenBroken) markLumenBroken();
-            }}
+            onError={image.markBroken}
             style={{
               transform,
               transition: zoom.isDragging ? 'none' : 'transform 0.05s ease-out',
@@ -196,7 +174,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
         )}
 
         {/* RAW-only 首次进入时的轻提示（与单图视图一致，不弹窗） */}
-        {lumen.loading && (
+        {image.loading && (
           <div
             role="status"
             className="absolute top-3 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3 py-1 rounded-md text-[11px] font-semibold text-white/80 border border-default pointer-events-none"
@@ -446,22 +424,8 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
 
       {/* Side-by-side Panes */}
       <div className="flex-1 flex overflow-hidden select-none">
-        {renderPane(
-          leftGroup,
-          true,
-          zoom.transformOf('left'),
-          leftLumen,
-          leftLumenBroken,
-          () => setLeftLumenBroken(true),
-        )}
-        {renderPane(
-          rightGroup,
-          false,
-          zoom.transformOf('right'),
-          rightLumen,
-          rightLumenBroken,
-          () => setRightLumenBroken(true),
-        )}
+        {renderPane(leftGroup, true, zoom.transformOf('left'), leftImage)}
+        {renderPane(rightGroup, false, zoom.transformOf('right'), rightImage)}
       </div>
 
       {/* 翻页覆盖层（C7）：仅当宿主传入回调时渲染，复用单图视图的样式与图标。 */}

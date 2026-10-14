@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -13,11 +13,10 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
-import { api } from '../services/api';
 import { getToneFilterString } from '../utils/autoTone';
 import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from '../utils/viewportZoom';
 import { useZoomPan } from '../hooks/useZoomPan';
-import { useLumenPreview } from '../hooks/useLumenPreview';
+import { useViewportImage } from '../hooks/useViewportImage';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
 import { ExifCapsule } from './ExifCapsule';
@@ -82,41 +81,26 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
   // 缩放/平移机器（绝对系拖拽、命中光标缩放、夹紧、换图复位）。
   const zoom = useZoomPan(group?.id, onImageElement);
 
-  // RAW real-decode preview via LUMEN RAW sidecar (P0). Null → legacy path.
-  const lumenPreview = useLumenPreview(group, lumenStatus ?? LUMEN_UNAVAILABLE, lumenPreviewWidth);
-  const [lumenBroken, setLumenBroken] = useState(false);
-
-  // Reset the fallback latch whenever the photo changes.
-  useEffect(() => {
-    setLumenBroken(false);
-  }, [group?.id]);
+  // 图片源解析（LUMEN 预览 + 失败 latch + C2 口径，三视口共用）。
+  const image = useViewportImage(group, lumenStatus ?? LUMEN_UNAVAILABLE, lumenPreviewWidth);
 
   if (!group) {
     return <ViewportEmptyStateView emptyState={emptyState} />;
   }
 
-  const hasJpg = Boolean(group.jpg?.path);
-  const hasRaw = Boolean(group.raw?.path);
-  const lumenActive = Boolean(lumenPreview.url && !lumenBroken);
-  // RAW-only（无 JPG）分组：引擎不可用时不再回落到 .NEF 资产 URL（C2，会永久破图）。
-  const rawOnly = !hasJpg && hasRaw;
-  const legacySrc = hasJpg
-    ? api.toAssetUrl(group.jpg!.path)
-    : hasRaw
-    ? api.toAssetUrl(group.raw!.path)
-    : null;
-  const imageSrc = rawOnly ? (lumenActive ? lumenPreview.url : null) : legacySrc;
   // A LUMEN render is already tone-mapped: never stack the CSS tone filter on it
   // (that would develop the image twice).
-  const toneFilter = lumenActive ? 'none' : getToneFilterString(isHoldOriginal ? undefined : tone);
+  const toneFilter = image.lumenActive
+    ? 'none'
+    : getToneFilterString(isHoldOriginal ? undefined : tone);
 
   // C1/C2：RAW-only 解码中 → 走主视图显示「正在渲染 RAW…」横幅；失败/未启用 → 明确占位而非破图。
-  if (!imageSrc && !(rawOnly && lumenPreview.loading)) {
+  if (!image.src && !(image.rawOnly && image.loading)) {
     const engineAvailable = lumenStatus?.available === true;
     return (
       <ViewportEmptyStateView
         emptyState={
-          rawOnly
+          image.rawOnly
             ? engineAvailable
               ? {
                   title: 'RAW 预览暂不可用',
@@ -150,7 +134,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
       }`}
     >
       {/* Zoomable Image */}
-      {lumenPreview.loading && !lumenPreview.url && (
+      {image.loading && !image.lumenActive && (
         <div
           role="status"
           className="absolute top-4 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3.5 py-1.5 rounded-md text-xs font-semibold text-white/80 border border-default pointer-events-none"
@@ -159,16 +143,13 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
         </div>
       )}
 
-      {imageSrc && (
+      {image.src && (
         <img
           ref={zoom.imageRef}
-          src={imageSrc}
+          src={image.src}
           alt={group.baseName}
           draggable={false}
-          onError={() => {
-            // A stale/invalid cached preview must never blank the viewport.
-            if (lumenPreview.url && !lumenBroken) setLumenBroken(true);
-          }}
+          onError={image.markBroken}
           style={{
             transform: zoom.transform,
             transition: zoom.isDragging ? 'none' : 'transform 0.08s ease-out',
