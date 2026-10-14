@@ -35,11 +35,28 @@ export function scaleLabel(s: number): string {
 }
 
 /**
+ * 单栏允许的最大平移量（C8）。refs 缺失时为 Infinity —— 夹紧退化为恒等，
+ * 与三视口既有行为一致（首帧 / 卸载中不该把平移掰回原点）。
+ */
+export function paneMaxPan(pane: HTMLElement | null, img: HTMLElement | null, scale: number): Vec2 {
+  if (!pane || !img) return { x: Number.POSITIVE_INFINITY, y: Number.POSITIVE_INFINITY };
+  return {
+    x: Math.max(0, (img.offsetWidth * scale - pane.clientWidth) / 2),
+    y: Math.max(0, (img.offsetHeight * scale - pane.clientHeight) / 2),
+  };
+}
+
+/** 夹到给定边界内（负边界 = 反向限位）。 */
+export function clampTo(pos: Vec2, maxX: number, maxY: number): Vec2 {
+  return {
+    x: Math.min(Math.max(pos.x, -maxX), maxX),
+    y: Math.min(Math.max(pos.y, -maxY), maxY),
+  };
+}
+
+/**
  * C8：把平移夹到「照片不露出视口」的范围。缩放后图像超出容器的半边
  * 尺寸即最大可平移量；不超出（适应窗口）则锁死居中。
- *
- * 任一 ref 缺失（首帧 / 卸载中）时原样返回 —— 与三视口既有行为一致：
- * Preview 直接 return next，Split/BA 的 Infinity 边界也是恒等。
  */
 export function clampToPane(
   pane: HTMLElement | null,
@@ -47,13 +64,26 @@ export function clampToPane(
   pos: Vec2,
   scale: number,
 ): Vec2 {
-  if (!pane || !img) return pos;
-  const maxX = Math.max(0, (img.offsetWidth * scale - pane.clientWidth) / 2);
-  const maxY = Math.max(0, (img.offsetHeight * scale - pane.clientHeight) / 2);
-  return {
-    x: Math.min(Math.max(pos.x, -maxX), maxX),
-    y: Math.min(Math.max(pos.y, -maxY), maxY),
-  };
+  const max = paneMaxPan(pane, img, scale);
+  return clampTo(pos, max.x, max.y);
+}
+
+/**
+ * 联动拖拽（双栏视口）：夹到两栏的**公共边界** —— 任一一栏都不许露空。
+ * 两栏各自夹紧一次等价于夹到交集，但显式取 min 更能说明意图。
+ */
+export function clampToPanePair(
+  paneA: HTMLElement | null,
+  imgA: HTMLElement | null,
+  scaleA: number,
+  paneB: HTMLElement | null,
+  imgB: HTMLElement | null,
+  scaleB: number,
+  pos: Vec2,
+): Vec2 {
+  const ma = paneMaxPan(paneA, imgA, scaleA);
+  const mb = paneMaxPan(paneB, imgB, scaleB);
+  return clampTo(pos, Math.min(ma.x, mb.x), Math.min(ma.y, mb.y));
 }
 
 /**

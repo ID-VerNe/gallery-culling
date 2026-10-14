@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Columns2,
   Link,
@@ -18,18 +18,9 @@ import {
 import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
 import { api } from '../services/api';
 import { getToneFilterString } from '../utils/autoTone';
-import { zoomAtPoint } from '../utils/zoom';
-import {
-  ZOOM_STEP,
-  ZOOM_MIN,
-  ZOOM_MAX,
-  DOUBLE_CLICK_SCALE,
-  clampScale,
-  scaleLabel,
-  dragGrab,
-  dragTarget,
-} from '../utils/viewportZoom';
+import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from '../utils/viewportZoom';
 import { useLumenPreview, type UseLumenPreviewResult } from '../hooks/useLumenPreview';
+import { useDualZoomPan } from '../hooks/useDualZoomPan';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
 
@@ -55,6 +46,9 @@ interface SplitCompareViewportProps {
 /** 窗格级 LUMEN 渲染宽边（与单图视图一致）。 */
 const LUMEN_PANE_WIDTH = 1600;
 
+/** 双栏 hook 的栏序：第一栏是联动基准。模块级常量（hook 要求稳定引用）。 */
+const PANES = ['left', 'right'] as const;
+
 export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
   leftGroup,
   rightGroup,
@@ -70,28 +64,11 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
   onPrev,
   onNext,
 }) => {
-  const [syncZoom, setSyncZoom] = useState(true);
-  const [leftScale, setLeftScale] = useState(1);
-  const [leftPos, setLeftPos] = useState({ x: 0, y: 0 });
-  const [rightScale, setRightScale] = useState(1);
-  const [rightPos, setRightPos] = useState({ x: 0, y: 0 });
+  // 缩放/平移机器（联动/独立、绝对系拖拽、命中光标缩放、夹紧、换图复位）。
+  // 两栏 id 任一变化都算换图（F-03：不复位会 zoom 进新图的空白里）。
+  const zoom = useDualZoomPan(PANES, `${leftGroup?.id ?? ''}|${rightGroup?.id ?? ''}`);
 
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  // 最近一次交互的窗格：独立模式下 ± / 滚轮 / 拖拽的作用目标（M-01）。
-  // 不再在 mouseup 置空 —— 拖拽门控由 isDragging 负责。
-  const [focusedPane, setFocusedPane] = useState<'left' | 'right'>('left');
-
-  // C8：拖拽夹紧需要量测各栏容器与图像的渲染尺寸。
-  const paneRefs = useRef<{ left: HTMLDivElement | null; right: HTMLDivElement | null }>({
-    left: null,
-    right: null,
-  });
-  const imgRefs = useRef<{ left: HTMLImageElement | null; right: HTMLImageElement | null }>({
-    left: null,
-    right: null,
-  });
-
+  // C8：拖拽夹紧需要量测各栏容器与图像的渲染尺寸（refs 归 hook 内部持有）。
   // 两个窗格各自持有 LUMEN 解码实例（有 JPG 时 hook 内短路 → 零请求、零额外成本）。
   const leftLumen = useLumenPreview(leftGroup, lumenStatus ?? LUMEN_UNAVAILABLE, LUMEN_PANE_WIDTH);
   const rightLumen = useLumenPreview(rightGroup, lumenStatus ?? LUMEN_UNAVAILABLE, LUMEN_PANE_WIDTH);
@@ -99,164 +76,23 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
   const [leftLumenBroken, setLeftLumenBroken] = useState(false);
   const [rightLumenBroken, setRightLumenBroken] = useState(false);
 
-  const resetView = useCallback(() => {
-    setLeftScale(1);
-    setRightScale(1);
-    setLeftPos({ x: 0, y: 0 });
-    setRightPos({ x: 0, y: 0 });
-  }, []);
-
-  // Reset zoom & pan whenever either pane shows a different photo.
-  //
-  // Preview view already did this; split view did not, so advancing a
-  // candidate left you zoomed into empty space on the new image (F-03).
+  // Reset the LUMEN fallback latches whenever either pane shows a different photo.
   useEffect(() => {
-    resetView();
     setLeftLumenBroken(false);
     setRightLumenBroken(false);
-  }, [leftGroup?.id, rightGroup?.id, resetView]);
+  }, [leftGroup?.id, rightGroup?.id]);
 
   // 翻页/钉基准后，把焦点指向「当前会变的那一侧」，
   // 避免独立模式下 ± 去动一张静止的基准图（M-01 风险项）。
   useEffect(() => {
-    if (isLeftPinned && !isRightPinned) setFocusedPane('right');
-    else if (isRightPinned && !isLeftPinned) setFocusedPane('left');
-  }, [isLeftPinned, isRightPinned]);
-
-  const zoomBy = useCallback(
-    (factor: number) => {
-      if (syncZoom) {
-        // 联动：以左为基准拉齐两图
-        const next = clampScale(leftScale * factor);
-        setLeftScale(next);
-        setRightScale(next);
-      } else if (focusedPane === 'left') {
-        setLeftScale((s) => clampScale(s * factor));
-      } else {
-        setRightScale((s) => clampScale(s * factor));
-      }
-    },
-    [syncZoom, leftScale, focusedPane],
-  );
-
-  // 命中光标缩放（M-08）：每栏各自持有 rect，光标只可能在其中一栏。
-  // 联动模式下以**悬停栏**为锚点算一次，再把同一组 scale/pos 写给两栏；
-  // 独立模式下只动被悬停的那一栏（批次 B 的独立缩放语义不变）。
-  const handleWheel = (isLeft: boolean, e: React.WheelEvent) => {
-    e.preventDefault();
-    setFocusedPane(isLeft ? 'left' : 'right');
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const opts = { min: ZOOM_MIN, max: ZOOM_MAX, step: ZOOM_STEP };
-
-    if (syncZoom) {
-      const next = zoomAtPoint(e, rect, leftScale, leftPos, opts);
-      setLeftScale(next.scale);
-      setRightScale(next.scale);
-      setLeftPos(next.pos);
-      setRightPos(next.pos);
-    } else if (isLeft) {
-      const next = zoomAtPoint(e, rect, leftScale, leftPos, opts);
-      setLeftScale(next.scale);
-      setLeftPos(next.pos);
-    } else {
-      const next = zoomAtPoint(e, rect, rightScale, rightPos, opts);
-      setRightScale(next.scale);
-      setRightPos(next.pos);
-    }
-  };
-
-  // 单栏允许的最大平移量（C8）：缩放后图像超出该栏容器的半边尺寸。
-  const paneMaxPan = (side: 'left' | 'right', s: number) => {
-    const pane = paneRefs.current[side];
-    const img = imgRefs.current[side];
-    if (!pane || !img) return { x: Number.POSITIVE_INFINITY, y: Number.POSITIVE_INFINITY };
-    return {
-      x: Math.max(0, (img.offsetWidth * s - pane.clientWidth) / 2),
-      y: Math.max(0, (img.offsetHeight * s - pane.clientHeight) / 2),
-    };
-  };
-  const clampTo = (
-    p: { x: number; y: number },
-    maxX: number,
-    maxY: number,
-  ) => ({
-    x: Math.min(Math.max(p.x, -maxX), maxX),
-    y: Math.min(Math.max(p.y, -maxY), maxY),
-  });
-
-  // Left-click pan drag（C8：Pointer 事件 + 捕获，拖出容器不丢拽）
-  //
-  // 坐标系：**绝对系**（与 PreviewViewport 一致）。`dragGrab` 记的是「抓取点
-  // 相对图像原点的偏移」，move 时直接由当前客户端坐标反解出目标平移量。
-  //
-  // 原先这里是增量系（`dx = client - dragStart` 再把 client 写回 dragStart）：
-  // dragStart 是 React state，同帧内派发的两个 pointermove 会被批处理，
-  // 第二个 handler 读到**同一个旧 dragStart**，dx 被重复计算、位移丢一帧。
-  // 快速拖拽 / 低帧率下会放大成可见抖动。绝对系天然免疫。
-  const handlePointerDown = (isLeft: boolean, e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    // 覆盖层交互元素（设为基准、评分等）不进入拖拽。
-    if (e.target !== e.currentTarget) return;
-    setIsDragging(true);
-    setFocusedPane(isLeft ? 'left' : 'right');
-    const origin = isLeft ? leftPos : rightPos;
-    setDragStart(dragGrab(e.clientX, e.clientY, origin));
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-  };
-
-  const handlePointerMove = (e: React.PointerEvent) => {
-    if (!isDragging) return;
-    // 绝对系：由客户端坐标与抓取偏移反解目标平移量，与 dragStart 是否已提交无关。
-    const target = dragTarget(e.clientX, e.clientY, dragStart);
-
-    if (syncZoom) {
-      // 联动平移两栏：夹紧取两栏的公共边界，避免任一栏露空。
-      const lm = paneMaxPan('left', leftScale);
-      const rm = paneMaxPan('right', rightScale);
-      const mx = Math.min(lm.x, rm.x);
-      const my = Math.min(lm.y, rm.y);
-      setLeftPos(clampTo(target, mx, my));
-      setRightPos(clampTo(target, mx, my));
-    } else if (focusedPane === 'left') {
-      const m = paneMaxPan('left', leftScale);
-      setLeftPos(clampTo(target, m.x, m.y));
-    } else {
-      const m = paneMaxPan('right', rightScale);
-      setRightPos(clampTo(target, m.x, m.y));
-    }
-  };
-
-  const handlePointerUp = (e: React.PointerEvent) => {
-    if (!isDragging) return;
-    setIsDragging(false);
-    const host = e.currentTarget as HTMLElement;
-    if (host.hasPointerCapture(e.pointerId)) host.releasePointerCapture(e.pointerId);
-  };
-
-  // Double click to toggle fit (1.0x) / 250% and recentre
-  const handleDoubleClick = (isLeft: boolean) => {
-    setFocusedPane(isLeft ? 'left' : 'right');
-    const currentScale = isLeft ? leftScale : rightScale;
-    const targetScale = currentScale === 1 ? DOUBLE_CLICK_SCALE : 1;
-    if (syncZoom) {
-      setLeftScale(targetScale);
-      setRightScale(targetScale);
-      setLeftPos({ x: 0, y: 0 });
-      setRightPos({ x: 0, y: 0 });
-    } else if (isLeft) {
-      setLeftScale(targetScale);
-      setLeftPos({ x: 0, y: 0 });
-    } else {
-      setRightScale(targetScale);
-      setRightPos({ x: 0, y: 0 });
-    }
-  };
+    if (isLeftPinned && !isRightPinned) zoom.focusPane('right');
+    else if (isRightPinned && !isLeftPinned) zoom.focusPane('left');
+  }, [isLeftPinned, isRightPinned, zoom]);
 
   const renderPane = (
     group: PhotoGroupInfo | undefined,
     isLeft: boolean,
-    scale: number,
-    pos: { x: number; y: number },
+    transform: string,
     lumen: UseLumenPreviewResult,
     lumenBroken: boolean,
     markLumenBroken: () => void,
@@ -313,21 +149,21 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
     const isPinned = isLeft ? isLeftPinned : isRightPinned;
     const onTogglePin = isLeft ? onTogglePinLeft : onTogglePinRight;
     const shortcutHint = isLeft ? '[ 或 B' : '] 或 空格';
-    const isFocused = !syncZoom && focusedPane === (isLeft ? 'left' : 'right');
+    const pane = isLeft ? 'left' : 'right';
+    const bind = zoom.bindPane(pane);
+    const isFocused = !zoom.sync && zoom.activePane === pane;
 
     return (
       <div
-        ref={(el) => {
-          paneRefs.current[isLeft ? 'left' : 'right'] = el;
-        }}
-        onWheel={(e) => handleWheel(isLeft, e)}
-        onPointerDown={(e) => handlePointerDown(isLeft, e)}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-        onDoubleClick={() => handleDoubleClick(isLeft)}
+        ref={bind.ref}
+        onWheel={bind.onWheel}
+        onPointerDown={bind.onPointerDown}
+        onPointerMove={bind.onPointerMove}
+        onPointerUp={bind.onPointerUp}
+        onPointerCancel={bind.onPointerUp}
+        onDoubleClick={bind.onDoubleClick}
         className={`relative flex-1 bg-background-surface overflow-hidden flex items-center justify-center border-r border-border-subtle last:border-r-0 select-none ${
-          isDragging ? 'cursor-grabbing' : 'cursor-grab'
+          zoom.isDragging ? 'cursor-grabbing' : 'cursor-grab'
         } ${isPinned ? 'ring-2 ring-inset ring-amber-500/50' : ''}`}
       >
         {/* 当前聚焦窗格的可见提示（独立模式下 ± / 滚轮作用于它）。
@@ -341,9 +177,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
 
         {src && (
           <img
-            ref={(el) => {
-              imgRefs.current[isLeft ? 'left' : 'right'] = el;
-            }}
+            ref={zoom.imgRef(pane)}
             src={src}
             alt={group.baseName}
             draggable={false}
@@ -352,8 +186,8 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
               if (lumen.url && !lumenBroken) markLumenBroken();
             }}
             style={{
-              transform: `translate(${pos.x}px, ${pos.y}px) scale(${scale})`,
-              transition: isDragging ? 'none' : 'transform 0.05s ease-out',
+              transform,
+              transition: zoom.isDragging ? 'none' : 'transform 0.05s ease-out',
               imageOrientation: 'from-image',
               filter: toneFilter,
             }}
@@ -503,11 +337,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
     );
   };
 
-  const effectiveScale = syncZoom
-    ? leftScale
-    : focusedPane === 'left'
-    ? leftScale
-    : rightScale;
+  const effectiveScale = zoom.effectiveScale;
 
   return (
     <div className="flex-1 flex flex-col h-full w-full bg-background-surface relative">
@@ -540,7 +370,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
           {/* Zoom: – / readout / reset / + */}
           <div className="flex items-center gap-0.5 bg-white/10 rounded text-[11px]">
             <button
-              onClick={() => zoomBy(1 / ZOOM_STEP)}
+              onClick={() => zoom.zoomBy(1 / ZOOM_STEP)}
               disabled={effectiveScale <= ZOOM_MIN}
               className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-l active:scale-[0.96] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               title="缩小"
@@ -548,32 +378,32 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             >
               <ZoomOut className="w-3.5 h-3.5" aria-hidden="true" />
             </button>
-            {syncZoom ? (
+            {zoom.sync ? (
               <span
                 className="font-mono tabular-nums text-white/80 w-10 text-center"
-                aria-label={`当前缩放 ${scaleLabel(leftScale)}`}
+                aria-label={`当前缩放 ${scaleLabel(zoom.scaleOf('left'))}`}
               >
-                {scaleLabel(leftScale)}
+                {scaleLabel(zoom.scaleOf('left'))}
               </span>
             ) : (
               <span
                 className="font-mono tabular-nums text-white/80 px-1 text-center flex items-center gap-1"
-                aria-label={`当前缩放：左 ${scaleLabel(leftScale)}，右 ${scaleLabel(
-                  rightScale,
-                )}（聚焦${focusedPane === 'left' ? '左' : '右'}图）`}
+                aria-label={`当前缩放：左 ${scaleLabel(zoom.scaleOf('left'))}，右 ${scaleLabel(
+                  zoom.scaleOf('right'),
+                )}（聚焦${zoom.activePane === 'left' ? '左' : '右'}图）`}
               >
-                <span className={focusedPane === 'left' ? 'text-white' : 'text-white/60'}>
-                  L {scaleLabel(leftScale)}
+                <span className={zoom.activePane === 'left' ? 'text-white' : 'text-white/60'}>
+                  L {scaleLabel(zoom.scaleOf('left'))}
                 </span>
                 <span className="text-white/25">/</span>
-                <span className={focusedPane === 'right' ? 'text-white' : 'text-white/60'}>
-                  R {scaleLabel(rightScale)}
+                <span className={zoom.activePane === 'right' ? 'text-white' : 'text-white/60'}>
+                  R {scaleLabel(zoom.scaleOf('right'))}
                 </span>
               </span>
             )}
             <button
-              onClick={() => zoomBy(ZOOM_STEP)}
-              disabled={effectiveScale >= ZOOM_MAX}
+              onClick={() => zoom.zoomBy(ZOOM_STEP)}
+              disabled={zoom.effectiveScale >= ZOOM_MAX}
               className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 active:scale-[0.96] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               title="放大"
               aria-label="放大双图"
@@ -581,10 +411,10 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
               <ZoomIn className="w-3.5 h-3.5" aria-hidden="true" />
             </button>
             <button
-              onClick={resetView}
+              onClick={zoom.reset}
               className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-r active:scale-[0.96] transition-colors"
-              title={`重置缩放与平移（当前 ${scaleLabel(effectiveScale)}）`}
-              aria-label={`重置缩放与平移（当前 ${scaleLabel(effectiveScale)}）`}
+              title={`重置缩放与平移（当前 ${scaleLabel(zoom.effectiveScale)}）`}
+              aria-label={`重置缩放与平移（当前 ${scaleLabel(zoom.effectiveScale)}）`}
             >
               <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
             </button>
@@ -592,23 +422,23 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
 
           {/* Sync Zoom toggle */}
           <button
-            onClick={() => setSyncZoom(!syncZoom)}
+            onClick={zoom.toggleSync}
             className={`focus-ring flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium active:scale-[0.96] transition-colors ${
-              syncZoom
+              zoom.sync
                 ? 'bg-white text-black shadow-sm'
                 : 'bg-background-surface-hover text-white/70 hover:text-white hover:bg-white/10'
             }`}
             title="开启后双图同步缩放和平移；关闭后滚轮/拖拽/± 只作用于聚焦窗格"
             aria-label="切换双图联动同步缩放"
-            aria-pressed={syncZoom}
+            aria-pressed={zoom.sync}
           >
-            {syncZoom ? (
+            {zoom.sync ? (
               <Link className="w-3 h-3" aria-hidden="true" />
             ) : (
               <Unlink className="w-3 h-3" aria-hidden="true" />
             )}
             <span className="pb-[1px] whitespace-nowrap">
-              {syncZoom ? '联动同步开启' : '独立缩放'}
+              {zoom.sync ? '联动同步开启' : '独立缩放'}
             </span>
           </button>
         </div>
@@ -619,8 +449,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
         {renderPane(
           leftGroup,
           true,
-          leftScale,
-          leftPos,
+          zoom.transformOf('left'),
           leftLumen,
           leftLumenBroken,
           () => setLeftLumenBroken(true),
@@ -628,8 +457,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
         {renderPane(
           rightGroup,
           false,
-          rightScale,
-          rightPos,
+          zoom.transformOf('right'),
           rightLumen,
           rightLumenBroken,
           () => setRightLumenBroken(true),
