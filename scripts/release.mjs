@@ -55,9 +55,12 @@ try {
   console.log('🔑 成功提取更新包数字签名。');
 
   // 5. 生成 updater.json
+  // 更新提示文案：默认简短一句；发布时可传 RELEASE_NOTES 覆盖，
+  // 例如 RELEASE_NOTES="$(cat release-notes.md)" node scripts/release.mjs
+  const notes = (process.env.RELEASE_NOTES || '').trim() || "🚀 应用有新版本发布啦！";
   const updaterObj = {
     version: `v${version}`,
-    notes: "🚀 应用有新版本发布啦！",
+    notes,
     pub_date: new Date().toISOString(),
     platforms: {
       "windows-x86_64": {
