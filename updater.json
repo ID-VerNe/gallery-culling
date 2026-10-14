@@ -1,11 +1,11 @@
 {
-  "version": "v1.1.1",
-  "notes": "🚀 应用有新版本发布啦！",
-  "pub_date": "2026-09-17T07:52:58.265Z",
+  "version": "v2.0.0",
+  "notes": "v2.0.0 正式版 🎉\n\n• 接入 LUMEN RAW 引擎：随包分发、运行时自动发现，支持真实 RAW 解码预览\n• 双向评级同步：与 LUMEN RAW 互相同步星级/旗标\n• AI 蒙版与引擎能力探测（按磁盘事实判定 GPU 形态）\n• 修复 XMP 数据安全问题：不再破坏第三方 XMP，修复 RAW 配对时丢评级\n• 新增真窗口 E2E 基座，覆盖扫描/评级/导航/调色/导出/会话恢复\n\n建议尽快更新，XMP 相关修复可避免此前打的分丢失。",
+  "pub_date": "2026-10-14T09:49:53.467Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNHI5bm4yZ0JDL090K0xSbjNCTE9mb24ranR6M0daTkQ4UDdTV1M3ZUNlV04rbHRaTG9vQStQaURmUnM4ZDBBVzYxOE9HZHkrQnNCQjJPeUtUaE9SUGc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NjMxNTc3CWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzEuMS4xX3g2NC1zZXR1cC5leGUKdHptSiswTTF2REdkUXV3ekxYcVlQam5KRGhYb1FaSmY0MUxXRXN6YjhQZ3B2Z3lOdGcxWHRxdmwwaVRzMjZWSEIvNldzMUdnMS9BWXJMcVVkbU5qQVE9PQo=",
-      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v1.1.1/gallery-culling_1.1.1_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNGhEWVQwSzlTNjk2aEdZN0NGeWFpOHpiZDRaL3lZZm1FaW5LNkZCazc4cFE5YXhoQ2dod0graEZlT2ZKTjJDUUFQZGIvaEVqVW54bDJheE5ldUJ3ekFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxOTcxMzkzCWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC4wX3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjAuMAo4R1RFNXBjOWN2VDdxMnkwWEJud2d2cWRyc1Q0eDNVL2tBRzRLb08wdnNIb0xmT0N1NHkrUXIrVlVtMlRQa1pwdHVQRmt2U0FmTFN0cGs3ZmhSbGZEQT09Cg==",
+      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.0/gallery-culling_2.0.0_x64-setup.exe"
     }
   }
 }
