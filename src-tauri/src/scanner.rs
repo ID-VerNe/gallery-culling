@@ -308,34 +308,44 @@ pub fn scan_folders(
             };
 
             // Detect XMP from RAW first, then JPG
+            //
+            // 两条路径**各自独立判定**，不是 `if raw {} else if jpg {}`：
+            // 配了 RAW 目录后 sidecar 可能仍只存在于 JPG 旁（历史评级就是这么写的），
+            // 用 else 会把那份直接跳过，界面上表现为「配了 RAW 之后评的分全没了」。
+            // RAW 侧优先，JPG 侧兜底；两边都没有就不动。
             let mut has_xmp = false;
             let mut rating = 0u8;
             let mut flag = "none".to_string();
             let mut xmp_meta: Option<XmpMetadata> = None;
 
-            if let Some(raw) = &raw_opt {
-                let raw_p = Path::new(&raw.path);
-                if check_sidecar_exists(raw_p) {
-                    has_xmp = true;
-                    let xmp_path = get_xmp_path(raw_p);
-                    if let Some(m) = read_xmp_full(&xmp_path) {
-                        rating = m.rating;
-                        // 统一映射（Rating=-1 / Label 约定见 xmp::flag_from_xmp）
-                        flag = flag_from_xmp(&m);
-                        xmp_meta = Some(m);
-                    }
+            let read_sidecar_of = |path: &str, has_xmp: &mut bool, rating: &mut u8,
+                                       flag: &mut String, xmp_meta: &mut Option<XmpMetadata>| {
+                let p = Path::new(path);
+                if !check_sidecar_exists(p) {
+                    return;
                 }
-            } else if let Some(jpg) = &jpg_opt {
-                let jpg_p = Path::new(&jpg.path);
-                if check_sidecar_exists(jpg_p) {
-                    has_xmp = true;
-                    let xmp_path = get_xmp_path(jpg_p);
-                    if let Some(m) = read_xmp_full(&xmp_path) {
-                        rating = m.rating;
-                        // 统一映射（Rating=-1 / Label 约定见 xmp::flag_from_xmp）
-                        flag = flag_from_xmp(&m);
-                        xmp_meta = Some(m);
-                    }
+                *has_xmp = true;
+                if let Some(m) = read_xmp_full(&get_xmp_path(p)) {
+                    *rating = m.rating;
+                    // 统一映射（Rating=-1 / Label 约定见 xmp::flag_from_xmp）
+                    *flag = flag_from_xmp(&m);
+                    *xmp_meta = Some(m);
+                }
+            };
+
+            if let Some(raw) = &raw_opt {
+                read_sidecar_of(&raw.path, &mut has_xmp, &mut rating, &mut flag, &mut xmp_meta);
+            }
+            // JPG 侧仅在 RAW 侧没读到时才作为兜底，避免 RAW 侧的值被覆盖
+            if xmp_meta.is_none() {
+                if let Some(jpg) = &jpg_opt {
+                    read_sidecar_of(
+                        &jpg.path,
+                        &mut has_xmp,
+                        &mut rating,
+                        &mut flag,
+                        &mut xmp_meta,
+                    );
                 }
             }
 
@@ -534,6 +544,67 @@ mod tests {
         // 且并集恰好覆盖两侧全部词干、无重复
         assert_eq!(got.len(), 6, "并集应为 6 个唯一词干");
         assert_eq!(got.iter().collect::<HashSet<_>>().len(), got.len(), "不得有重复");
+    }
+
+    /// 回归：一张照片同时有 JPG + RAW，而 sidecar **只存在于 JPG 旁**时，
+    /// 星级/旗标必须仍被读到。
+    ///
+    /// 缺陷：XMP 解析写成 `if raw { … } else if jpg { … }`，配了 RAW 目录后
+    /// JPG 旁的 sidecar 被**整个跳过**，用户此前在 JPG 侧打的分/旗标在界面上
+    /// 一律变成「未打分」（e2e 实测：12 张里带 XMP 的 3 张配了 RAW 后全部丢分）。
+    /// 注释本就写着 "Detect XMP from RAW first, then JPG"（意为回退），
+    /// 紧接着的 EXIF 块用的也是带回退的写法。
+    #[test]
+    fn jpg_sidecar_is_read_even_when_a_raw_pair_exists() {
+        let jpg_dir = unique_dir("xmp_jpg");
+        let raw_dir = unique_dir("xmp_raw");
+
+        fs::write(jpg_dir.join("A0001.jpg"), b"jpeg").unwrap();
+        fs::write(raw_dir.join("A0001.ARW"), b"raw").unwrap();
+        // sidecar 只写在 JPG 旁（RAW 旁没有）
+        fs::write(
+            jpg_dir.join("A0001.xmp"),
+            "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
+             <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n\
+             \x20 <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n\
+             \x20  <rdf:Description rdf:about=\"\"\n\
+             \x20    xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\">\n\
+             \x20   <xmp:Rating>4</xmp:Rating>\n\
+             \x20   <xmp:Label>Green</xmp:Label>\n\
+             \x20  </rdf:Description>\n\
+             \x20 </rdf:RDF>\n\
+             </x:xmpmeta>\n",
+        )
+        .unwrap();
+        assert!(
+            !raw_dir.join("A0001.xmp").exists(),
+            "前提：RAW 旁不应有 sidecar"
+        );
+
+        let cancel = AtomicBool::new(false);
+        let res = scan_folders(
+            jpg_dir.to_str().unwrap(),
+            Some(raw_dir.to_str().unwrap()),
+            "filename",
+            &cancel,
+            |_, _, _| {},
+        )
+        .expect("扫描应成功");
+
+        let g = res
+            .groups
+            .iter()
+            .find(|g| g.base_name == "A0001")
+            .expect("应产出 A0001 组");
+        assert_eq!(
+            g.rating, 4,
+            "配了 RAW 后 JPG 旁的星级被跳过（应为 4）"
+        );
+        assert_eq!(g.flag, "pick", "JPG 旁的 Label=Green 应读回 pick");
+        assert!(g.has_xmp, "has_xmp 应为真");
+
+        let _ = fs::remove_dir_all(&jpg_dir);
+        let _ = fs::remove_dir_all(&raw_dir);
     }
 
     /// 扫描主循环的取消检查点：预置取消标志 → 返回 Err(哨兵)，且不产出结果。

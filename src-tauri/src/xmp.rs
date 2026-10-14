@@ -165,10 +165,19 @@ const OURS_NAMESPACES: [(/* prefix */ &str, /* uri */ &str); 4] = [
 ///
 /// 缩进与 `\x20` 转义沿用历史输出：写出的字节必须与既有侧边栏逐字节一致，
 /// 否则 Lightroom 会把文件当成模板更换，重写 develop 数据。
+///
+/// ⚠️ 换行必须是 `\n`（真换行），且**最后一条声明要顺带闭合开标签的 `>`**。
+/// 见 `namespace_declarations_use_real_newlines_not_literal_backslash_n`。
 fn xmlns_declarations() -> String {
+    let total = OURS_NAMESPACES.len();
     OURS_NAMESPACES
         .iter()
-        .map(|(prefix, uri)| format!("        xmlns:{}=\"{}\"\\n", prefix, uri))
+        .enumerate()
+        .map(|(i, (prefix, uri))| {
+            // 末条声明以 `>` 收尾，闭合 `<rdf:Description rdf:about=""`
+            let closer = if i + 1 == total { ">\n" } else { "\n" };
+            format!("        xmlns:{}=\"{}\"{}", prefix, uri, closer)
+        })
         .collect()
 }
 
@@ -730,6 +739,62 @@ mod tests {
         assert!(after.contains("<crs:Exposure2012>+0.65</crs:Exposure2012>"));
         // 单个 rdf:Description（本方块）
         assert_eq!(after.matches("<rdf:Description").count(), 1);
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    /// 命名空间声明行之间必须是**真换行**，不能是字面量 `\n`（反斜杠 + n）。
+    ///
+    /// 回归：BE-05 的 DRY 抽取把 `xmlns_declarations()` 写成
+    /// `format!("...\\n")`，`\\n` 在普通字符串字面量里是**反斜杠+n 两个字符**，
+    /// 于是四条声明挤进标签内部，产出**解析器拒绝的 XML**（标签内出现非法 `\`）。
+    /// 宿主自带的宽松字符串解析器读得回来，所以快照测试与 126 条 Rust 用例
+    /// 全绿；只有真实 XMP 消费方（Lightroom / Capture One / Bridge）会拒绝。
+    /// 上面的 `write_fresh_document_is_byte_identical_to_legacy` 名字虽叫
+    /// byte-identical，实际只做了若干 `contains`，覆盖不到这一条。
+    #[test]
+    fn namespace_declarations_use_real_newlines_not_literal_backslash_n() {
+        let img = std::env::temp_dir().join(format!("xmp_nl_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        let _ = fs::remove_file(&xmp);
+
+        let meta = XmpMetadata { rating: 2, ..Default::default() };
+        write_xmp_preserving(&img, &meta).unwrap();
+        let after = fs::read_to_string(&xmp).unwrap();
+
+        // 全文不得出现字面量 \n（反斜杠 + n）
+        assert!(
+            !after.contains("\\n"),
+            "写出的 XMP 含字面量 \\n，XML 非法：\n{}",
+            after
+        );
+
+        // 四条声明各自以真换行收尾，且保持 xmp -> aux -> exif -> crs 顺序
+        for (i, (prefix, uri)) in OURS_NAMESPACES.iter().enumerate() {
+            // 末条顺带闭合开标签，故期望 `">\n` 而非 `"\n`
+            let closer = if i + 1 == OURS_NAMESPACES.len() { ">\n" } else { "\n" };
+            assert!(
+                after.contains(&format!("        xmlns:{}=\"{}\"{}", prefix, uri, closer)),
+                "namespace 声明结尾异常: xmlns:{}",
+                prefix
+            );
+        }
+
+        // 末条声明必须顺带闭合 `<rdf:Description` 开标签
+        assert!(
+            after.contains(&format!(
+                "        xmlns:crs=\"{}\">\n",
+                OURS_NAMESPACES[3].1
+            )),
+            "末条 namespace 声明未闭合 <rdf:Description 开标签：\n{}",
+            after
+        );
+
+        // rdf:Description 开标签必须真的闭合（引号后紧跟换行/空白，而非反斜杠）
+        assert!(
+            !after.contains("rdf:about=\"\"\\n"),
+            "rdf:Description 开标签被字面量 \\n 截断"
+        );
 
         let _ = fs::remove_file(&xmp);
     }
