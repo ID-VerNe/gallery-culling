@@ -1,11 +1,11 @@
 {
-  "version": "v2.0.0",
-  "notes": "v2.0.0 正式版 🎉\n\n• 接入 LUMEN RAW 引擎：随包分发、运行时自动发现，支持真实 RAW 解码预览\n• 双向评级同步：与 LUMEN RAW 互相同步星级/旗标\n• AI 蒙版与引擎能力探测（按磁盘事实判定 GPU 形态）\n• 修复 XMP 数据安全问题：不再破坏第三方 XMP，修复 RAW 配对时丢评级\n• 新增真窗口 E2E 基座，覆盖扫描/评级/导航/调色/导出/会话恢复\n\n建议尽快更新，XMP 相关修复可避免此前打的分丢失。",
-  "pub_date": "2026-10-14T09:49:53.467Z",
+  "version": "v2.0.1",
+  "notes": "v2.0.1 修复版\n\n• 修复 LUMEN 预设不落盘（套用后重启丢失）\n• 修复「自动」调色无反应（失败现在必有提示）\n• 修复启动时弹出控制台黑框\n• 修复预设下拉不显示已套用的预设名\n• 修复打开应用即静默扫描、扫描完成覆盖手动选择\n• 修复 WebView2 GPU 崩溃导致的白屏\n\n建议更新：预设与自动调色修复直接恢复核心编辑流程。",
+  "pub_date": "2026-10-15T11:58:59.360Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNGhEWVQwSzlTNjk2aEdZN0NGeWFpOHpiZDRaL3lZZm1FaW5LNkZCazc4cFE5YXhoQ2dod0graEZlT2ZKTjJDUUFQZGIvaEVqVW54bDJheE5ldUJ3ekFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxOTcxMzkzCWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC4wX3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjAuMAo4R1RFNXBjOWN2VDdxMnkwWEJud2d2cWRyc1Q0eDNVL2tBRzRLb08wdnNIb0xmT0N1NHkrUXIrVlVtMlRQa1pwdHVQRmt2U0FmTFN0cGs3ZmhSbGZEQT09Cg==",
-      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.0/gallery-culling_2.0.0_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNGpxUktBcDNXWWc4ei9IV2tUSzZ3bzZ0YUJ5KzZEa2hOellBOTU1RytXbXY2N3RtUDBoQTNSNS84V0NmMk5hdit2Q3ZGRGpoTUJLbVREaVJVdmJtRUE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMDY1NTM5CWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC4xX3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjAuMQpjVXArdVE1Qld3blBucmE3bURQUktiTkdKNHJtQTQzVUxHWmk2N3VKL1huRlp1TlZrUDJhTWhDdldUeWxsdkRQVXl0THJMM0U3NmxXSkxxbVVNKzJDdz09Cg==",
+      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.1/gallery-culling_2.0.1_x64-setup.exe"
     }
   }
 }
