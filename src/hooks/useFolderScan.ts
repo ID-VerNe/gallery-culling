@@ -20,18 +20,27 @@ interface ScanResult {
  * 参数表」的返工。
  */
 export function useFolderScan(opts: {
-  /** 扫描成功后把结果交给上层（集合/对比/调色各自消费）。 */
+  /**
+   * 扫描成功后把结果交给上层（集合/对比/调色各自消费）。
+   *
+   * `selectedIndexAtStart` = 扫描**启动那一刻**的选中索引（由 `getSelectedIndex`
+   * 提供；调用方未提供则为 null）。完成回调里若它与「当前值」不同，说明用户在
+   * 扫描窗口内改过选中 —— 上层必须优先尊重用户操作，而不是恢复会话位置。
+   */
   onScanned: (
     groups: ScanResult['groups'],
     initialTones: Record<string, ToneAdjustments>,
     historyIndex: number | null,
+    selectedIndexAtStart: number | null,
   ) => void;
   /** 重新扫描前清空撤销栈：旧快照可能已指向不存在的照片。 */
   beforeScan?: () => void;
   /** 扫描结束后把本次目录记为默认。 */
   persistFolders: (jpg: string, raw: string, sortOrder: SortOrder) => void;
+  /** 取「当前选中索引」；用于扫描启动时的快照（判定用户是否在扫描期间动过）。 */
+  getSelectedIndex?: () => number;
 }) {
-  const { onScanned, beforeScan, persistFolders } = opts;
+  const { onScanned, beforeScan, persistFolders, getSelectedIndex } = opts;
 
   const toast = useToast();
   const [jpgFolder, setJpgFolder] = useState('');
@@ -56,6 +65,11 @@ export function useFolderScan(opts: {
 
   const handleScan = useCallback(async () => {
     if (!jpgFolder.trim()) return;
+    // 扫描是异步的（几百 ms 到几秒）：在**任何 await 之前**快照选中索引，
+    // 完成时交给 onScanned 判定「用户在扫描窗口内是否动过选中」。
+    // 没有这一步，扫描完成会用会话 lastIndex 无条件覆盖用户的点击
+    // （2026-10-15 e2e run5 实锤：点击 IMG_010 被翻回 IMG_011，apply 写错文件）。
+    const selectedIndexAtStart = getSelectedIndex?.() ?? null;
     setIsLoading(true);
     // 每次重新扫描都先清掉上一轮的错误，避免旧故障文案挂在新扫描上。
     setScanError(null);
@@ -74,7 +88,7 @@ export function useFolderScan(opts: {
       // Check session history for this folder
       const history = await api.loadSession(jpgFolder);
 
-      onScanned(res.groups, initialTones, history ? history[0] : null);
+      onScanned(res.groups, initialTones, history ? history[0] : null, selectedIndexAtStart);
 
       // Save as default in settings
       persistFolders(jpgFolder, rawFolder, sortOrder);
@@ -116,6 +130,7 @@ export function useFolderScan(opts: {
     beforeScan,
     onScanned,
     persistFolders,
+    getSelectedIndex,
   ]);
 
   /**
@@ -129,20 +144,29 @@ export function useFolderScan(opts: {
     });
   }, [scanCancel, toast]);
 
-  // Re-scan when the sort order changes.
+  // Re-scan when the sort order changes —— **仅限用户主动改排序**。
   //
-  // The previous version called `handleScan()` from the onChange handler,
-  // which captured the *previous* `sortOrder` — every sort change re-scanned
-  // with the stale order (F-12).
+  // 上一版从 onChange 里直接调 `handleScan()`，闭包拿到的是**旧** sortOrder，
+  // 每次改排序都用旧值重扫（F-12）—— 改成 effect 监听 [sortOrder]，由新值驱动。
   //
-  // The guard skips the value that arrived with the saved settings, so
-  // restoring a session does not silently launch a scan.
-  const sortOrderInitialised = useRef(false);
+  // 旧版用「跳过首次」guard 想挡住「settings 回填顺带带回的 sortOrder」，
+  // 但 settings 是**异步**加载（useAppSettings 在 useEffect 里 fetch），回填
+  // 必然晚于本 effect 首次运行 —— guard 早已置位，迟到变化照样触发扫描：
+  // 打开应用即静默自动扫描（2026-10-15 e2e run5 实锤：该次自动扫描与手动
+  // 扫描并发，两次会话恢复把用户的点击覆盖掉）。
+  //
+  // 改为「来源标记」：只有经 `handleSortOrderChange`（用户操作）的改动才重扫；
+  // settings 回填走裸 `setSortOrder`，不置标记、不触发。
+  const sortOrderChangedByUser = useRef(false);
+  const handleSortOrderChange = useCallback((order: SortOrder) => {
+    sortOrderChangedByUser.current = true;
+    setSortOrder(order);
+  }, []);
   useEffect(() => {
-    if (!sortOrderInitialised.current) {
-      sortOrderInitialised.current = true;
-      return;
-    }
+    // 无条件消费标记：即使本次变化不触发扫描，也不给下次留脏状态。
+    const byUser = sortOrderChangedByUser.current;
+    sortOrderChangedByUser.current = false;
+    if (!byUser) return;
     if (!jpgFolder.trim()) return;
     void handleScan();
     // 依赖刻意是 [sortOrder] 而非 [handleScan]：
@@ -185,7 +209,10 @@ export function useFolderScan(opts: {
     handleBrowseRaw,
     setJpgFolder,
     setRawFolder,
+    /** 裸 setter：settings 回填专用（不触发重扫）。用户改排序走 handleSortOrderChange。 */
     setSortOrder,
+    /** 用户主动改排序：置来源标记并触发重扫。 */
+    handleSortOrderChange,
     dismissScanError: useCallback(() => setScanError(null), []),
   };
 }

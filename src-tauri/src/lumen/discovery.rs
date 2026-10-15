@@ -4,7 +4,6 @@
 //! 全部是纯函数，环境目录由参数或 current_exe 注入，便于测试。
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// 返回候选路径中第一个真实存在的（顺序即优先级）。
 pub fn first_existing(candidates: &[PathBuf]) -> Option<PathBuf> {
@@ -35,7 +34,7 @@ pub fn lumen_candidates(
 
 /// 在 PATH 中查找可执行文件（Windows `where`，失败视作未找到）。
 pub fn find_in_path(name: &str) -> Option<PathBuf> {
-    let output = Command::new("where").arg(name).output().ok()?;
+    let output = crate::proc::silent("where").arg(name).output().ok()?;
     if !output.status.success() {
         return None;
     }

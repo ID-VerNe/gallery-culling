@@ -138,15 +138,24 @@ export function useToneEditing(opts: {
 
   const handleAutoTone = useCallback(async () => {
     if (!currentGroup || isAutoToning) return;
-    const finish = (img: HTMLImageElement) => {
-      handleToneChange(computeAutoTone(img));
+    /** 采样并写入滑杆；失败返回 false（调用方决定回退，绝不静默）。 */
+    const finish = (img: HTMLImageElement): boolean => {
+      const result = computeAutoTone(img);
+      if (!result) return false;
+      handleToneChange(result);
       setIsAutoToning(false);
+      return true;
     };
 
     const loadAndFinish = (src: string) => {
       const tempImg = new Image();
       tempImg.crossOrigin = 'anonymous';
-      tempImg.onload = () => finish(tempImg);
+      tempImg.onload = () => {
+        if (finish(tempImg)) return;
+        // 副本也采不动（画布采样被拦截）→ 如实报错，不留「点了没反应」
+        setIsAutoToning(false);
+        toast.error('无法读取该照片的像素数据（画布采样被拦截），自动调色已取消。');
+      };
       tempImg.onerror = () => {
         setIsAutoToning(false);
         toast.error('无法读取该照片的像素数据，自动调色已取消。');
@@ -165,7 +174,10 @@ export function useToneEditing(opts: {
       rendered.naturalWidth > 0
     ) {
       setIsAutoToning(true);
-      finish(rendered);
+      if (finish(rendered)) return;
+      // 渲染图采样失败（历史遗留的 canvas 污染，问题二）→ 用带 CORS 的
+      // 副本重采样兜底；副本也失败会在 onload/onerror 里如实报错。
+      loadAndFinish(rendered.src);
       return;
     }
 

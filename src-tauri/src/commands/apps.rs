@@ -1,7 +1,6 @@
 //! 把照片交给外部程序：Photoshop、系统默认程序、回收站。
 
 use std::path::Path;
-use std::process::Command;
 
 use tauri::State;
 
@@ -27,7 +26,7 @@ pub async fn open_in_photoshop_cmd(
         return open_in_default_app_cmd(file_path).await;
     }
 
-    Command::new(&ps_path)
+    crate::proc::silent(&ps_path)
         .arg(&file_path)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -41,7 +40,7 @@ pub async fn open_in_photoshop_cmd(
 pub async fn open_in_default_app_cmd(file_path: String) -> Result<bool, String> {
     #[cfg(target_os = "windows")]
     {
-        Command::new("cmd")
+        crate::proc::silent("cmd")
             .args(["/c", "start", "", &file_path])
             .spawn()
             .map_err(|e| format!("无法使用系统默认程序打开文件: {}", e))?;
@@ -49,7 +48,7 @@ pub async fn open_in_default_app_cmd(file_path: String) -> Result<bool, String> 
 
     #[cfg(target_os = "macos")]
     {
-        Command::new("open")
+        crate::proc::silent("open")
             .arg(&file_path)
             .spawn()
             .map_err(|e| format!("无法使用系统默认程序打开文件: {}", e))?;
@@ -57,7 +56,7 @@ pub async fn open_in_default_app_cmd(file_path: String) -> Result<bool, String> 
 
     #[cfg(target_os = "linux")]
     {
-        Command::new("xdg-open")
+        crate::proc::silent("xdg-open")
             .arg(&file_path)
             .spawn()
             .map_err(|e| format!("无法使用系统默认程序打开文件: {}", e))?;

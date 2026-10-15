@@ -1,7 +1,6 @@
 //! 版本查询与前端握手状态映射。
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
@@ -54,7 +53,7 @@ pub fn parse_lumen_version(stdout: &str) -> Option<String> {
 
 /// 查询 sidecar 版本（真实 spawn `lumen-cli --version`，解析失败 = None）。
 pub fn query_version(exe: &Path) -> Option<String> {
-    let output = Command::new(exe).arg("--version").output().ok()?;
+    let output = crate::proc::silent(exe).arg("--version").output().ok()?;
     if !output.status.success() {
         return None;
     }

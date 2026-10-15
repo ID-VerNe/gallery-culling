@@ -1,13 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Locate Luminar AI executable path via Windows registry or default install directory
 pub fn find_luminar_executable() -> Option<PathBuf> {
     // 1. Query HKLM\SOFTWARE\Skylum\Luminar AI
     #[cfg(target_os = "windows")]
     {
-        if let Ok(output) = Command::new("reg")
+        if let Ok(output) = crate::proc::silent("reg")
             .args([
                 "query",
                 r"HKLM\SOFTWARE\Skylum\Luminar AI",
@@ -33,7 +32,7 @@ pub fn find_luminar_executable() -> Option<PathBuf> {
         }
 
         // 2. Query HKCU\SOFTWARE\Skylum\Luminar AI
-        if let Ok(output) = Command::new("reg")
+        if let Ok(output) = crate::proc::silent("reg")
             .args([
                 "query",
                 r"HKCU\SOFTWARE\Skylum\Luminar AI",
@@ -123,7 +122,7 @@ pub async fn edit_in_luminar(file_path: &Path) -> Result<PathBuf, String> {
 
     // Photoshop plugin protocol arguments reverse-engineered from LuminarAI.8bf:
     // "<exe>" "<target.tif>" photoshop "" origname "<orig_name>" document "Gallery Culling" display_dialog true
-    let mut cmd = Command::new(&luminar_exe);
+    let mut cmd = crate::proc::silent(&luminar_exe);
     cmd.arg(&target_tif)
         .arg("photoshop")
         .arg("")

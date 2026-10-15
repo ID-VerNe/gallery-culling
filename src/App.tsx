@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import { TopBar } from './components/TopBar';
 import { ThumbnailGrid } from './components/ThumbnailGrid';
 import { PreviewViewport } from './components/PreviewViewport';
@@ -84,6 +84,17 @@ function AppShell() {
   } = collection;
 
 
+  /**
+   * 最新选中索引的 ref 镜像：扫描完成的「用户是否动过」判定需要读**当前值**，
+   * 而 handleScanned 是空依赖 useCallback（闭包拿不到最新 state）。
+   * 渲染期赋值与 useSessionDebounce 的 sessionRef 同一模式。
+   */
+  const selectedIndexRef = useRef(selectedIndex);
+  selectedIndexRef.current = selectedIndex;
+
+  /** 稳定引用：useFolderScan 的 handleScan 依赖它，内联箭头会让 identity 抖动。 */
+  const getSelectedIndex = useCallback(() => selectedIndexRef.current, []);
+
   /** 乐观更新落回集合：评级、调色保存、AI 蒙版三处共用同一入口。 */
   const patchGroup = useCallback(
     (id: string, patch: Partial<PhotoGroupInfo>) => {
@@ -143,10 +154,21 @@ function AppShell() {
       scanned: PhotoGroupInfo[],
       initialTones: Record<string, ToneAdjustments>,
       historyIndex: number | null,
+      selectedIndexAtStart: number | null,
     ) => {
       setGroups(scanned);
       toneSeed(initialTones);
-      if (historyIndex !== null && historyIndex < scanned.length) {
+      // 扫描是异步的：若用户在扫描窗口内已经改过选中，恢复会话位置会**覆盖
+      // 用户操作**（2026-10-15 e2e run5 实锤：点击 IMG_010 被翻回 IMG_011，
+      // 随后的 apply 写错了文件）。快照相等（用户没动过）才按会话恢复。
+      const userMovedDuringScan =
+        selectedIndexAtStart !== null &&
+        selectedIndexAtStart !== selectedIndexRef.current;
+      if (userMovedDuringScan) {
+        // 尊重用户选择：只把旧索引钳制到新集合范围内，不做会话恢复。
+        setSelectedIndex((prev) => Math.max(0, Math.min(prev, scanned.length - 1)));
+        setCompareIndex((prev) => Math.max(0, Math.min(prev, scanned.length - 1)));
+      } else if (historyIndex !== null && historyIndex < scanned.length) {
         setSelectedIndex(historyIndex);
         setCompareIndex(Math.min(historyIndex + 1, scanned.length - 1));
       } else {
@@ -164,6 +186,7 @@ function AppShell() {
     // 重新扫描后旧快照指向的照片可能已不在列表里，撤销会写到一个不该碰的文件上。
     beforeScan: clearRatingUndo,
     persistFolders,
+    getSelectedIndex,
   });
   const {
     jpgFolder,
@@ -179,6 +202,7 @@ function AppShell() {
     setJpgFolder,
     setRawFolder,
     setSortOrder,
+    handleSortOrderChange,
     dismissScanError,
   } = scan;
   const [isHoldOriginal, setIsHoldOriginal] = useState(false);
@@ -440,7 +464,7 @@ function AppShell() {
         onFilterChange={handleFilterChange}
         filterCounts={filterCounts}
         sortOrder={sortOrder}
-        onSortChange={setSortOrder}
+        onSortChange={handleSortOrderChange}
         viewMode={external.viewMode}
         onViewModeChange={external.setViewMode}
         onOpenExportModal={() => setIsExportOpen(true)}

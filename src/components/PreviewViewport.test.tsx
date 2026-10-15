@@ -170,3 +170,22 @@ describe('PreviewViewport —— RAW-only 图片解析（C2）', () => {
     expect(container.querySelector('img')).toBeNull();
   });
 });
+
+/**
+ * 自动调色采样的 CORS 前提（问题二，2026-10-15）。
+ *
+ * 「自动」按钮会把视口这张 <img> 画进 canvas 再 getImageData。asset:// 是
+ * 跨源资源，缺 crossOrigin 时 canvas 被污染 → 采样抛 SecurityError →
+ * 用户看到「点了没反应」。真窗口 e2e 复现证据：断言B1=false +
+ * console.warn「The canvas has been tainted by cross-origin data.」。
+ * asset 协议对全部响应返回 ACAO（tauri 2.11.5 protocol/asset.rs），
+ * 故这里必须固定 crossOrigin="anonymous"。
+ */
+describe('PreviewViewport —— 自动调色采样的 CORS 前提', () => {
+  it('视口 img 带 crossOrigin="anonymous"（缺则 canvas 污染、采样必抛 SecurityError）', () => {
+    const { container } = renderViewport();
+    const img = container.querySelector('img') as HTMLImageElement;
+    expect(img).not.toBeNull();
+    expect(img.crossOrigin).toBe('anonymous');
+  });
+});
