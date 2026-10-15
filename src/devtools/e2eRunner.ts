@@ -309,6 +309,17 @@ async function scenarioLumenPreset(jpgFolder: string, el: () => string) {
     200,
   );
   raw(`[${el()}] >>> 断言A2 「已应用预设」toast = ${!!toastSeen}`);
+  // A3：用户 2026-10-15 报告的缺陷 —— 套用成功后下拉框应显示所选预设名，
+  // 而不是复位到「选择预设…」。名字在 apply+getToneState resolve 后才写入，
+  // 与 A2 同窗轮询（toast 出现时可能还差一拍）。
+  const presetShown = await waitFor(
+    () => (presetSel.value === pick.value ? presetSel.value : null),
+    10_000,
+    200,
+  );
+  raw(
+    `[${el()}] >>> 断言A3 预设下拉显示已套用名 = ${presetShown === pick.value}（显示="${presetSel.value}"，期望="${pick.value}"）`,
+  );
   raw(`[${el()}] 场景 A 结束`);
 
   // ── 场景 B：自动调色 ──────────────────────────────────

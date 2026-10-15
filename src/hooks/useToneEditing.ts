@@ -287,12 +287,14 @@ export function useToneEditing(opts: {
   /**
    * 应用 LUMEN RAW 内置预设（编辑态是进程内 session，后端保证 apply+save 同进程）。
    * 套完用统一读取把真实值拉回来，滑杆立刻反映。
+   * 返回值 = 是否真的成功（early return / catch 均为 false）：TonalAdjuster 的
+   * 预设下拉靠它决定要不要把名字标记为「已套用」—— 绝不先于事实显示。
    */
   const handleApplyLumenPreset = useCallback(
-    async (name: string) => {
-      if (!currentGroup) return;
+    async (name: string): Promise<boolean> => {
+      if (!currentGroup) return false;
       const targetPath = groupPath(currentGroup);
-      if (!targetPath) return;
+      if (!targetPath) return false;
       try {
         await api.applyLumenPreset(targetPath, name, 100);
         const st = await api.getToneState(targetPath);
@@ -300,9 +302,11 @@ export function useToneEditing(opts: {
         handleToneChange(st.tone);
         setToneDivergent(st.divergent);
         toast.success(`已应用预设「${name}」。`);
+        return true;
       } catch (err) {
         console.error('Failed to apply preset:', err);
         toast.error(`应用预设失败：${String(err)}`);
+        return false;
       }
     },
     [currentGroup, handleToneChange, toast, onGroupsPatched],

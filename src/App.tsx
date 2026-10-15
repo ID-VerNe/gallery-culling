@@ -576,6 +576,8 @@ function AppShell() {
               }
               lumenPresets={lumen.caps?.presets ?? []}
               aiAvailable={lumen.caps?.aiMasks ?? false}
+              /* 换照片（含箭头键切图，面板不卸载）时重置「已套用预设」显示 */
+              photoId={currentGroup?.id}
               onApplyPreset={lumenAvailable ? handleApplyLumenPreset : undefined}
               onClose={closeTonePanel}
               dirty={toneDirty}

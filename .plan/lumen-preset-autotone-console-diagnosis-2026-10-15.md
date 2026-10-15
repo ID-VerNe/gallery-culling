@@ -503,4 +503,59 @@ msSmartScreenProtection`，schema 明确警告），需手动带上；环境变�
    当前由 `src/devtools/e2eRunner.ts`（Plan B）承担同等场景——保留待 CDP
    环境恢复后再评估。
 
+---
+
+## 9. 后续修复：预设下拉套用后显示已套用名（2026-10-15 晚，用户报告）
+
+### 9.1 缺陷与根因
+
+- **报告**：套用预设成功后，下拉框仍显示「选择预设…」，而不是所选预设名。
+- **根因**：C4 落地时下拉是**非受控**组件（`defaultValue=""` + onChange 里
+  `e.target.value = ''` 手动复位）——复位本身是为了「确认前不显示未生效的
+  名字」，但成功路径**没有任何回写**，名字永远不会出现。属设计缺口。
+
+### 9.2 修复设计（显示 = 事实）
+
+- 新增 `appliedPreset` 状态 + 受控 `<select value={appliedPreset ?? ''}>`；
+- `onApplyPreset` 契约升级：**成功必须 resolve `true`、失败 `false`**
+  （`handleApplyLumenPreset` 的 early return / catch 均返回 false）。
+  名字只在拿到 `true` 后写入 —— 绝不先于事实显示；
+- 边界（均有单测）：
+  1. 确认前下拉保持原值（受控 value 使原生控件回弹）；
+  2. 套用失败不写标记（保留上一次成功名；首次失败停在占位）；
+  3. 取消不改标记；
+  4. 换照片（`photoId` prop 变化）**同一帧**重置（渲染期 setState，免闪
+     旧名帧）——箭头键切图时面板不卸载，名字不许跨照片残留；
+  5. 连续套用序号仲裁（`applySeqRef`）：前一次仍在飞行时又确认了新的，
+     迟到的旧结果被丢弃（与 Bug B 同类：异步结果不得翻转用户最新动作）。
+
+### 9.3 验证
+
+- 单测（`TonalAdjuster.test.tsx` 预设组 6 用例，替换旧「复位到占位项」断言）
+  覆盖：确认前 / 成功 / 失败 / 取消 / 换图 / 连续套用；
+- **变异验证三轮，全部精准命中**（方法论：替换断言瞄准的子串）：
+  | 变异 | 预期失败 | 实测 |
+  |------|---------|------|
+  | 去 seq 仲裁 + 去换图守卫 | 连续套用、换照片 | 恰好 2 条失败 ✓ |
+  | 去 `ok` 判断 | 失败不写标记 | 恰好 1 条失败 ✓ |
+  | `value=""`（等价旧缺陷） | 显示相关用例 | 恰好 5 条失败 ✓ |
+- e2e **run7**（零环境变量、fixtures 重建、watcher 监控）：
+  - **断言 A3 = true（显示="自然风光"）**，A1/A2/B1 全绿；
+  - `IMG_010.lumen` 19:24 落盘，md5 `614ed220…` —— **第五次运行逐字节一致**；
+  - WebView2 命令行实证 `--in-process-gpu` 与 wry 默认参数共存；
+  - watcher：进程 20s 出现、41s trap、无 60s 超时。
+- run6k（附加数据点）：改动经 HMR 触发的整页重载自动重跑，A3 首验 true；
+  fixtures 未重建，基线语义弱于 run7。
+- 门禁：`tsc --noEmit` exit 0；vitest 51 文件 / **348 用例**（+5 新用例）。
+
+### 9.4 涉及文件
+
+| 文件 | 改动 |
+|------|------|
+| `src/components/TonalAdjuster.tsx` | `appliedPreset` + 受控下拉 + `photoId` 守卫 + 序号仲裁 + `handleConfirmPreset` |
+| `src/hooks/useToneEditing.ts` | `handleApplyLumenPreset` 返回 `Promise<boolean>` |
+| `src/App.tsx` | 传 `photoId={currentGroup?.id}` |
+| `src/components/TonalAdjuster.test.tsx` | 预设组 6 用例（含变异验证） |
+| `src/devtools/e2eRunner.ts` | 场景 A 新增断言 A3 |
+
 

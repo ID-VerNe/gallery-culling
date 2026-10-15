@@ -6,7 +6,7 @@
  * 同时写 XMP 与 LUMEN RAW，引擎不可用时静默只写 XMP。
  */
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TonalAdjuster } from './TonalAdjuster';
 import { DEFAULT_TONE } from '../utils/autoTone';
@@ -32,8 +32,8 @@ function renderAdjuster(overrides: Partial<Props> = {}) {
     ...overrides,
   };
   const user = userEvent.setup();
-  render(<TonalAdjuster {...props} />);
-  return { props, user };
+  const view = render(<TonalAdjuster {...props} />);
+  return { props, user, view };
 }
 
 const saveBtn = () => screen.getByRole('button', { name: '保存调色' });
@@ -109,6 +109,7 @@ describe('TonalAdjuster —— 两侧调色分歧', () => {
 
 describe('TonalAdjuster —— LUMEN RAW 预设', () => {
   const presets = ['Neutral', 'Clarity Boost', 'Portra Warm'];
+  const presetSelect = () => screen.getByLabelText('LUMEN RAW 预设');
 
   it('lumenPresets 为空数组时不渲染下拉', () => {
     renderAdjuster({ lumenPresets: [], onApplyPreset: vi.fn() });
@@ -136,18 +137,112 @@ describe('TonalAdjuster —— LUMEN RAW 预设', () => {
     ]);
   });
 
-  it('选择预设调用 onApplyPreset(名称)，且下拉复位到占位项', async () => {
-    const onApplyPreset = vi.fn();
+  it('选择预设先弹二次确认：确认前不调用、下拉保持占位', async () => {
+    const onApplyPreset = vi.fn(async (): Promise<boolean> => true);
     const { user } = renderAdjuster({ lumenPresets: presets, onApplyPreset });
 
-    await user.selectOptions(screen.getByLabelText('LUMEN RAW 预设'), 'Clarity Boost');
-    // C4：写工程前有二次确认（下拉已复位到占位项）
-    expect(screen.getByLabelText('LUMEN RAW 预设')).toHaveValue('');
+    await user.selectOptions(presetSelect(), 'Clarity Boost');
+
+    // C4：写工程前有二次确认；名字只有确认且成功后才出现
+    expect(presetSelect()).toHaveValue('');
+    expect(onApplyPreset).not.toHaveBeenCalled();
+
     await user.click(screen.getByRole('button', { name: '套用并保存' }));
 
     expect(onApplyPreset).toHaveBeenCalledTimes(1);
     expect(onApplyPreset).toHaveBeenCalledWith('Clarity Boost');
-    expect(screen.getByLabelText('LUMEN RAW 预设')).toHaveValue('');
+  });
+
+  it('套用成功后下拉显示所选预设名（用户报告：不再复位到占位项）', async () => {
+    const onApplyPreset = vi.fn(async (): Promise<boolean> => true);
+    const { user } = renderAdjuster({ lumenPresets: presets, onApplyPreset });
+
+    await user.selectOptions(presetSelect(), 'Clarity Boost');
+    await user.click(screen.getByRole('button', { name: '套用并保存' }));
+
+    await waitFor(() => expect(presetSelect()).toHaveValue('Clarity Boost'));
+  });
+
+  it('套用失败不写标记：保留上一次成功的名字（绝不假装成功）', async () => {
+    const onApplyPreset = vi.fn(async (): Promise<boolean> => true);
+    onApplyPreset.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const { user } = renderAdjuster({ lumenPresets: presets, onApplyPreset });
+
+    await user.selectOptions(presetSelect(), 'Neutral');
+    await user.click(screen.getByRole('button', { name: '套用并保存' }));
+    await waitFor(() => expect(presetSelect()).toHaveValue('Neutral'));
+
+    await user.selectOptions(presetSelect(), 'Portra Warm');
+    await user.click(screen.getByRole('button', { name: '套用并保存' }));
+
+    // 第二次失败：显示必须停在 'Neutral' —— 不是 'Portra Warm'（失败不标记），
+    // 也不是占位（不抹掉已知成功的信息）
+    await waitFor(() => expect(onApplyPreset).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(presetSelect()).toHaveValue('Neutral');
+  });
+
+  it('二次确认取消：不改标记，上一次成功名保持', async () => {
+    const onApplyPreset = vi.fn(async (): Promise<boolean> => true);
+    const { user } = renderAdjuster({ lumenPresets: presets, onApplyPreset });
+
+    await user.selectOptions(presetSelect(), 'Neutral');
+    await user.click(screen.getByRole('button', { name: '套用并保存' }));
+    await waitFor(() => expect(presetSelect()).toHaveValue('Neutral'));
+
+    await user.selectOptions(presetSelect(), 'Portra Warm');
+    const dlg = await screen.findByRole('dialog');
+    await user.click(within(dlg).getByRole('button', { name: '取消' }));
+
+    expect(onApplyPreset).toHaveBeenCalledTimes(1);
+    expect(presetSelect()).toHaveValue('Neutral');
+  });
+
+  it('换照片（photoId 变化）重置显示：预设名不跨照片残留', async () => {
+    const onApplyPreset = vi.fn(async (): Promise<boolean> => true);
+    const { user, view, props } = renderAdjuster({
+      lumenPresets: presets,
+      onApplyPreset,
+      photoId: 'IMG_010',
+    });
+
+    await user.selectOptions(presetSelect(), 'Neutral');
+    await user.click(screen.getByRole('button', { name: '套用并保存' }));
+    await waitFor(() => expect(presetSelect()).toHaveValue('Neutral'));
+
+    // 箭头键切图时面板不卸载：仅换 photoId，显示必须回到占位项
+    view.rerender(<TonalAdjuster {...props} photoId="IMG_011" />);
+    expect(presetSelect()).toHaveValue('');
+  });
+
+  it('连续套用以最后一次确认为准：迟到的旧结果不覆盖新选择', async () => {
+    const resolvers: Array<(ok: boolean) => void> = [];
+    const onApplyPreset = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const { user } = renderAdjuster({ lumenPresets: presets, onApplyPreset });
+
+    await user.selectOptions(presetSelect(), 'Neutral');
+    await user.click(screen.getByRole('button', { name: '套用并保存' })); // 第 1 次（挂起）
+    await user.selectOptions(presetSelect(), 'Portra Warm');
+    await user.click(screen.getByRole('button', { name: '套用并保存' })); // 第 2 次（挂起）
+
+    // 第 2 次先成功 → 显示 'Portra Warm'
+    await act(async () => {
+      resolvers[1](true);
+    });
+    await waitFor(() => expect(presetSelect()).toHaveValue('Portra Warm'));
+
+    // 第 1 次现在才成功 —— 迟到的结果不许把显示翻回 'Neutral'
+    await act(async () => {
+      resolvers[0](true);
+    });
+    expect(presetSelect()).toHaveValue('Portra Warm');
   });
 
   it('aiAvailable=false 时说明需要 GPU 版本', () => {
