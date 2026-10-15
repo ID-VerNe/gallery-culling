@@ -149,6 +149,12 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           src={image.src}
           alt={group.baseName}
           draggable={false}
+          // 自动调色会对这张图做 canvas 采样（getImageData）。asset:// 是跨源
+          // 资源，不带 crossOrigin 时 canvas 被污染、采样必抛 SecurityError
+          // （表现为「自动按钮无反应」，2026-10-15 真窗口 e2e 复现）。asset 协议
+          // 对全部响应返回 Access-Control-Allow-Origin（tauri 2.11.5
+          // protocol/asset.rs），可安全启用。
+          crossOrigin="anonymous"
           onError={image.markBroken}
           style={{
             transform: zoom.transform,

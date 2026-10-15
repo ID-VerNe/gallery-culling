@@ -49,7 +49,17 @@ interface TonalAdjusterProps {
   lumenPresets?: string[];
   /** AI 蒙版是否可用（GPU flavor 才有）。false 时显示说明而不是假装能用。 */
   aiAvailable?: boolean;
-  onApplyPreset?: (name: string) => void;
+  /**
+   * 当前正在编辑的照片标识。换照片时重置「已套用预设」的下拉显示 ——
+   * 预设是逐张写进各自 .lumen 的，名字不能从上一张照片残留过来
+   * （箭头键切图时本面板不卸载，仅靠挂载/卸载兜不住）。
+   */
+  photoId?: string;
+  /**
+   * 套用预设。**成功必须 resolve `true`，失败 resolve `false`** ——
+   * 下拉框只在拿到 `true` 后才把名字标记为「已套用」，绝不先于事实显示。
+   */
+  onApplyPreset?: (name: string) => Promise<boolean> | boolean;
   /** 套用 AI 蒙版（GPU 版实测约 4s，UI 负责进度反馈） */
   onApplyMask?: (region: string, dehaze: number) => Promise<void>;
   /** 工程里现有的 AI 蒙版（读回，用于显示已套用） */
@@ -149,6 +159,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
   divergent = false,
   lumenPresets = [],
   aiAvailable = false,
+  photoId,
   onApplyPreset,
   onApplyMask,
   masks = [],
@@ -168,6 +179,19 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
   const [pendingMask, setPendingMask] = useState(false);
   /** T-03：重置调色需二次确认（与预设/蒙版一致）。 */
   const [pendingReset, setPendingReset] = useState(false);
+  /**
+   * 已成功套用的预设名（下拉框显示用）。只在下发链路 resolve `true` 后写入，
+   * 失败/取消一律不改 —— 显示的名字永远对应「确实写进了这张照片的 .lumen」。
+   */
+  const [appliedPreset, setAppliedPreset] = useState<string | null>(null);
+  /** 上一次渲染的 photoId：换照片的同一帧就清掉 appliedPreset（免闪一帧旧名）。 */
+  const [presetPhotoId, setPresetPhotoId] = useState(photoId);
+  if (presetPhotoId !== photoId) {
+    setPresetPhotoId(photoId);
+    setAppliedPreset(null);
+  }
+  /** 连续套用的序号：迟到的旧结果不许覆盖新选择（与 Bug B 同类：异步结果不得翻转用户最新动作）。 */
+  const applySeqRef = useRef(0);
 
   // 面板互换时（E 键 / 触发按钮）旧 DOM 被整棵卸载，焦点会退回 body。
   // 挂载时若焦点无主，就把焦点移入本面板容器，让读屏播报 region 名；
@@ -218,6 +242,20 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
     } finally {
       setIsMasking(false);
     }
+  };
+
+  /**
+   * 预设二次确认（C4）后的真正下发。「已套用」标记只在成功（resolve true）
+   * 后写入：失败时 hook 侧已有 toast 报错，这里绝不让名字先于事实出现。
+   * 序号仲裁：前一次还在飞行时又确认了新的，迟到的旧结果被丢弃 ——
+   * 显示永远以用户最后一次确认为准。
+   */
+  const handleConfirmPreset = async () => {
+    const name = pendingPreset;
+    if (!name) return;
+    const seq = ++applySeqRef.current;
+    const ok = await onApplyPreset?.(name);
+    if (seq === applySeqRef.current && ok) setAppliedPreset(name);
   };
 
   const handleSaveClick = async () => {
@@ -331,11 +369,13 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
           <div className="flex items-center gap-1.5">
             <select
               id="tonal-preset"
-              defaultValue=""
+              // 受控：显示「已成功套用」的预设名（没套过 = 占位项）。
+              // 选择新预设只开二次确认框、不改这里 —— 确认前下拉保持原值，
+              // 成功后才切换（见 handleConfirmPreset）。
+              value={appliedPreset ?? ''}
               onChange={(e) => {
                 // C4：先记下要套用的预设，弹二次确认后再真正下发。
                 if (e.target.value) setPendingPreset(e.target.value);
-                e.target.value = '';
               }}
               className="focus-ring flex-1 min-w-0 bg-background-base border border-border-default rounded-md px-2 py-1.5 text-white outline-none text-xs focus:border-white/40"
             >
@@ -500,7 +540,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
         isOpen={pendingPreset !== null}
         onClose={() => setPendingPreset(null)}
         onConfirm={() => {
-          if (pendingPreset) onApplyPreset?.(pendingPreset);
+          void handleConfirmPreset();
         }}
         title="套用 LUMEN RAW 预设"
         message={`将把「${pendingPreset ?? ''}」写入该照片的 LUMEN RAW 工程并保存。\n这会覆盖工程里当前的调色，且无法在本应用内撤销。`}

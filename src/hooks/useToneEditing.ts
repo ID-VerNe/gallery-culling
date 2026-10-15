@@ -138,15 +138,24 @@ export function useToneEditing(opts: {
 
   const handleAutoTone = useCallback(async () => {
     if (!currentGroup || isAutoToning) return;
-    const finish = (img: HTMLImageElement) => {
-      handleToneChange(computeAutoTone(img));
+    /** 采样并写入滑杆；失败返回 false（调用方决定回退，绝不静默）。 */
+    const finish = (img: HTMLImageElement): boolean => {
+      const result = computeAutoTone(img);
+      if (!result) return false;
+      handleToneChange(result);
       setIsAutoToning(false);
+      return true;
     };
 
     const loadAndFinish = (src: string) => {
       const tempImg = new Image();
       tempImg.crossOrigin = 'anonymous';
-      tempImg.onload = () => finish(tempImg);
+      tempImg.onload = () => {
+        if (finish(tempImg)) return;
+        // 副本也采不动（画布采样被拦截）→ 如实报错，不留「点了没反应」
+        setIsAutoToning(false);
+        toast.error('无法读取该照片的像素数据（画布采样被拦截），自动调色已取消。');
+      };
       tempImg.onerror = () => {
         setIsAutoToning(false);
         toast.error('无法读取该照片的像素数据，自动调色已取消。');
@@ -165,7 +174,10 @@ export function useToneEditing(opts: {
       rendered.naturalWidth > 0
     ) {
       setIsAutoToning(true);
-      finish(rendered);
+      if (finish(rendered)) return;
+      // 渲染图采样失败（历史遗留的 canvas 污染，问题二）→ 用带 CORS 的
+      // 副本重采样兜底；副本也失败会在 onload/onerror 里如实报错。
+      loadAndFinish(rendered.src);
       return;
     }
 
@@ -275,12 +287,14 @@ export function useToneEditing(opts: {
   /**
    * 应用 LUMEN RAW 内置预设（编辑态是进程内 session，后端保证 apply+save 同进程）。
    * 套完用统一读取把真实值拉回来，滑杆立刻反映。
+   * 返回值 = 是否真的成功（early return / catch 均为 false）：TonalAdjuster 的
+   * 预设下拉靠它决定要不要把名字标记为「已套用」—— 绝不先于事实显示。
    */
   const handleApplyLumenPreset = useCallback(
-    async (name: string) => {
-      if (!currentGroup) return;
+    async (name: string): Promise<boolean> => {
+      if (!currentGroup) return false;
       const targetPath = groupPath(currentGroup);
-      if (!targetPath) return;
+      if (!targetPath) return false;
       try {
         await api.applyLumenPreset(targetPath, name, 100);
         const st = await api.getToneState(targetPath);
@@ -288,9 +302,11 @@ export function useToneEditing(opts: {
         handleToneChange(st.tone);
         setToneDivergent(st.divergent);
         toast.success(`已应用预设「${name}」。`);
+        return true;
       } catch (err) {
         console.error('Failed to apply preset:', err);
         toast.error(`应用预设失败：${String(err)}`);
+        return false;
       }
     },
     [currentGroup, handleToneChange, toast, onGroupsPatched],

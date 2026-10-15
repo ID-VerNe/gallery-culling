@@ -12,8 +12,12 @@ export const DEFAULT_TONE: ToneAdjustments = {
 /**
  * Compute smart auto-tone parameters based on image histogram analysis
  * Implements Zone V (18% middle gray) log-average exposure and Gray World white balance
+ *
+ * 采样失败（canvas 被污染 / 环境无 canvas）返回 `null` —— **不返回全 0**。
+ * 全 0 会被调用方当「算完了」写进滑杆，用户看到「点了没反应」（问题二，
+ * 2026-10-15 真窗口 e2e 复现）。失败必须由调用方显式处理（回退或报错）。
  */
-export function computeAutoTone(imgElement: HTMLImageElement): ToneAdjustments {
+export function computeAutoTone(imgElement: HTMLImageElement): ToneAdjustments | null {
   try {
     const canvas = document.createElement('canvas');
     const sampleSize = 128;
@@ -21,7 +25,7 @@ export function computeAutoTone(imgElement: HTMLImageElement): ToneAdjustments {
     canvas.height = sampleSize;
 
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return { ...DEFAULT_TONE };
+    if (!ctx) return null;
 
     ctx.drawImage(imgElement, 0, 0, sampleSize, sampleSize);
     const imageData = ctx.getImageData(0, 0, sampleSize, sampleSize);
@@ -139,7 +143,7 @@ export function computeAutoTone(imgElement: HTMLImageElement): ToneAdjustments {
     };
   } catch (err) {
     console.warn('Failed to compute auto tone:', err);
-    return { ...DEFAULT_TONE };
+    return null;
   }
 }
 

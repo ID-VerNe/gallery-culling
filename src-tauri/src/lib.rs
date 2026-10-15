@@ -3,6 +3,7 @@ mod db;
 pub mod lumen;
 mod luminar;
 pub mod models;
+mod proc;
 mod scanner;
 mod thumbnail;
 pub mod xmp;

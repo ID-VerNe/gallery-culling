@@ -434,6 +434,12 @@ impl LumenRuntime {
         // 必须走 apply_preset 工具：**不能**复用 apply_recipe —— 后者会把载荷
         // 包进 {"changes": ...}，而 edit.preset 的参数是 {path, name, amount}。
         // 包错了会静默变成 no-op（预设"应用成功"但什么都没变）。
-        self.call_session_tool(exe, "apply_preset", &args)
+        let applied = self.call_session_tool(exe, "apply_preset", &args)?;
+        // 落盘：预设只改常驻 session 的**进程内**编辑态；不 save_project 的话
+        // 随后 get_tone_state_cmd（跨进程 edit.get 读 .lumen 工程）读回仍是旧值
+        // —— 滑杆不动、重启即丢（2026-10-15 e2e 实测：断言A1=false、
+        // 无 .lumen 落盘）。与 apply_mask 同款两步式，缺一不可。
+        self.save_project(exe, photo)?;
+        Ok(applied)
     }
 }

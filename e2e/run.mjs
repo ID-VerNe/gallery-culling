@@ -21,8 +21,9 @@ import * as s04 from './suites/04-tone.mjs';
 import * as s05 from './suites/05-export.mjs';
 import * as s06 from './suites/06-raw-settings.mjs';
 import * as s07 from './suites/07-session.mjs';
+import * as s08 from './suites/08-lumen-preset.mjs';
 
-const SUITES = [s01, s02, s03, s04, s05, s06, s07];
+const SUITES = [s01, s02, s03, s04, s05, s06, s07, s08];
 const argv = process.argv.slice(2);
 const arg = (k) => argv.find((a) => a.startsWith('--' + k + '='))?.split('=')[1];
 const has = (k) => argv.includes('--' + k);

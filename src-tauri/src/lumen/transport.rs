@@ -5,7 +5,6 @@
 //! 测试实现 = 内存脚本队列（见 mcp.rs 的 ScriptedTransport）。
 
 use std::path::Path;
-use std::process::Command;
 use std::sync::mpsc::Receiver;
 use std::sync::Mutex;
 
@@ -65,7 +64,9 @@ impl ProcessTransport {
     pub fn spawn(exe: &Path, args: &[&str]) -> Result<Self, LumenError> {
         use std::io::{BufRead, BufReader};
 
-        let mut child = Command::new(exe)
+        // proc::silent：Windows 上 CREATE_NO_WINDOW —— sidecar 是控制台程序，
+        // 直接 spawn 会给用户弹黑框（2026-10-15 问题三）。
+        let mut child = crate::proc::silent(exe)
             .args(args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())

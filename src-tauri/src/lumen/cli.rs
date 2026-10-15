@@ -58,7 +58,7 @@ pub fn exec_and_classify(cmd: &mut Command) -> Result<Value, LumenError> {
 
 /// 以 B 通道方式调用 lumen-cli：`exe run <command> <json> --headless`。
 pub fn run_lumen(exe: &Path, command: &str, args: &Value) -> Result<Value, LumenError> {
-    let mut cmd = Command::new(exe);
+    let mut cmd = crate::proc::silent(exe);
     cmd.args(build_run_args(command, args));
     exec_and_classify(&mut cmd)
 }
@@ -68,7 +68,7 @@ pub fn run_lumen(exe: &Path, command: &str, args: &Value) -> Result<Value, Lumen
 /// `lumen-cli list <query>` 自带 catalog 扫描，而 `run library.list` 走的是
 /// session 图库（未 add 过时为空）——拉取评级必须用前者。
 pub fn run_cli(exe: &Path, args: &[&str]) -> Result<Value, LumenError> {
-    let mut cmd = Command::new(exe);
+    let mut cmd = crate::proc::silent(exe);
     cmd.args(args);
     exec_and_classify(&mut cmd)
 }
