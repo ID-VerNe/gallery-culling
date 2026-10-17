@@ -1,11 +1,11 @@
 {
-  "version": "v2.0.2",
-  "notes": "v2.0.2 修复版\n\n• 修复点窗口右上角 X 无法退出（关闭请求被拦截后销毁权限缺失）\n• 关闭时若会话落盘异常，下次关闭直接放行，保证窗口一定能关\n\n建议更新：退出路径的硬伤，所有 2.0.x 用户都应更新。",
-  "pub_date": "2026-10-17T08:26:47.755Z",
+  "version": "v2.0.3",
+  "notes": "🚀 v2.0.3：新增调色成片导出、「含 RAW」筛选档、同名文件覆盖开关、Ctrl+E 快捷键与「打开目录」按钮；修复导出流程 14 处体验问题。",
+  "pub_date": "2026-10-17T22:50:17.000Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNG5PWjZWTnJjdi9SeC9CdzJlZU4ycVQwNERxM0crM1RuYUxUK1VwSk5haXV0OTFSTU1NaWFkTWlaNFFMQUdlWGdXT3VqTnBma2NseEdyUW5pdjRRY3dnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMjI1NjA3CWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC4yX3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjAuMgpRTDNtY2hNOXZBWFZHQ3d4SmQ1QWJzSnBnWXg1aEt4OHMraHJGdnFDQm0vaFBBUTR6WjN1Tm96UkhhWS96RXU5bVh2SVFraGR1UHNoSklCNFJYQ0RCQT09Cg==",
-      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.2/gallery-culling_2.0.2_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNGpwMzJWbGpNZWQrVU9lMG5yLzB1Nk1XZ2o2bXEwaUtFckEwc01aamxobGx3Ums2eHpoVG1GaW1NUXZHbWRhWE1hYzZSZ2EvOFBOdkNWMVgrdjRZVEFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMjc3NDE2CWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC4zX3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjAuMwpDKy9kbW43U3UrVkRjZlRKMkl0TUpTSHNqWkJPbFFPbk9tZnBWWWZFdzV5QXRXSm0ramdBQWFGWUZyOVZDVHFlYkcyNkRheWE3bk9XWGNCTmtxcTBDUT09Cg==",
+      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.3/gallery-culling_2.0.3_x64-setup.exe"
     }
   }
 }
