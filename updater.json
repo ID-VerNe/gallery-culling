@@ -1,11 +1,11 @@
 {
-  "version": "v2.0.1",
-  "notes": "v2.0.1 修复版\n\n• 修复 LUMEN 预设不落盘（套用后重启丢失）\n• 修复「自动」调色无反应（失败现在必有提示）\n• 修复启动时弹出控制台黑框\n• 修复预设下拉不显示已套用的预设名\n• 修复打开应用即静默扫描、扫描完成覆盖手动选择\n• 修复 WebView2 GPU 崩溃导致的白屏\n\n建议更新：预设与自动调色修复直接恢复核心编辑流程。",
-  "pub_date": "2026-10-15T11:58:59.360Z",
+  "version": "v2.0.2",
+  "notes": "v2.0.2 修复版\n\n• 修复点窗口右上角 X 无法退出（关闭请求被拦截后销毁权限缺失）\n• 关闭时若会话落盘异常，下次关闭直接放行，保证窗口一定能关\n\n建议更新：退出路径的硬伤，所有 2.0.x 用户都应更新。",
+  "pub_date": "2026-10-17T08:26:47.755Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNGpxUktBcDNXWWc4ei9IV2tUSzZ3bzZ0YUJ5KzZEa2hOellBOTU1RytXbXY2N3RtUDBoQTNSNS84V0NmMk5hdit2Q3ZGRGpoTUJLbVREaVJVdmJtRUE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMDY1NTM5CWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC4xX3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjAuMQpjVXArdVE1Qld3blBucmE3bURQUktiTkdKNHJtQTQzVUxHWmk2N3VKL1huRlp1TlZrUDJhTWhDdldUeWxsdkRQVXl0THJMM0U3NmxXSkxxbVVNKzJDdz09Cg==",
-      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.1/gallery-culling_2.0.1_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNG5PWjZWTnJjdi9SeC9CdzJlZU4ycVQwNERxM0crM1RuYUxUK1VwSk5haXV0OTFSTU1NaWFkTWlaNFFMQUdlWGdXT3VqTnBma2NseEdyUW5pdjRRY3dnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMjI1NjA3CWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC4yX3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjAuMgpRTDNtY2hNOXZBWFZHQ3d4SmQ1QWJzSnBnWXg1aEt4OHMraHJGdnFDQm0vaFBBUTR6WjN1Tm96UkhhWS96RXU5bVh2SVFraGR1UHNoSklCNFJYQ0RCQT09Cg==",
+      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.2/gallery-culling_2.0.2_x64-setup.exe"
     }
   }
 }
