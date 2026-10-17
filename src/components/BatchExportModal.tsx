@@ -237,6 +237,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
             format={form.renderFormat}
             longEdge={form.renderLongEdge}
             qualityText={form.qualityText}
+            jpgOnlyCount={form.jpgOnlyCount}
             onChangeFormat={form.setRenderFormat}
             onChangeLongEdge={form.setRenderLongEdge}
             onChangeQuality={form.setQualityText}

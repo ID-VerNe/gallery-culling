@@ -23,15 +23,18 @@ const file = (path: string) => ({
 
 const mk = (
   baseName: string,
-  opts: { flag?: CullFlag; rating?: number; dir?: string } = {},
+  opts: { flag?: CullFlag; rating?: number; dir?: string; raw?: boolean } = {},
 ): PhotoGroupInfo => {
   const dir = opts.dir ?? 'D:/shoot/JPG';
+  const hasRaw = opts.raw !== false;
   return {
     id: baseName,
     baseName,
     jpg: file(`${dir}/${baseName}.jpg`),
-    raw: file(`D:/shoot/RAW/${baseName}.NEF`),
-    status: 'COMPLETE',
+    // raw 是**可选**字段：没有 RAW 的组必须真的不带这个键（而不是 null），
+    // 否则 `g.raw ? …` 的判断与真实扫描结果不一致，「仅含 RAW」档会误收。
+    ...(hasRaw ? { raw: file(`D:/shoot/RAW/${baseName}.NEF`) } : {}),
+    status: hasRaw ? 'COMPLETE' : 'JPG_ONLY',
     rating: opts.rating ?? 0,
     flag: opts.flag ?? 'none',
     hasXmp: false,
@@ -39,17 +42,19 @@ const mk = (
 };
 
 /**
- * 覆盖四种范围组合：
- *  - A：pick + 0 星 → 只在 pick_or_rated / pick_only / all
- *  - B：none + 5 星 → 只在 pick_or_rated / star3_plus / all
- *  - C：none + 0 星 → 只在 all
- *  - D：reject + 3 星 → 只在 star3_plus（淘汰永不被「全部」带出）
+ * 覆盖四种范围组合 + 一种无 RAW：
+ *  - A：pick + 0 星 → pick_or_rated / pick_only / raw_only / all
+ *  - B：none + 5 星 → pick_or_rated / star3_plus / raw_only / all
+ *  - C：none + 0 星 → raw_only / all
+ *  - D：reject + 3 星 → 只在 star3_plus（淘汰永不被「全部」「仅含 RAW」带出）
+ *  - E：none + 0 星 + **无 RAW** → 只在 all（JPG-only 不进「仅含 RAW」）
  */
 const groups: PhotoGroupInfo[] = [
   mk('A', { flag: 'pick' }),
   mk('B', { rating: 5 }),
   mk('C'),
   mk('D', { flag: 'reject', rating: 3 }),
+  mk('E', { raw: false }),
 ];
 
 const setup = (lumenAvailable = true, lumenDetail?: string) =>
@@ -87,7 +92,8 @@ describe('导出范围', () => {
       pick_or_rated: 2,
       pick_only: 1,
       star3_plus: 2,
-      all: 3,
+      raw_only: 3,
+      all: 4,
     });
     expect(result.current.candidates.map((g) => g.baseName)).toEqual(['A', 'B']);
   });
@@ -95,9 +101,28 @@ describe('导出范围', () => {
   it('切换范围时候选集跟随', () => {
     const { result } = setup();
     act(() => result.current.setFilter('all'));
-    expect(result.current.candidates.map((g) => g.baseName)).toEqual(['A', 'B', 'C']);
+    expect(result.current.candidates.map((g) => g.baseName)).toEqual(['A', 'B', 'C', 'E']);
     act(() => result.current.setFilter('star3_plus'));
     expect(result.current.candidates.map((g) => g.baseName)).toEqual(['B', 'D']);
+  });
+
+  it('「仅含 RAW」排除无 RAW 的组，也排除淘汰', () => {
+    const { result } = setup();
+    act(() => result.current.setFilter('raw_only'));
+    // E 没有 RAW、D 是淘汰，两者都不该出现
+    expect(result.current.candidates.map((g) => g.baseName)).toEqual(['A', 'B', 'C']);
+  });
+
+  it('jpgOnlyCount 数的是「没有 RAW 的候选」，并随范围变化', () => {
+    const { result } = setup();
+    // 默认 pick_or_rated：A、B 都有 RAW
+    expect(result.current.jpgOnlyCount).toBe(0);
+    act(() => result.current.setFilter('all'));
+    // all：A B C E —— 只有 E 无 RAW
+    expect(result.current.jpgOnlyCount).toBe(1);
+    act(() => result.current.setFilter('raw_only'));
+    // 仅含 RAW 档下自然一个都没有
+    expect(result.current.jpgOnlyCount).toBe(0);
   });
 
   it('范围内无照片时不可执行', () => {

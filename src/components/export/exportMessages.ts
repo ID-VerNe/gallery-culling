@@ -89,6 +89,21 @@ export function buildOutcomeMessage(args: {
   };
 }
 
+/**
+ * 成片质量提示：候选里有仅含 JPG 的组、又选了 JPEG 输出时，会二次压缩。
+ *
+ * 为什么是**提示**而不是**禁用**：JPG 调色与成片导出本身完全可用
+ * （真窗口 e2e 实证 7 张 JPG 全部渲出），只是动态范围不如 RAW。禁用一个
+ * 能工作的能力，代价是「少半个用户群」；用户真正需要知道的是「再压一次
+ * 会有损失」——那就把这件事说清楚，而不是替他做决定。
+ *
+ * 返回 `null` 表示无需提示（没有仅含 JPG 的候选）。
+ */
+export function buildJpegSourceWarning(jpgOnlyCount: number): string | null {
+  if (jpgOnlyCount <= 0) return null;
+  return `候选中有 ${jpgOnlyCount} 组仅含 JPG，输出 JPEG 会二次压缩；建议改用 TIFF 或把质量调到 100`;
+}
+
 export interface ExportValidationInput {
   mode: ExportMode;
   targetFolder: string;

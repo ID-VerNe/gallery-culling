@@ -73,6 +73,14 @@ export interface ExportForm {
   // —— 派生 ——
   candidates: PhotoGroupInfo[];
   targetIsSourceDir: boolean;
+  /**
+   * 候选里**仅含 JPG**（没有 RAW）的组数。
+   *
+   * 供成片设置提示「二次压缩」：这类组只能拿 JPG 当渲染源，再输出 JPEG 就是
+   * 压第二次。数「没有 RAW 的组」而不是「有 RAW 的组」—— 只有前者才会真正
+   * 吃到二次压缩，混拍场景下提示的数字才对得上用户看到的候选。
+   */
+  jpgOnlyCount: number;
   /** 表单层面的阻断原因；`null` 表示可以执行。 */
   validation: string | null;
   /** 表单层面是否可执行（不含「正在运行」，由容器再叠加）。 */
@@ -143,6 +151,12 @@ export function useExportForm({
     for (const f of EXPORT_FILTERS) counts[f.value] = groups.filter(f.test).length;
     return counts;
   }, [groups]);
+
+  /** 仅含 JPG 的候选组数（成片模式的二次压缩提示用）。 */
+  const jpgOnlyCount = useMemo(
+    () => candidates.reduce((n, g) => (g.raw ? n : n + 1), 0),
+    [candidates],
+  );
 
   /**
    * 目标目录 = 任一候选的源目录 → 必须拦下（`fs::copy` 同路径会截断原片）。
@@ -223,6 +237,7 @@ export function useExportForm({
     commitQuality,
     candidates,
     targetIsSourceDir,
+    jpgOnlyCount,
     validation,
     canRun: validation === null,
     resetSignal,

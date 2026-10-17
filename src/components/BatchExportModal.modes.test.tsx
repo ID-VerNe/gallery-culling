@@ -37,6 +37,21 @@ const group: PhotoGroupInfo = {
   hasXmp: false,
 };
 
+/** 带 RAW 的组（COMPLETE），用于验证「仅含 RAW」档与「无画质提示」。 */
+const groupWithRaw: PhotoGroupInfo = {
+  ...group,
+  id: 'g2',
+  baseName: 'IMG_0002',
+  raw: {
+    name: 'IMG_0002.NEF',
+    extension: 'nef',
+    path: 'D:/shoot/RAW/IMG_0002.NEF',
+    size: 4096,
+    mtime: 0,
+  },
+  status: 'COMPLETE',
+};
+
 /** 各命令的「全部成功」返回。 */
 const ok = { exported: 1, skipped: 0, failed: [] };
 
@@ -298,5 +313,64 @@ describe('F10 运行中锁定', () => {
     expect(screen.getByLabelText('长边尺寸')).toBeDisabled();
     expect(screen.getByLabelText('JPEG 质量')).toBeDisabled();
     expect(screen.getByRole('button', { name: '关闭' })).toBeDisabled();
+  });
+});
+
+describe('导出范围：仅含 RAW', () => {
+  it('只收带 RAW 的组，JPG-only 不计入（也不影响「全部」）', async () => {
+    const user = userEvent.setup();
+    render(
+      <BatchExportModal isOpen onClose={vi.fn()} groups={[group, groupWithRaw]} />,
+    );
+
+    // 两组都是 pick：全部 = 2，仅含 RAW = 1
+    expect(screen.getByLabelText(/全部非淘汰照片/).closest('label')).toHaveTextContent(
+      '(2)',
+    );
+    expect(screen.getByLabelText(/仅含 RAW 的组/).closest('label')).toHaveTextContent(
+      '(1)',
+    );
+
+    await user.click(screen.getByLabelText(/仅含 RAW 的组/));
+    await user.type(screen.getByLabelText('目标导出目录'), 'D:/out');
+    expect(screen.getByRole('button', { name: '开始导出' })).toBeEnabled();
+  });
+
+  it('候选全被该档排除时拦下，提示先打星/保留', async () => {
+    const user = userEvent.setup();
+    render(<BatchExportModal isOpen onClose={vi.fn()} groups={[group]} />);
+    await user.click(screen.getByLabelText(/仅含 RAW 的组/));
+    await user.type(screen.getByLabelText('目标导出目录'), 'D:/out');
+
+    // group 是 JPG-only → 候选为空 → 按钮禁用
+    expect(screen.getByRole('button', { name: '开始导出' })).toBeDisabled();
+  });
+});
+
+describe('成片质量提示（JPG 源二次压缩）', () => {
+  it('候选含 JPG-only 时提示，组数与候选数一致', async () => {
+    const { user } = setup(); // group 无 raw
+    await switchToRender(user);
+    const tip = screen.getByText(/1 组仅含 JPG/);
+    expect(tip).toHaveTextContent(/二次压缩/);
+  });
+
+  it('候选全部带 RAW 时不提示', async () => {
+    const user = userEvent.setup();
+    render(<BatchExportModal isOpen onClose={vi.fn()} groups={[groupWithRaw]} />);
+    await user.click(screen.getByLabelText(/调色成片/));
+    expect(screen.queryByText(/仅含 JPG/)).toBeNull();
+  });
+
+  it('切到 TIFF 后提示消失，切回 JPEG 恢复', async () => {
+    const { user } = setup();
+    await switchToRender(user);
+    expect(screen.getByText(/仅含 JPG/)).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText('TIFF'));
+    expect(screen.queryByText(/仅含 JPG/)).toBeNull();
+
+    await user.click(screen.getByLabelText('JPEG'));
+    expect(screen.getByText(/仅含 JPG/)).toBeInTheDocument();
   });
 });

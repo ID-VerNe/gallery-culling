@@ -133,6 +133,35 @@ describe('RenderOptions', () => {
     expect(screen.getByLabelText('长边尺寸')).toBeDisabled();
     expect(screen.getByLabelText('JPEG 质量')).toBeDisabled();
   });
+
+  it('仅含 JPG 的候选 + JPEG 输出 → 提示二次压缩，并挂到质量输入的描述上', () => {
+    render(<RenderOptions {...base} jpgOnlyCount={2} />);
+    const tip = screen.getByText(/2 组仅含 JPG/);
+    expect(tip).toHaveTextContent(/二次压缩/);
+    // 这是静态说明，不能抢结果条/进度条的 live region 语义
+    expect(tip.getAttribute('role')).toBeNull();
+    expect(tip.closest('[aria-live]')).toBeNull();
+    // 读屏聚焦质量输入时应能读到它
+    expect(screen.getByLabelText('JPEG 质量')).toHaveAttribute(
+      'aria-describedby',
+      tip.id,
+    );
+  });
+
+  it('没有仅含 JPG 的候选 → 不提示、不挂 aria-describedby', () => {
+    render(<RenderOptions {...base} jpgOnlyCount={0} />);
+    expect(screen.queryByText(/仅含 JPG/)).toBeNull();
+    expect(screen.getByLabelText('JPEG 质量')).not.toHaveAttribute('aria-describedby');
+  });
+
+  it('非 JPEG 输出 → 不提示（TIFF / DNG 无二次压缩概念）', () => {
+    const { rerender } = render(<RenderOptions {...base} jpgOnlyCount={2} format="tif" />);
+    expect(screen.queryByText(/仅含 JPG/)).toBeNull();
+    rerender(<RenderOptions {...base} jpgOnlyCount={2} format="dng" />);
+    expect(screen.queryByText(/仅含 JPG/)).toBeNull();
+    rerender(<RenderOptions {...base} jpgOnlyCount={2} format="jpg" />);
+    expect(screen.getByText(/2 组仅含 JPG/)).toBeInTheDocument();
+  });
 });
 
 describe('LumenGateNotice', () => {

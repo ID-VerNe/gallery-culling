@@ -322,6 +322,9 @@ async function scenarioRenderExport(
   raw(`[${el()}] >>> 断言R3 出现长边档位 = ${!!dlg.querySelector('#export-long-edge')}`);
   raw(`[${el()}] >>> 断言R4 出现 JPEG 质量输入 = ${!!dlg.querySelector('#export-quality')}`);
   raw(`[${el()}] >>> 断言R5 footer 改为「预计生成」= ${/预计生成/.test(dlgText)}`);
+  // 默认档「已保留或已打星」里 IMG_006 是 JPG-only → 二次压缩提示应出现。
+  // 这条是「提示而非禁用」的现场证据：提示在，按钮仍然可用（下面会点它）。
+  raw(`[${el()}] >>> 断言R12 JPG 源二次压缩提示 = ${/二次压缩/.test(dlgText)}`);
 
   // ── 范围 + 目标 ────────────────────────────────────────
   // 默认档「已保留或已打星」在夹具上只会命中 4 组；切到「全部非淘汰照片」
@@ -330,17 +333,43 @@ async function scenarioRenderExport(
   const allRadio = dlg.querySelector<HTMLInputElement>('#export-filter-all');
   raw(`[${el()}] 「全部非淘汰照片」单选框 = ${!!allRadio}`);
   if (!allRadio) return;
+
+  /** 从 footer 读「预计生成：N 张成片」；读不到返回 -1（便于断言区分「0」与「没读到」）。 */
+  const readCandidates = () => {
+    const hit = dlg.innerText.match(/预计生成[：:]\s*(\d+)/);
+    return hit ? Number(hit[1]) : -1;
+  };
+
   allRadio.click();
   await sleep(500);
+  const allCount = readCandidates();
+  raw(`[${el()}] 全部非淘汰候选数 = ${allCount}`);
+
+  // 「仅含 RAW 的组」：按文件类型筛，同样不推翻「淘汰永不导出」的语义。
+  // 夹具里 4 组带 RAW（IMG_001/002/004 配对 + RAW_ONLY_009），应严格少于全部。
+  const rawRadio = dlg.querySelector<HTMLInputElement>('#export-filter-raw_only');
+  raw(`[${el()}] 「仅含 RAW 的组」单选框 = ${!!rawRadio}`);
+  let rawOnlyCount = -1;
+  if (rawRadio) {
+    rawRadio.click();
+    await sleep(600);
+    rawOnlyCount = readCandidates();
+    raw(`[${el()}] 仅含 RAW 候选数 = ${rawOnlyCount}`);
+    // 切回「全部」：后面的导出断言仍按全部非淘汰的候选集
+    allRadio.click();
+    await sleep(600);
+  }
+  raw(
+    `[${el()}] >>> 断言R11 仅含 RAW 档存在且候选更少 = ${
+      !!rawRadio && rawOnlyCount > 0 && rawOnlyCount < allCount
+    }（${rawOnlyCount} < ${allCount}）`,
+  );
 
   const targetInput = dlg.querySelector<HTMLInputElement>('#export-target-folder');
   raw(`[${el()}] 目标目录输入框 = ${!!targetInput}`);
   if (!targetInput) return;
   setControlValue(targetInput, outFolder);
   await sleep(700);
-
-  const m = dlg.innerText.match(/预计生成[：:]\s*(\d+)/);
-  raw(`[${el()}] 预计生成候选数 = ${m ? m[1] : '(未解析到)'}`);
 
   // ── 引擎门禁 ───────────────────────────────────────────
   const startBtn = findButton('开始生成成片');

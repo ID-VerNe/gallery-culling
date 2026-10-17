@@ -10,7 +10,11 @@
  * 它们与 `BatchExportModal.test.tsx` 里锁死的断言同源，任何一处改动都会双红。
  */
 import { describe, it, expect } from 'vitest';
-import { buildOutcomeMessage, buildValidationMessage } from './exportMessages';
+import {
+  buildOutcomeMessage,
+  buildValidationMessage,
+  buildJpegSourceWarning,
+} from './exportMessages';
 import { clampQuality, DEFAULT_RENDER_QUALITY } from './exportConfig';
 import type { ExportOutcome } from '../../types';
 
@@ -244,5 +248,29 @@ describe('clampQuality', () => {
 
   it('合法值四舍五入', () => {
     expect(clampQuality(92.6)).toBe(93);
+  });
+});
+
+describe('buildJpegSourceWarning —— 二次压缩提示（提示而非禁用）', () => {
+  it('没有仅含 JPG 的候选时返回 null', () => {
+    expect(buildJpegSourceWarning(0)).toBeNull();
+  });
+
+  it('负数（调用方算错）也返回 null，不产生「-1 组」这种句子', () => {
+    expect(buildJpegSourceWarning(-1)).toBeNull();
+  });
+
+  it('命中时给出组数、损失说明与两条替代方案', () => {
+    const text = buildJpegSourceWarning(3);
+    expect(text).toContain('3 组仅含 JPG');
+    expect(text).toContain('二次压缩');
+    // 两条可执行的替代路径都要给出，只说「有损失」等于把问题丢回给用户
+    expect(text).toContain('TIFF');
+    expect(text).toContain('100');
+  });
+
+  it('组数原样透传（不四舍五入、不省略）', () => {
+    expect(buildJpegSourceWarning(12)).toContain('12 组');
+    expect(buildJpegSourceWarning(1)).toContain('1 组');
   });
 });

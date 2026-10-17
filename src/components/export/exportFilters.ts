@@ -7,7 +7,12 @@
  */
 import type { PhotoGroupInfo } from '../../types';
 
-export type ExportFilterValue = 'pick_or_rated' | 'pick_only' | 'star3_plus' | 'all';
+export type ExportFilterValue =
+  | 'pick_or_rated'
+  | 'pick_only'
+  | 'star3_plus'
+  | 'raw_only'
+  | 'all';
 
 export interface ExportFilterSpec {
   value: ExportFilterValue;
@@ -19,6 +24,9 @@ export interface ExportFilterSpec {
 /**
  * 顺序即 UI 顺序。默认选第一项（最保守的非空集合）。
  * `all` 显式排除淘汰（reject）—— 淘汰是用户的删除意图，绝不能因为「全选」被导出。
+ *
+ * `raw_only` 放在 `all` **之前**：前三档按评级/旗标筛，它是按**文件类型**筛，
+ * 语义上都属于「缩小范围」，而 `all` 是兜底全选，必须压轴。
  */
 export const EXPORT_FILTERS: ReadonlyArray<ExportFilterSpec> = [
   {
@@ -35,6 +43,16 @@ export const EXPORT_FILTERS: ReadonlyArray<ExportFilterSpec> = [
     value: 'star3_plus',
     label: '★ 3 星以上',
     test: (g) => g.rating >= 3,
+  },
+  {
+    value: 'raw_only',
+    label: '仅含 RAW 的组',
+    /**
+     * 同样排除淘汰：这是按文件类型筛，不该顺手推翻「淘汰永不导出」的语义。
+     * 用 `!!g.raw` 而不是 `status === 'COMPLETE'`：状态字段可能因扫描策略变化
+     * （例如只扫 JPG 目录），而「有没有 raw 文件」是候选本身的事实。
+     */
+    test: (g) => g.flag !== 'reject' && !!g.raw,
   },
   {
     value: 'all',
