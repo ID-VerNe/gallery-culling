@@ -23,7 +23,7 @@ const file = (path: string) => ({
 
 const mk = (
   baseName: string,
-  opts: { flag?: CullFlag; rating?: number; dir?: string; raw?: boolean } = {},
+  opts: { flag?: CullFlag; rating?: number; dir?: string; raw?: boolean; xmp?: boolean } = {},
 ): PhotoGroupInfo => {
   const dir = opts.dir ?? 'D:/shoot/JPG';
   const hasRaw = opts.raw !== false;
@@ -37,7 +37,7 @@ const mk = (
     status: hasRaw ? 'COMPLETE' : 'JPG_ONLY',
     rating: opts.rating ?? 0,
     flag: opts.flag ?? 'none',
-    hasXmp: false,
+    hasXmp: opts.xmp ?? false,
   };
 };
 
@@ -46,8 +46,9 @@ const mk = (
  *  - A：pick + 0 星 → pick_or_rated / pick_only / raw_only / all
  *  - B：none + 5 星 → pick_or_rated / star3_plus / raw_only / all
  *  - C：none + 0 星 → raw_only / all
- *  - D：reject + 3 星 → 只在 star3_plus（淘汰永不被「全部」「仅含 RAW」带出）
- *  - E：none + 0 星 + **无 RAW** → 只在 all（JPG-only 不进「仅含 RAW」）
+ *  - D：reject + 3 星 → **哪一档都不进**（淘汰是删除意图，任何范围档都不能
+ *       把它带出去；rating 与 flag 独立，所以 star3_plus 也必须带淘汰守卫）
+ *  - E：none + 0 星 + **无 RAW** → 只在 all（JPG-only 不进「含 RAW」）
  */
 const groups: PhotoGroupInfo[] = [
   mk('A', { flag: 'pick' }),
@@ -86,12 +87,13 @@ describe('初始值', () => {
 });
 
 describe('导出范围', () => {
-  it('countsByFilter 与候选集一致，淘汰照片不进「全部」', () => {
+  it('countsByFilter 与候选集一致，淘汰照片不进任何范围档', () => {
     const { result } = setup();
     expect(result.current.countsByFilter).toEqual({
       pick_or_rated: 2,
       pick_only: 1,
-      star3_plus: 2,
+      // D 是 reject + 3 星：星级够但已被淘汰，不得计入
+      star3_plus: 1,
       raw_only: 3,
       all: 4,
     });
@@ -103,10 +105,11 @@ describe('导出范围', () => {
     act(() => result.current.setFilter('all'));
     expect(result.current.candidates.map((g) => g.baseName)).toEqual(['A', 'B', 'C', 'E']);
     act(() => result.current.setFilter('star3_plus'));
-    expect(result.current.candidates.map((g) => g.baseName)).toEqual(['B', 'D']);
+    // D 虽然 3 星，但是淘汰 —— 不得出现
+    expect(result.current.candidates.map((g) => g.baseName)).toEqual(['B']);
   });
 
-  it('「仅含 RAW」排除无 RAW 的组，也排除淘汰', () => {
+  it('「含 RAW」排除无 RAW 的组，也排除淘汰', () => {
     const { result } = setup();
     act(() => result.current.setFilter('raw_only'));
     // E 没有 RAW、D 是淘汰，两者都不该出现
@@ -121,7 +124,7 @@ describe('导出范围', () => {
     // all：A B C E —— 只有 E 无 RAW
     expect(result.current.jpgOnlyCount).toBe(1);
     act(() => result.current.setFilter('raw_only'));
-    // 仅含 RAW 档下自然一个都没有
+    // 「含 RAW」档下 jpgOnlyCount 自然一个都没有
     expect(result.current.jpgOnlyCount).toBe(0);
   });
 
@@ -235,6 +238,81 @@ describe('成片质量', () => {
     expect(result.current.qualityText).toBe('9');
     // 但实际值已经夹到合法区间
     expect(result.current.quality).toBe(50);
+  });
+
+  it.each([
+    ['200', '100'],
+    ['10', '50'],
+    ['', '92'],
+  ])('qualityText=%s 失焦后规整为 %s 并给出说明', (text, shown) => {
+    const { result } = setup();
+    act(() => result.current.setQualityText(text));
+    act(() => result.current.commitQuality());
+    expect(result.current.qualityText).toBe(shown);
+    // 静默改写不可接受：用户得知道是自己输错了还是程序改了
+    expect(result.current.qualityNotice).toContain(`已调整为 ${shown}`);
+  });
+
+  it('合法值失焦不弹说明（每次都弹等于没弹）', () => {
+    const { result } = setup();
+    act(() => result.current.setQualityText('88'));
+    act(() => result.current.commitQuality());
+    expect(result.current.qualityText).toBe('88');
+    expect(result.current.qualityNotice).toBeNull();
+  });
+
+  it('再次键入即清除上一条规整说明', () => {
+    const { result } = setup();
+    act(() => result.current.setQualityText('200'));
+    act(() => result.current.commitQuality());
+    expect(result.current.qualityNotice).not.toBeNull();
+    act(() => result.current.setQualityText('9'));
+    expect(result.current.qualityNotice).toBeNull();
+  });
+});
+
+describe('expectedFileCount（组 ≠ 文件）', () => {
+  it('复制模式按勾选类型逐组数文件，与结果条口径一致', () => {
+    const { result } = setup();
+    // 默认 pick_or_rated → A、B，各含 RAW + JPG → 4 个文件 / 2 组
+    expect(result.current.candidates).toHaveLength(2);
+    expect(result.current.expectedFileCount).toBe(4);
+
+    act(() => result.current.setIncludeRaw(false));
+    expect(result.current.expectedFileCount).toBe(2);
+
+    act(() => result.current.setIncludeJpg(false));
+    expect(result.current.expectedFileCount).toBe(0);
+  });
+
+  it('无 RAW 的组在只勾 RAW 时不产生文件', () => {
+    const { result } = setup();
+    act(() => result.current.setFilter('all'));
+    // A B C E：E 无 RAW → 勾 RAW 时只算 A/B/C 各 1 个
+    act(() => result.current.setIncludeJpg(false));
+    expect(result.current.candidates).toHaveLength(4);
+    expect(result.current.expectedFileCount).toBe(3);
+  });
+
+  it('带 XMP 侧车的组勾上 RAW 时算 3 个文件，取消 RAW 后侧车同步消失', () => {
+    // 侧车（.xmp）只在勾 RAW 时才被复制 —— `export_items` 里 XMP 跟着 RAW 走。
+    // footer 的「共 N 个文件」必须把第三个文件算进去，否则用户会以为只会多出 1 个。
+    const withXmp = [mk('X', { rating: 5, xmp: true })];
+    const { result } = renderHook(() =>
+      useExportForm({ groups: withXmp, lumenAvailable: true }),
+    );
+
+    expect(result.current.candidates).toHaveLength(1);
+    expect(result.current.expectedFileCount).toBe(3); // RAW + XMP + JPG
+
+    act(() => result.current.setIncludeRaw(false));
+    expect(result.current.expectedFileCount).toBe(1); // 只剩 JPG
+  });
+
+  it('成片模式一图一文件，等于候选组数', () => {
+    const { result } = setup();
+    act(() => result.current.setMode('render'));
+    expect(result.current.expectedFileCount).toBe(result.current.candidates.length);
   });
 });
 

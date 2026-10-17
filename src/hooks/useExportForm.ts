@@ -19,7 +19,12 @@ import {
   resolveExportFilter,
   type ExportFilterValue,
 } from '../components/export/exportFilters';
-import { DEFAULT_RENDER_QUALITY, clampQuality } from '../components/export/exportConfig';
+import {
+  DEFAULT_RENDER_QUALITY,
+  RENDER_QUALITY_MAX,
+  RENDER_QUALITY_MIN,
+  clampQuality,
+} from '../components/export/exportConfig';
 import { normalizeDir, parentDirOf } from '../utils/pathNormalize';
 
 export interface UseExportFormOptions {
@@ -46,6 +51,16 @@ export interface ExportForm {
   includeJpg: boolean;
   setIncludeJpg: (v: boolean) => void;
 
+  /**
+   * 覆盖目标目录中的同名文件。两种模式共用，默认 `false`。
+   *
+   * 默认关是刻意的：不覆盖是保护用户已有文件的正确默认。但**没有**这个开关时，
+   * 「调色 → 导出 → 再调 → 再导出」这条成片工作流的第二次导出会全部 skipped，
+   * 用户拿到的仍是上一版，且界面没有任何办法让他覆盖。默认安全 ≠ 只能安全。
+   */
+  overwrite: boolean;
+  setOverwrite: (v: boolean) => void;
+
   // —— 导出范围 ——
   filter: ExportFilterValue;
   setFilter: (v: ExportFilterValue) => void;
@@ -69,9 +84,27 @@ export interface ExportForm {
    * 也不自增 `resetSignal` —— 这是对同一次输入的收尾，不是新的输入。
    */
   commitQuality: () => void;
+  /**
+   * 质量被规整时的说明（如「已调整为 50（允许 50–100）」）。
+   *
+   * 静默改写输入框是不行的：用户会以为是自己输错了、或者程序乱改。`null`
+   * 表示这次失焦没有发生规整。下一次键入即清除。
+   */
+  qualityNotice: string | null;
 
   // —— 派生 ——
   candidates: PhotoGroupInfo[];
+  /**
+   * 本次预计真正落盘的**文件**数。
+   *
+   * 为什么需要它：`candidates` 数的是照片**组**，而结果条的「已导出 N 个」
+   * 数的是**文件** —— 复制模式下一组可能产出 RAW + XMP + JPG 三个文件。
+   * 只显示组数时，「预计 11 组」和「已导出 18 个」永远对不上，用户无法验算。
+   *
+   * 口径与后端 `export_items` 完全一致：勾了 RAW 且该组有 RAW 计 1，RAW 旁
+   * 有 XMP 再计 1，勾了 JPG 且该组有 JPG 计 1。成片模式一图一文件，等于候选数。
+   */
+  expectedFileCount: number;
   targetIsSourceDir: boolean;
   /**
    * 候选里**仅含 JPG**（没有 RAW）的组数。
@@ -122,10 +155,12 @@ export function useExportForm({
   const [targetFolder, setTargetFolderRaw] = useState('');
   const [includeRaw, setIncludeRawRaw] = useState(true);
   const [includeJpg, setIncludeJpgRaw] = useState(true);
+  const [overwrite, setOverwriteRaw] = useState(false);
   const [filter, setFilterRaw] = useState<ExportFilterValue>(DEFAULT_EXPORT_FILTER);
   const [renderFormat, setRenderFormatRaw] = useState<RenderFormat>('jpg');
   const [renderLongEdge, setRenderLongEdgeRaw] = useState(0);
   const [qualityText, setQualityTextRaw] = useState(String(DEFAULT_RENDER_QUALITY));
+  const [qualityNotice, setQualityNotice] = useState<string | null>(null);
   const [resetSignal, setResetSignal] = useState(0);
 
   const bump = useCallback(() => setResetSignal((n) => n + 1), []);
@@ -134,10 +169,18 @@ export function useExportForm({
   const setTargetFolder = useBumpingSetter(setTargetFolderRaw, bump);
   const setIncludeRaw = useBumpingSetter(setIncludeRawRaw, bump);
   const setIncludeJpg = useBumpingSetter(setIncludeJpgRaw, bump);
+  const setOverwrite = useBumpingSetter(setOverwriteRaw, bump);
   const setFilter = useBumpingSetter(setFilterRaw, bump);
   const setRenderFormat = useBumpingSetter(setRenderFormatRaw, bump);
   const setRenderLongEdge = useBumpingSetter(setRenderLongEdgeRaw, bump);
-  const setQualityText = useBumpingSetter(setQualityTextRaw, bump);
+  /** 键入即清掉上一条规整说明 —— 那句话只对「刚刚那一次失焦」成立。 */
+  const setQualityText = useBumpingSetter(
+    useCallback((v: string) => {
+      setQualityTextRaw(v);
+      setQualityNotice(null);
+    }, []),
+    bump,
+  );
 
   // `resolveExportFilter` 返回配置表里的常量引用，所以下面这层 useMemo 依赖是稳定的。
   const activeFilter = resolveExportFilter(filter);
@@ -157,6 +200,22 @@ export function useExportForm({
     () => candidates.reduce((n, g) => (g.raw ? n : n + 1), 0),
     [candidates],
   );
+
+  /**
+   * 预计落盘文件数 —— 逐条对齐后端 `export_items` 的复制逻辑：
+   * 勾 RAW 且该组有 RAW → 1；该 RAW 旁存在 XMP → 再 +1；勾 JPG 且该组有 JPG → +1。
+   *
+   * 成片模式一图一文件，等于候选组数（渲不出的是 failed，不在预计量里承诺）。
+   */
+  const expectedFileCount = useMemo(() => {
+    if (mode !== 'copy') return candidates.length;
+    return candidates.reduce((n, g) => {
+      const raw = includeRaw && g.raw ? 1 : 0;
+      const xmp = includeRaw && g.raw && g.hasXmp ? 1 : 0;
+      const jpg = includeJpg && g.jpg ? 1 : 0;
+      return n + raw + xmp + jpg;
+    }, 0);
+  }, [mode, candidates, includeRaw, includeJpg]);
 
   /**
    * 目标目录 = 任一候选的源目录 → 必须拦下（`fs::copy` 同路径会截断原片）。
@@ -211,8 +270,16 @@ export function useExportForm({
 
   // 依赖 `quality`：每次夹取结果变化，commit 都要写回最新值。
   const commitQuality = useCallback(() => {
-    setQualityTextRaw(String(quality));
-  }, [quality]);
+    const normalized = String(quality);
+    setQualityTextRaw(normalized);
+    // 只有真的改了才算「规整」。原样提交不弹提示 —— 每次都弹等于没弹。
+    const unchanged = qualityText.trim() !== '' && normalized === qualityText.trim();
+    setQualityNotice(
+      unchanged
+        ? null
+        : `已调整为 ${quality}（允许 ${RENDER_QUALITY_MIN}–${RENDER_QUALITY_MAX}）`,
+    );
+  }, [quality, qualityText]);
 
   return {
     mode,
@@ -224,6 +291,8 @@ export function useExportForm({
     setIncludeRaw,
     includeJpg,
     setIncludeJpg,
+    overwrite,
+    setOverwrite,
     filter,
     setFilter,
     countsByFilter,
@@ -235,7 +304,9 @@ export function useExportForm({
     setQualityText,
     quality,
     commitQuality,
+    qualityNotice,
     candidates,
+    expectedFileCount,
     targetIsSourceDir,
     jpgOnlyCount,
     validation,

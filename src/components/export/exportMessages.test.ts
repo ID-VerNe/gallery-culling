@@ -26,7 +26,7 @@ const outcome = (patch: Partial<ExportOutcome> = {}): ExportOutcome => ({
 });
 
 describe('buildOutcomeMessage —— 原片复制（与重构前逐字兼容）', () => {
-  it('全部成功：结果条与 Toast 都沿用既有措辞', () => {
+  it('全部成功：结果条沿用既有措辞，且不再弹重复 Toast', () => {
     const r = buildOutcomeMessage({
       mode: 'copy',
       outcome: outcome({ exported: 3 }),
@@ -34,7 +34,10 @@ describe('buildOutcomeMessage —— 原片复制（与重构前逐字兼容）'
     });
     expect(r.failed).toBe(false);
     expect(r.message).toBe('导出完成：已导出 3 个。（目标：D:/out）');
-    expect(r.toast).toEqual({ kind: 'success', text: '已导出 3 个，目标：D:/out' });
+    // 结果条就在弹窗里、与用户视线同一屏，再弹一条同义 Toast 是纯噪音
+    expect(r.toast).toBeNull();
+    expect(r.failures).toEqual([]);
+    expect(r.folder).toBe('D:/out');
   });
 
   it('部分失败：失败数在最前，跳过带原因说明，Toast 只否定「完全」', () => {
@@ -71,17 +74,19 @@ describe('buildOutcomeMessage —— 原片复制（与重构前逐字兼容）'
     expect(r.message).toContain('/x/2.NEF');
     expect(r.message).not.toContain('/x/3.NEF');
     expect(r.message).toContain('等');
+    // 正文截断了，但 failures 必须是全量 —— 否则结果条的展开区无从渲染
+    expect(r.failures).toHaveLength(5);
   });
 
-  it('跳过但不失败：仍算成功，Toast 带跳过数', () => {
+  it('跳过但不失败：仍算成功，且不弹 Toast', () => {
     const r = buildOutcomeMessage({
       mode: 'copy',
       outcome: outcome({ exported: 1, skipped: 2 }),
       targetFolder: 'D:/out',
     });
     expect(r.failed).toBe(false);
-    expect(r.toast?.kind).toBe('success');
-    expect(r.toast?.text).toContain('跳过 2 个');
+    expect(r.message).toContain('跳过 2 个');
+    expect(r.toast).toBeNull();
   });
 
   it('取消：不写「已导出」，宾语是「任何文件」，且不弹 Toast', () => {
@@ -106,10 +111,8 @@ describe('buildOutcomeMessage —— 调色成片', () => {
     });
     expect(r.failed).toBe(false);
     expect(r.message).toBe('成片生成完成：已生成 12 张。（目标：D:/out）');
-    expect(r.toast).toEqual({
-      kind: 'success',
-      text: '已生成 12 张，目标：D:/out',
-    });
+    // 成功不弹 Toast（与复制模式同一条规则）
+    expect(r.toast).toBeNull();
   });
 
   it('部分失败：标题必须否定「完全成功」', () => {

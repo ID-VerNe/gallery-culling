@@ -12,17 +12,20 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { ExportResultPanel } from './ExportResultPanel';
 import { ExportModeSelector } from './ExportModeSelector';
+import { OverwriteToggle } from './OverwriteToggle';
 import { RenderOptions } from './RenderOptions';
 import { LumenGateNotice } from './LumenGateNotice';
 
 describe('ExportResultPanel', () => {
+  const base = { message: 'x', failed: false, failures: [], folder: 'D:/out' };
+
   it('无结果时不渲染任何节点', () => {
     const { container } = render(<ExportResultPanel result={null} />);
     expect(container).toBeEmptyDOMElement();
   });
 
   it('失败：amber + AlertTriangle + role=alert', () => {
-    render(<ExportResultPanel result={{ message: '失败 1 个', failed: true }} />);
+    render(<ExportResultPanel result={{ ...base, message: '失败 1 个', failed: true }} />);
     const alert = screen.getByRole('alert');
     expect(alert).toHaveTextContent('失败 1 个');
     expect(alert.className).toContain('text-amber-200');
@@ -33,7 +36,7 @@ describe('ExportResultPanel', () => {
   });
 
   it('成功：emerald + CheckCircle2 + role=status', () => {
-    render(<ExportResultPanel result={{ message: '已导出 3 个', failed: false }} />);
+    render(<ExportResultPanel result={{ ...base, message: '已导出 3 个' }} />);
     const status = screen.getByRole('status');
     expect(status).toHaveTextContent('已导出 3 个');
     expect(status.className).toContain('emerald');
@@ -45,11 +48,88 @@ describe('ExportResultPanel', () => {
 
   it('两种态互斥：同一时刻只有一个 live region', () => {
     const { rerender } = render(
-      <ExportResultPanel result={{ message: 'x', failed: true }} />,
+      <ExportResultPanel result={{ ...base, message: 'x', failed: true }} />,
     );
     expect(screen.queryByRole('status')).toBeNull();
-    rerender(<ExportResultPanel result={{ message: 'x', failed: false }} />);
+    rerender(<ExportResultPanel result={{ ...base, message: 'x', failed: false }} />);
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('失败明细 ≤3 条：正文说全，不出展开区', () => {
+    render(
+      <ExportResultPanel
+        result={{
+          ...base,
+          failed: true,
+          message: '导出未完全成功：失败 2 个',
+          failures: [
+            { path: 'a.NEF', reason: '拒绝访问' },
+            { path: 'b.NEF', reason: '磁盘已满' },
+          ],
+        }}
+      />,
+    );
+    expect(screen.queryByText(/查看全部/)).toBeNull();
+  });
+
+  it('失败明细 >3 条：给展开区，全部原因都在里面，并指出清单文件位置', () => {
+    const failures = Array.from({ length: 5 }, (_, i) => ({
+      path: `IMG_000${i}.NEF`,
+      reason: `原因${i}`,
+    }));
+    render(
+      <ExportResultPanel
+        result={{ ...base, failed: true, message: '导出未完全成功：失败 5 个', failures }}
+      />,
+    );
+
+    // 正文只放 3 条，但必须给出看全的入口
+    const summary = screen.getByText(/查看全部 5 条失败原因/);
+    expect(summary).toBeInTheDocument();
+    for (let i = 0; i < 5; i += 1) {
+      expect(screen.getByText(new RegExp(`IMG_000${i}\\.NEF`))).toBeInTheDocument();
+    }
+    expect(screen.getByText(/\.gallery-export\.json/)).toBeInTheDocument();
+  });
+
+  it('传 onOpenFolder 才渲染「打开目录」，点击回传结果里记录的目录', () => {
+    const onOpenFolder = vi.fn();
+    const { rerender } = render(
+      <ExportResultPanel result={{ ...base, folder: 'D:/out/render' }} />,
+    );
+    expect(screen.queryByRole('button', { name: /打开目录/ })).toBeNull();
+
+    rerender(
+      <ExportResultPanel
+        result={{ ...base, folder: 'D:/out/render' }}
+        onOpenFolder={onOpenFolder}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /打开目录/ }));
+    // 用的是 result.folder，不是任何外部状态
+    expect(onOpenFolder).toHaveBeenCalledWith('D:/out/render');
+  });
+});
+
+describe('OverwriteToggle', () => {
+  it('关闭时说明「跳过」，勾选后改成风险提示', () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<OverwriteToggle checked={false} onChange={onChange} />);
+    expect(screen.getByLabelText(/覆盖目标目录中的同名文件/)).not.toBeChecked();
+    expect(screen.getByText(/一律跳过/)).toBeInTheDocument();
+
+    rerender(<OverwriteToggle checked onChange={onChange} />);
+    expect(screen.getByText(/无法撤销/)).toBeInTheDocument();
+  });
+
+  it('勾选回传布尔值，disabled 时不可点', () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<OverwriteToggle checked={false} onChange={onChange} />);
+    fireEvent.click(screen.getByLabelText(/覆盖目标目录中的同名文件/));
+    expect(onChange).toHaveBeenCalledWith(true);
+
+    rerender(<OverwriteToggle checked={false} onChange={onChange} disabled />);
+    expect(screen.getByLabelText(/覆盖目标目录中的同名文件/)).toBeDisabled();
   });
 });
 
@@ -161,6 +241,29 @@ describe('RenderOptions', () => {
     expect(screen.queryByText(/仅含 JPG/)).toBeNull();
     rerender(<RenderOptions {...base} jpgOnlyCount={2} format="jpg" />);
     expect(screen.getByText(/2 组仅含 JPG/)).toBeInTheDocument();
+  });
+
+  it('质量被规整时把说明挂到输入框上（静默改写不可接受）', () => {
+    render(<RenderOptions {...base} qualityNotice="已调整为 50（允许 50–100）" />);
+    const tip = screen.getByText(/已调整为 50/);
+    expect(screen.getByLabelText('JPEG 质量')).toHaveAttribute(
+      'aria-describedby',
+      tip.id,
+    );
+  });
+
+  it('提示与规整说明同时存在时，aria-describedby 两个 id 都挂上', () => {
+    render(
+      <RenderOptions {...base} jpgOnlyCount={1} qualityNotice="已调整为 100（允许 50–100）" />,
+    );
+    const describedBy =
+      screen.getByLabelText('JPEG 质量').getAttribute('aria-describedby') ?? '';
+    expect(describedBy.split(/\s+/)).toHaveLength(2);
+  });
+
+  it('非 JPEG 时规整说明也不显示（质量输入本身不在了）', () => {
+    render(<RenderOptions {...base} format="tif" qualityNotice="已调整为 50（允许 50–100）" />);
+    expect(screen.queryByText(/已调整为/)).toBeNull();
   });
 });
 

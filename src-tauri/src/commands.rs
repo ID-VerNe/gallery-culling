@@ -77,11 +77,12 @@ pub use export::{
 };
 
 pub use apps::{
-    __cmd__open_in_default_app_cmd, __cmd__open_in_photoshop_cmd, __cmd__trash_photos_cmd,
+    __cmd__open_folder_cmd, __cmd__open_in_default_app_cmd, __cmd__open_in_photoshop_cmd,
+    __cmd__trash_photos_cmd, __tauri_command_name_open_folder_cmd,
     __tauri_command_name_open_in_default_app_cmd,
     __tauri_command_name_open_in_photoshop_cmd,
     __tauri_command_name_trash_photos_cmd,
-    open_in_default_app_cmd, open_in_photoshop_cmd, trash_photos_cmd,
+    open_folder_cmd, open_in_default_app_cmd, open_in_photoshop_cmd, trash_photos_cmd,
 };
 mod xmprw;
 

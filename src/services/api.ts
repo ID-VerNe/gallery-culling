@@ -106,18 +106,24 @@ export const api = {
   /**
    * Batch copy/export selected photos.
    * 返回成功 / 跳过 / 失败明细（后端对每项显式累计结果，不再静默失败）。
+   *
+   * `overwrite` 为 false（默认）时目标同名文件一律计入 skipped 且不覆盖；
+   * 为 true 时改由「暂存 + 原子 rename 覆盖」替换。取消语义不受影响 ——
+   * 暂存阶段从不碰目标目录里的既有文件。
    */
   batchExport: async (
     items: ExportItem[],
     targetFolder: string,
     includeRaw: boolean,
     includeJpg: boolean,
+    overwrite = false,
   ): Promise<ExportOutcome> => {
     return await invoke<ExportOutcome>('batch_export_cmd', {
       items,
       targetFolder,
       includeRaw,
       includeJpg,
+      overwrite,
     });
   },
 
@@ -127,7 +133,7 @@ export const api = {
    * 与 `batchExport` 的差异：源仍是同一批 `ExportItem`（渲染器自己按 baseName 找工程），
    * 但产物是「一张图一个文件」，所以没有 `includeRaw/includeJpg`，改由
    * 格式 / 长边 / 质量描述目标形态。返回结构刻意与 `batchExport` 保持一致，
-   * 这样前端的结果呈现与 Toast 分发可以完全共用。
+   * 这样前端的结果呈现可以完全共用。
    */
   batchRenderExport: async (
     items: ExportItem[],
@@ -135,6 +141,7 @@ export const api = {
     format: RenderFormat,
     longEdge: number,
     quality: number,
+    overwrite = false,
   ): Promise<ExportOutcome> => {
     return await invoke<ExportOutcome>('batch_render_export_cmd', {
       items,
@@ -144,7 +151,20 @@ export const api = {
       // 在这里翻译一次，避免 0 被渲染器当成「长边 0 像素」。
       longEdge: longEdge === 0 ? null : longEdge,
       quality,
+      overwrite,
     });
+  },
+
+  /**
+   * 在系统文件管理器中打开一个目录（导出结果的「打开目录」出口）。
+   *
+   * 为什么不复用 `openInDefaultApp`：那条走 `cmd /c start "" <path>`，
+   * 路径里出现 `&` / `^` 时会被 cmd 当命令分隔符重新解析，而文件夹名带 `&`
+   * 完全合法。这里走后端 opener，路径作为独立 argv 交给 explorer/open，
+   * 不经过 shell。
+   */
+  openFolder: async (path: string): Promise<void> => {
+    await invoke('open_folder_cmd', { path });
   },
 
   /**

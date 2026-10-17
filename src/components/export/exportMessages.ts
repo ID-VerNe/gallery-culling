@@ -10,7 +10,7 @@
  *  - `toast` → 弹窗外层的全局提示（取消时为空，与既有行为一致）。
  * 让两者共用同一批句子，才不会出现「结果条说成功、Toast 说失败」的分裂。
  */
-import type { ExportMode, ExportOutcome } from '../../types';
+import type { ExportFailure, ExportMode, ExportOutcome } from '../../types';
 import { EXPORT_MODES } from './exportConfig';
 
 /** 全局 Toast 的载荷；`kind` 决定用成功态还是错误态呈现。 */
@@ -24,12 +24,35 @@ export interface ExportResultMessage {
   message: string;
   /** 结果条是否走警示态。 */
   failed: boolean;
+  /**
+   * **全量**失败明细。
+   *
+   * `message` 里只放前 `FAILURE_DETAIL_LIMIT` 条（否则一句话会被撑成一篇），
+   * 完整列表交给结果条的展开区渲染 —— 只给 3 条 + 「等」而不给看剩下的入口，
+   * 等于把已经算出来的诊断信息丢掉。
+   */
+  failures: ExportFailure[];
+  /**
+   * 本次实际写入的目标目录。
+   *
+   * 结果条的「打开目录」用它而不是表单当前值：用户可能在导出完成后改了输入框，
+   * 那时「打开目录」必须指向**真的产生了文件**的那个目录。
+   */
+  folder: string;
   /** 全局 Toast；取消时为空（取消不弹 Toast，结果条已足够说明）。 */
   toast: ExportToast | null;
 }
 
-/** 失败明细最多展示 3 条，超出用「等」收尾，避免结果条撑爆。 */
-const FAILURE_DETAIL_LIMIT = 3;
+/** 失败明细最多展示 3 条，超出用「等」收尾，避免结果条正文撑爆。 */
+export const FAILURE_DETAIL_LIMIT = 3;
+
+/**
+ * 目标目录里的清单文件名 —— 与 Rust 侧 `commands/export.rs` 的
+ * `EXPORT_MANIFEST_NAME` 必须一致。它是对账用的持久记录（逐项
+ * `copied|rendered|skipped|failed|cancelled` + 错误原因），
+ * 结果条在失败明细被截断时把它的位置告诉用户。
+ */
+export const EXPORT_MANIFEST_NAME = '.gallery-export.json';
 
 /**
  * 把一次导出结果拼成给用户看的一句话。
@@ -53,6 +76,8 @@ export function buildOutcomeMessage(args: {
     return {
       message: `已取消导出：目标目录未产生${spec.cancelObject}。（目标：${targetFolder}）`,
       failed: false,
+      failures: [],
+      folder: targetFolder,
       toast: null,
     };
   }
@@ -78,14 +103,20 @@ export function buildOutcomeMessage(args: {
   return {
     message: `${failedCount > 0 ? spec.partialTitle : spec.successTitle}：${summary}。${detail}（目标：${targetFolder}）`,
     failed: failedCount > 0,
+    failures: outcome.failed,
+    folder: targetFolder,
     // 部分失败：措辞只否定「完全」二字，别让用户以为一张都没导出。
+    //
+    // 全部成功时**不再弹 Toast**：结果条就在弹窗里、和用户视线同一屏，
+    // 再弹一条同义句是纯噪音。失败才需要 Toast —— 它是唯一能在用户
+    // 关掉弹窗之后仍然留存的那条提示。
     toast:
       failedCount > 0
         ? {
             kind: 'error',
             text: `${spec.partialTitle}：失败 ${failedCount} ${spec.unit}，成功 ${outcome.exported} ${spec.unit}`,
           }
-        : { kind: 'success', text: `${summary}，目标：${targetFolder}` },
+        : null,
   };
 }
 

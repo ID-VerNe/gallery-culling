@@ -61,12 +61,14 @@ pub struct ExportOutcome {
 pub struct ExportManifestItem {
     pub src: String,
     pub dst: String,
-    /// "copied" | "skipped" | "failed" | "cancelled"
+    /// "copied" | "rendered" | "skipped" | "failed" | "cancelled"
     ///
     /// 说明：方案文档把取值限定为 `copied|overwritten|skipped|failed`。本项目
-    /// **从不覆盖**目标同名文件（一律 skipped），且取消会把已暂存但未搬迁的项
-    /// 如实标为 `cancelled`（否则清单会谎称它们被复制了）。故在不新增"被覆盖"
-    /// 取值的前提下，实际出现的是这四种。
+    /// 默认**不覆盖**目标同名文件（一律 skipped），覆盖由用户显式勾选
+    /// `overwrite` 开启；即便开启，条目级也只记 `copied`/`rendered` ——
+    /// 「这批有没有可能覆盖」是批次级事实，记在清单顶层的 `overwrite` 上。
+    /// 取消会把已暂存但未搬迁的项如实标为 `cancelled`（否则清单会谎称它们
+    /// 被复制了）。故实际出现的是这五种。
     pub result: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -101,6 +103,13 @@ struct ExportManifest<'a> {
     mode: &'a str,
     include_jpg: bool,
     include_raw: bool,
+    /// 本批是否在「覆盖同名文件」模式下运行。
+    ///
+    /// 只记批次级意图，不逐项记「这一项是否真的替换了旧文件」：条目级的
+    /// `result` 仍是 `copied`/`rendered`，用户关心的是「这批有没有可能覆盖」。
+    /// `false` 时**不序列化**，保持旧清单形状不变（老版本读得懂新文件）。
+    #[serde(skip_serializing_if = "is_false")]
+    overwrite: bool,
     /// 仅成片模式出现；复制模式为 `None` 且不序列化（保持旧清单形状不变）。
     #[serde(skip_serializing_if = "Option::is_none")]
     render: Option<RenderManifest<'a>>,
@@ -147,9 +156,13 @@ impl ExportStaging {
     /// 把一个源文件预备进临时目录（**不碰目标名**）。
     ///
     /// - 源不存在 → 跳过（沿用既有"只复制存在文件"语义）；
-    /// - 目标已存在同名文件 → 计入 `skipped`，**不覆盖**（保护用户已有文件）；
+    /// - 目标已存在同名文件且 `overwrite == false` → 计入 `skipped`，**不覆盖**
+    ///   （保护用户已有文件）；`overwrite == true` 时照常暂存，替换发生在提交阶段；
     /// - `fs::copy` 失败 → 计入 `failed`。
-    fn stage(&mut self, src: &Path, tmp_dir: &Path, target_dir: &Path) {
+    ///
+    /// 注意：`overwrite` 只影响「要不要暂存」，**不影响取消语义** —— 暂存阶段
+    /// 从不碰目标目录里的既有文件，所以取消依然是零污染。
+    fn stage(&mut self, src: &Path, tmp_dir: &Path, target_dir: &Path, overwrite: bool) {
         if !src.exists() {
             return;
         }
@@ -159,7 +172,7 @@ impl ExportStaging {
         let dst = target_dir.join(name);
         let src_str = src.to_string_lossy().to_string();
         let dst_str = dst.to_string_lossy().to_string();
-        if dst.exists() {
+        if dst.exists() && !overwrite {
             self.outcome.skipped += 1;
             self.manifest.push(ExportManifestItem {
                 src: src_str,
@@ -236,6 +249,10 @@ impl ExportStaging {
     }
 
     /// 提交阶段：把临时目录里暂存的文件**逐个原子搬迁**到目标名（同卷 rename）。
+    ///
+    /// 覆盖模式下这里会替换目标目录里的同名文件：`fs::rename` 在 Unix 是
+    /// `rename(2)`、在 Windows 是带 `MOVEFILE_REPLACE_EXISTING` 的 `MoveFileEx`，
+    /// 两者都原子地替换已存在的目标，不会出现「删了旧的、新的还没到」的空窗。
     fn commit(&mut self) {
         let staged = std::mem::take(&mut self.staged);
         for f in staged {
@@ -265,6 +282,12 @@ impl ExportStaging {
     }
 }
 
+/// `skip_serializing_if` 需要 `fn(&bool) -> bool`；`std::ops::Not::not` 收的是
+/// 值而不是引用，直接用会类型不匹配。
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// 写导出清单（best-effort：清单写失败不影响导出结果，只打日志）。
 fn write_export_manifest(
     target_dir: &Path,
@@ -274,6 +297,7 @@ fn write_export_manifest(
     render: Option<RenderManifest<'_>>,
     include_jpg: bool,
     include_raw: bool,
+    overwrite: bool,
     items: &[ExportManifestItem],
 ) {
     let manifest = ExportManifest {
@@ -284,6 +308,7 @@ fn write_export_manifest(
         mode,
         include_jpg,
         include_raw,
+        overwrite,
         render,
         items,
     };
@@ -305,10 +330,13 @@ pub async fn batch_export_cmd(
     target_folder: String,
     include_raw: bool,
     include_jpg: bool,
+    overwrite: Option<bool>,
 ) -> Result<ExportOutcome, String> {
     let cancel = state.export_cancel.clone();
     cancel.store(false, Ordering::SeqCst); // 复位上一轮遗留的取消标志
     let app_for_progress = app.clone();
+    // 缺省 false：老前端不传这个键时必须保持「从不覆盖」的旧行为。
+    let overwrite = overwrite.unwrap_or(false);
 
     blocking("批量导出任务异常", move || {
         let mut throttle = ProgressThrottle::new();
@@ -317,6 +345,7 @@ pub async fn batch_export_cmd(
             Path::new(&target_folder),
             include_raw,
             include_jpg,
+            overwrite,
             &cancel,
             |processed, total, current| {
                 if throttle.should_emit("export", processed, total) {
@@ -348,12 +377,16 @@ pub async fn batch_export_cmd(
 /// 取消时直接删除临时目录 —— 目标目录零污染，且绝不误删目标目录里本已存在的
 /// 同名用户文件（这正是"取消后删除已复制文件"方案的致命缺陷）。
 ///
+/// `overwrite` 为 true 时目标目录里的同名文件会在提交阶段被替换；false（默认）
+/// 时一律计入 `skipped` 且不动旧文件。
+///
 /// `cancel` 为协作式取消标志；`on_progress` 形如 `(processed, total, current)`。
 pub fn export_items(
     items: Vec<ExportItem>,
     target_folder: &Path,
     include_raw: bool,
     include_jpg: bool,
+    overwrite: bool,
     cancel: &AtomicBool,
     mut on_progress: impl FnMut(usize, usize, &str),
 ) -> Result<ExportOutcome, String> {
@@ -397,7 +430,7 @@ pub fn export_items(
 
         if include_jpg {
             if let Some(jpg_path_str) = &item.jpg_path {
-                staging.stage(Path::new(jpg_path_str), &tmp_dir, target_folder);
+                staging.stage(Path::new(jpg_path_str), &tmp_dir, target_folder, overwrite);
                 // 检查点②：JPG 复制后
                 if cancel.load(Ordering::SeqCst) {
                     cancelled = true;
@@ -410,7 +443,7 @@ pub fn export_items(
             if let Some(raw_path_str) = &item.raw_path {
                 let src = Path::new(raw_path_str);
                 if src.exists() {
-                    staging.stage(src, &tmp_dir, target_folder);
+                    staging.stage(src, &tmp_dir, target_folder, overwrite);
                     // 检查点③：RAW 复制后
                     if cancel.load(Ordering::SeqCst) {
                         cancelled = true;
@@ -419,7 +452,7 @@ pub fn export_items(
                     // Also copy matching .xmp if exists
                     let xmp_src = src.with_extension("xmp");
                     if xmp_src.exists() {
-                        staging.stage(&xmp_src, &tmp_dir, target_folder);
+                        staging.stage(&xmp_src, &tmp_dir, target_folder, overwrite);
                         // 检查点④：XMP 复制后
                         if cancel.load(Ordering::SeqCst) {
                             cancelled = true;
@@ -444,6 +477,7 @@ pub fn export_items(
             None,
             include_jpg,
             include_raw,
+            overwrite,
             &staging.manifest,
         );
         on_progress(total, total, "");
@@ -468,6 +502,7 @@ pub fn export_items(
         None,
         include_jpg,
         include_raw,
+        overwrite,
         &staging.manifest,
     );
     on_progress(total, total, "");
@@ -488,6 +523,7 @@ pub fn render_export_items(
     format: &str,
     quality: u8,
     long_edge: Option<u32>,
+    overwrite: bool,
     cancel: &AtomicBool,
     mut render: impl FnMut(&Path, &Path) -> Result<(), String>,
     mut on_progress: impl FnMut(usize, usize, &str),
@@ -552,9 +588,10 @@ pub fn render_export_items(
             staging.record_failure(src, &dst, "源文件不存在".to_string());
             continue;
         }
-        // 目标同名：计入 skipped 且**不调用渲染器** —— 渲染一张注定被丢弃的图
-        // 在大图上是几秒到几十秒的纯浪费。
-        if dst.exists() {
+        // 目标同名且**不覆盖**：计入 skipped 且不调用渲染器 —— 渲染一张注定被
+        // 丢弃的图在大图上是几秒到几十秒的纯浪费。覆盖模式下必须照常渲染，
+        // 否则「调色 → 再导出」永远拿不到新版本。
+        if dst.exists() && !overwrite {
             staging.outcome.skipped += 1;
             staging.manifest.push(ExportManifestItem {
                 src: src.to_string_lossy().to_string(),
@@ -603,6 +640,7 @@ pub fn render_export_items(
             Some(render_meta),
             false,
             false,
+            overwrite,
             &staging.manifest,
         );
         on_progress(total, total, "");
@@ -626,6 +664,7 @@ pub fn render_export_items(
         Some(render_meta),
         false,
         false,
+        overwrite,
         &staging.manifest,
     );
     on_progress(total, total, "");
@@ -633,7 +672,12 @@ pub fn render_export_items(
 }
 
 /// 成片渲染导出命令（薄封装：读设置 → 定位引擎 → 阻塞线程跑纯实现）。
+///
+/// `too_many_arguments` 豁免：这八个参数是**前端 IPC 的契约**（Tauri 按名取键，
+/// `src/services/api.ts` 逐个透传）。拆成结构体会同时改前端的调用形状，收益只是
+/// 让 lint 闭嘴；真正的参数收敛发生在下方纯实现 `render_export_items` 里。
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn batch_render_export_cmd(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -642,6 +686,7 @@ pub async fn batch_render_export_cmd(
     format: String,
     quality: Option<u8>,
     long_edge: Option<u32>,
+    overwrite: Option<bool>,
 ) -> Result<ExportOutcome, String> {
     // 白名单：UI 只暴露这三种。放行任意扩展名会让渲染器收到它不支持的目标格式，
     // 报错发生在渲染中途而不是调用前。
@@ -655,6 +700,8 @@ pub async fn batch_render_export_cmd(
     let exe = super::require_lumen(&settings)?;
 
     let quality = quality.unwrap_or(92);
+    // 缺省 false：老前端不传这个键时必须保持「从不覆盖」的旧行为。
+    let overwrite = overwrite.unwrap_or(false);
     let cancel = state.export_cancel.clone();
     cancel.store(false, Ordering::SeqCst); // 复位上一轮遗留的取消标志
     let app_for_progress = app.clone();
@@ -667,6 +714,7 @@ pub async fn batch_render_export_cmd(
             &format,
             quality,
             long_edge,
+            overwrite,
             &cancel,
             |src, out| {
                 lumen::export_photo(
@@ -770,7 +818,7 @@ mod tests {
 
         let items = vec![item_with_jpg(&jpg)];
         let no_cancel = AtomicBool::new(false);
-        let res = export_items(items, &dir, false, true, &no_cancel, |_, _, _| {});
+        let res = export_items(items, &dir, false, true, false, &no_cancel, |_, _, _| {});
 
         assert!(res.is_err(), "目标==源目录时必须整体拒绝");
         assert_eq!(
@@ -802,7 +850,7 @@ mod tests {
         let items = vec![item_with_jpg(&src_jpg)];
         let no_cancel = AtomicBool::new(false);
         let outcome =
-            export_items(items, &dst_dir, false, true, &no_cancel, |_, _, _| {}).expect("不应报错");
+            export_items(items, &dst_dir, false, true, false, &no_cancel, |_, _, _| {}).expect("不应报错");
 
         assert_eq!(outcome.exported, 0, "不应复制");
         assert_eq!(outcome.skipped, 1, "同名文件应计入 skipped");
@@ -825,6 +873,47 @@ mod tests {
         let _ = fs::remove_dir_all(&dst_dir);
     }
 
+    /// 覆盖模式：同名文件被**替换**（而非 skipped），且清单记下 `overwrite: true`。
+    ///
+    /// 这条守的是「调色 → 导出 → 再调 → 再导出」—— 没有它，第二次导出全部
+    /// skipped，用户拿到的仍是上一版。
+    #[test]
+    fn export_overwrite_replaces_existing_same_name_file() {
+        let src_dir = unique_dir("ow_src");
+        let dst_dir = unique_dir("ow_dst");
+
+        let src_jpg = src_dir.join("IMG_0002.jpg");
+        fs::write(&src_jpg, b"SRC-NEW-VERSION").unwrap();
+
+        let dst_jpg = dst_dir.join("IMG_0002.jpg");
+        fs::write(&dst_jpg, b"EXISTING-OLD").unwrap();
+
+        let items = vec![item_with_jpg(&src_jpg)];
+        let no_cancel = AtomicBool::new(false);
+        let outcome = export_items(items, &dst_dir, false, true, true, &no_cancel, |_, _, _| {})
+            .expect("不应报错");
+
+        assert_eq!(outcome.exported, 1, "覆盖模式下应计入已导出");
+        assert_eq!(outcome.skipped, 0, "覆盖模式下不该再记 skipped");
+        assert!(outcome.failed.is_empty(), "不应有失败");
+        assert_eq!(
+            fs::read(&dst_jpg).unwrap(),
+            b"SRC-NEW-VERSION",
+            "同名文件必须被新内容替换"
+        );
+        assert!(
+            !dir_entries(&dst_dir)
+                .iter()
+                .any(|n| n.starts_with(EXPORT_TMP_PREFIX)),
+            "提交后不得残留临时目录"
+        );
+        // 清单是事后追责的唯一凭据：必须能看出这批是覆盖模式跑的
+        assert_eq!(read_manifest(&dst_dir)["overwrite"], true);
+
+        let _ = fs::remove_dir_all(&src_dir);
+        let _ = fs::remove_dir_all(&dst_dir);
+    }
+
     /// 复制失败（源是同名的目录 → `fs::copy` 报错）应计入 failed，不再静默吞掉。
     #[test]
     fn export_reports_copy_failure() {
@@ -837,7 +926,7 @@ mod tests {
 
         let items = vec![item_with_jpg(&bogus)];
         let no_cancel = AtomicBool::new(false);
-        let outcome = export_items(items, &dst_dir, false, true, &no_cancel, |_, _, _| {})
+        let outcome = export_items(items, &dst_dir, false, true, false, &no_cancel, |_, _, _| {})
             .expect("整体不应报错");
 
         assert_eq!(outcome.exported, 0);
@@ -859,7 +948,7 @@ mod tests {
         let items = vec![item_with_jpg(&jpg)];
         let no_cancel = AtomicBool::new(false);
         let outcome =
-            export_items(items, &dst_dir, false, true, &no_cancel, |_, _, _| {}).expect("不应报错");
+            export_items(items, &dst_dir, false, true, false, &no_cancel, |_, _, _| {}).expect("不应报错");
 
         assert_eq!(outcome.exported, 1);
         assert!(!outcome.cancelled);
@@ -901,7 +990,7 @@ mod tests {
         // 在第 0 项迭代开头之后立刻置位取消（通过进度回调实现）
         let cancel = AtomicBool::new(false);
         let cancel_ref = &cancel;
-        let outcome = export_items(items, &dst_dir, false, true, &cancel, |idx, _, _| {
+        let outcome = export_items(items, &dst_dir, false, true, false, &cancel, |idx, _, _| {
             if idx == 0 {
                 cancel_ref.store(true, Ordering::SeqCst);
             }
@@ -955,7 +1044,7 @@ mod tests {
         // 处理完第 0 项后取消（此时 IMG_0100 已暂存到临时目录、等待被丢弃）
         let cancel = AtomicBool::new(false);
         let cancel_ref = &cancel;
-        let outcome = export_items(items, &dst_dir, false, true, &cancel, |idx, _, _| {
+        let outcome = export_items(items, &dst_dir, false, true, false, &cancel, |idx, _, _| {
             if idx == 0 {
                 cancel_ref.store(true, Ordering::SeqCst);
             }
@@ -1024,6 +1113,7 @@ mod tests {
             "jpg",
             92,
             None,
+            false,
             &no_cancel,
             fake_render,
             |_, _, _| {},
@@ -1073,6 +1163,7 @@ mod tests {
             "jpg",
             92,
             None,
+            false,
             &no_cancel,
             |_src, out| {
                 if out.to_string_lossy().contains("IMG_B") {
@@ -1117,6 +1208,7 @@ mod tests {
             "jpg",
             92,
             None,
+            false,
             &no_cancel,
             |_src, _out| Ok(()), // 谎报成功，什么都不写
             |_, _, _| {},
@@ -1145,6 +1237,7 @@ mod tests {
             "jpg",
             92,
             None,
+            false,
             &cancel,
             |_src, out| {
                 fs::write(out, b"RENDERED").map_err(|e| e.to_string())?;
@@ -1185,6 +1278,7 @@ mod tests {
             "jpg",
             92,
             None,
+            false,
             &no_cancel,
             |_src, out| {
                 called = true;
@@ -1207,6 +1301,44 @@ mod tests {
         let _ = fs::remove_dir_all(&dst);
     }
 
+    /// 覆盖模式：同名目标**照常渲染并替换**（否则「再导出」永远拿不到新版）。
+    #[test]
+    fn render_overwrite_rerenders_and_replaces_existing() {
+        let (src, dst, items) = render_fixture("r5b", &["IMG_A"]);
+        fs::write(dst.join("IMG_A.jpg"), b"USER-OLD-RENDER").unwrap();
+
+        let mut called = false;
+        let no_cancel = AtomicBool::new(false);
+        let outcome = render_export_items(
+            items,
+            &dst,
+            "jpg",
+            92,
+            None,
+            true,
+            &no_cancel,
+            |_src, out| {
+                called = true;
+                fs::write(out, b"RENDERED-NEW").map_err(|e| e.to_string())
+            },
+            |_, _, _| {},
+        )
+        .expect("不应报错");
+
+        assert_eq!(outcome.exported, 1);
+        assert_eq!(outcome.skipped, 0);
+        assert!(called, "覆盖模式必须真的重新渲染，不能跳过");
+        assert_eq!(
+            fs::read(dst.join("IMG_A.jpg")).unwrap(),
+            b"RENDERED-NEW",
+            "旧成片必须被新渲染结果替换"
+        );
+        assert_eq!(read_manifest(&dst)["overwrite"], true);
+
+        let _ = fs::remove_dir_all(&src);
+        let _ = fs::remove_dir_all(&dst);
+    }
+
     /// R6：目标 == 源目录 → 整体拒绝，文案精确，渲染器一次都没被调用。
     #[test]
     fn render_rejects_target_equal_to_source_dir() {
@@ -1220,6 +1352,7 @@ mod tests {
             "jpg",
             92,
             None,
+            false,
             &no_cancel,
             |_s, _o| {
                 called = true;
@@ -1249,6 +1382,7 @@ mod tests {
             "jpg",
             92,
             None,
+            false,
             &no_cancel,
             fake_render,
             |_, _, _| {},
@@ -1266,6 +1400,7 @@ mod tests {
             "jpg",
             92,
             None,
+            false,
             &no_cancel,
             fake_render,
             |_, _, _| {},
@@ -1287,6 +1422,7 @@ mod tests {
             "jpg",
             92,
             None,
+            false,
             &no_cancel,
             fake_render,
             |_, _, _| {},
@@ -1314,6 +1450,7 @@ mod tests {
             "jpg",
             92,
             None,
+            false,
             &no_cancel,
             |_s, out| {
                 seen_outputs.push(out.to_path_buf());

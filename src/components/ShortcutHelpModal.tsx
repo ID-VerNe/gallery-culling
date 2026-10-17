@@ -30,6 +30,7 @@ const GROUPS: ShortcutGroup[] = [
       { keys: 'P', label: '标记保留 (Pick)' },
       { keys: 'X', label: '标记淘汰 (Reject)' },
       { keys: 'Ctrl/⌘ + Z', label: '撤销上一处星级 / 标记改动' },
+      { keys: 'Ctrl/⌘ + E', label: '打开批量导出' },
     ],
   },
   {

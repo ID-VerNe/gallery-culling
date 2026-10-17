@@ -65,6 +65,31 @@ pub async fn open_in_default_app_cmd(file_path: String) -> Result<bool, String> 
     Ok(true)
 }
 
+/// 在系统文件管理器中打开一个**目录**。
+///
+/// 为什么不复用 `open_in_default_app_cmd`：那条在 Windows 上走
+/// `cmd /c start "" <path>`，路径会被 cmd 当作命令行**重新解析** —— 名字里带
+/// `&` / `^` 的文件夹（`2024_客户A&B` 这种完全合法）会被截断成两条命令。
+/// 这里改用 opener 插件：路径作为独立参数交给 explorer / open，不经过 shell。
+///
+/// 先 `is_dir()` 再打开：目标目录可能已被用户删掉或改名，此时给一句明确的
+/// 「目录不存在」比让资源管理器弹一个空白窗口更有用。
+#[tauri::command]
+pub async fn open_folder_cmd(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("目录路径为空".to_string());
+    }
+    if !Path::new(trimmed).is_dir() {
+        return Err(format!("目录不存在或已被移动：{}", trimmed));
+    }
+    app.opener()
+        .open_path(trimmed.to_string(), None::<&str>)
+        .map_err(|e| format!("无法打开目录: {}", e))
+}
+
 #[tauri::command]
 pub async fn trash_photos_cmd(file_paths: Vec<String>) -> Result<usize, String> {
     blocking("移动至回收站失败", move || {

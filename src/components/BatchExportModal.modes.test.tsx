@@ -37,7 +37,7 @@ const group: PhotoGroupInfo = {
   hasXmp: false,
 };
 
-/** 带 RAW 的组（COMPLETE），用于验证「仅含 RAW」档与「无画质提示」。 */
+/** 带 RAW 的组（COMPLETE），用于验证「含 RAW」档与「无画质提示」。 */
 const groupWithRaw: PhotoGroupInfo = {
   ...group,
   id: 'g2',
@@ -63,7 +63,6 @@ interface SetupProps {
 
 function setup(props: SetupProps = {}) {
   const onError = vi.fn();
-  const onSuccess = vi.fn();
   const onClose = vi.fn();
   const user = userEvent.setup();
   render(
@@ -72,11 +71,10 @@ function setup(props: SetupProps = {}) {
       onClose={onClose}
       groups={[group]}
       onError={onError}
-      onSuccess={onSuccess}
       {...props}
     />,
   );
-  return { user, onError, onSuccess, onClose };
+  return { user, onError, onClose };
 }
 
 const fillTarget = (user: ReturnType<typeof userEvent.setup>) =>
@@ -279,7 +277,7 @@ describe('F9 取消', () => {
       failed: [],
       cancelled: true,
     });
-    const { user, onError, onSuccess } = setup();
+    const { user, onError } = setup();
     await switchToRender(user);
     await fillTarget(user);
     await user.click(screen.getByRole('button', { name: '开始生成成片' }));
@@ -288,7 +286,6 @@ describe('F9 取消', () => {
     expect(status).toHaveTextContent('目标目录未产生任何成片');
     expect(status).not.toHaveTextContent('已生成');
     expect(onError).not.toHaveBeenCalled();
-    expect(onSuccess).not.toHaveBeenCalled();
   });
 });
 
@@ -316,22 +313,22 @@ describe('F10 运行中锁定', () => {
   });
 });
 
-describe('导出范围：仅含 RAW', () => {
+describe('导出范围：含 RAW', () => {
   it('只收带 RAW 的组，JPG-only 不计入（也不影响「全部」）', async () => {
     const user = userEvent.setup();
     render(
       <BatchExportModal isOpen onClose={vi.fn()} groups={[group, groupWithRaw]} />,
     );
 
-    // 两组都是 pick：全部 = 2，仅含 RAW = 1
+    // 两组都是 pick：全部 = 2，含 RAW = 1
     expect(screen.getByLabelText(/全部非淘汰照片/).closest('label')).toHaveTextContent(
       '(2)',
     );
-    expect(screen.getByLabelText(/仅含 RAW 的组/).closest('label')).toHaveTextContent(
+    expect(screen.getByLabelText(/含 RAW 的组/).closest('label')).toHaveTextContent(
       '(1)',
     );
 
-    await user.click(screen.getByLabelText(/仅含 RAW 的组/));
+    await user.click(screen.getByLabelText(/含 RAW 的组/));
     await user.type(screen.getByLabelText('目标导出目录'), 'D:/out');
     expect(screen.getByRole('button', { name: '开始导出' })).toBeEnabled();
   });
@@ -339,7 +336,7 @@ describe('导出范围：仅含 RAW', () => {
   it('候选全被该档排除时拦下，提示先打星/保留', async () => {
     const user = userEvent.setup();
     render(<BatchExportModal isOpen onClose={vi.fn()} groups={[group]} />);
-    await user.click(screen.getByLabelText(/仅含 RAW 的组/));
+    await user.click(screen.getByLabelText(/含 RAW 的组/));
     await user.type(screen.getByLabelText('目标导出目录'), 'D:/out');
 
     // group 是 JPG-only → 候选为空 → 按钮禁用

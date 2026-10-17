@@ -43,6 +43,7 @@ pub fn run() {
             commands::update_rating_flag_cmd,
             commands::open_in_photoshop_cmd,
             commands::open_in_default_app_cmd,
+            commands::open_folder_cmd,
             commands::trash_photos_cmd,
             commands::batch_export_cmd,
             commands::batch_render_export_cmd,

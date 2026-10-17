@@ -3,7 +3,8 @@
  *
  * 契约：导出的写入路径是本轮最高危项，**部分失败绝不能伪装成成功**。
  * - `failed.length > 0` → 琥珀色 + AlertTriangle + role="alert"，Toast 走 onError；
- * - `failed.length === 0` → 绿色 + CheckCircle2 + role="status"，Toast 走 onSuccess。
+ * - `failed.length === 0` → 绿色 + CheckCircle2 + role="status"，**不弹 Toast**
+ *   （结果条与用户视线同一屏，再弹一条同义句是噪音）。
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
@@ -36,7 +37,6 @@ const group: PhotoGroupInfo = {
 
 function setup() {
   const onError = vi.fn();
-  const onSuccess = vi.fn();
   const user = userEvent.setup();
   render(
     <BatchExportModal
@@ -44,10 +44,9 @@ function setup() {
       onClose={vi.fn()}
       groups={[group]}
       onError={onError}
-      onSuccess={onSuccess}
     />,
   );
-  return { user, onError, onSuccess };
+  return { user, onError };
 }
 
 async function runExport(user: ReturnType<typeof userEvent.setup>) {
@@ -63,12 +62,11 @@ describe('BatchExportModal —— 结果呈现', () => {
       skipped: 1,
       failed: [{ path: '/x/a.NEF', reason: '拒绝访问' }],
     });
-    const { user, onError, onSuccess } = setup();
+    const { user, onError } = setup();
 
     await runExport(user);
 
     await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
-    expect(onSuccess).not.toHaveBeenCalled();
 
     // 结果框：警示态（alert），不是 status
     const alert = screen.getByRole('alert');
@@ -88,22 +86,21 @@ describe('BatchExportModal —— 结果呈现', () => {
     expect(iconClass).not.toContain('circle-check');
   });
 
-  it('全部成功：绿色 + CheckCircle2 + role=status，Toast 走 onSuccess', async () => {
+  it('全部成功：绿色 + CheckCircle2 + role=status，且不弹任何 Toast', async () => {
     mockInvokeCommand('batch_export_cmd', { exported: 3, skipped: 0, failed: [] });
-    const { user, onError, onSuccess } = setup();
+    const { user, onError } = setup();
 
     await runExport(user);
 
-    await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
-    expect(onError).not.toHaveBeenCalled();
-
-    const status = screen.getByRole('status');
+    const status = await screen.findByRole('status');
     expect(screen.queryByRole('alert')).toBeNull();
     expect(status).toHaveTextContent('导出完成：已导出 3 个');
     expect(status.className).toContain('emerald');
     expect(status.className).not.toContain('amber');
     const iconClass = status.querySelector('svg')?.getAttribute('class') ?? '';
     expect(iconClass).toContain('lucide-circle-check');
+    // 成功不再重复弹 Toast：结果条已经说全了
+    expect(onError).not.toHaveBeenCalled();
   });
 });
 
@@ -175,7 +172,7 @@ describe('BatchExportModal —— 导出进度与取消（M-05）', () => {
       failed: [],
       cancelled: true,
     });
-    const { user, onError, onSuccess } = setup();
+    const { user, onError } = setup();
 
     await runExport(user);
 
@@ -184,6 +181,5 @@ describe('BatchExportModal —— 导出进度与取消（M-05）', () => {
     // 取消 ≠ 失败，也绝不写"已导出 N 个"这类会被误读为已落盘的措辞
     expect(status).not.toHaveTextContent('已导出');
     expect(onError).not.toHaveBeenCalled();
-    expect(onSuccess).not.toHaveBeenCalled();
   });
 });

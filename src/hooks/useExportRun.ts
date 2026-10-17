@@ -31,7 +31,13 @@ export interface UseExportRunOptions {
   mode: ExportMode;
   /** 表单输入每变化一次自增 —— 用来作废上一次结果。 */
   resetSignal: number;
-  onSuccess?: (message: string) => void;
+  /**
+   * 失败提示的出口（部分失败、抛错、取消失败都走这里）。
+   *
+   * 刻意**没有** `onSuccess`：成功时结果条就在弹窗里、和用户视线同一屏，
+   * 再弹一条同义 Toast 是纯噪音。失败才需要 Toast —— 它是唯一能在用户
+   * 关掉弹窗之后仍然留存的那条提示。
+   */
   onError?: (message: string) => void;
 }
 
@@ -54,14 +60,11 @@ export interface ExportRun {
   }) => Promise<void>;
   /** 请求取消。命令失败会提示但不抛给调用方。 */
   cancel: () => Promise<void>;
-  /** 手动清空结果（如弹窗重新打开时）。 */
-  reset: () => void;
 }
 
 export function useExportRun({
   mode,
   resetSignal,
-  onSuccess,
   onError,
 }: UseExportRunOptions): ExportRun {
   const [result, setResult] = useState<ExportResultView | null>(null);
@@ -76,10 +79,10 @@ export function useExportRun({
   } = useTaskProgress('export');
 
   // 父组件常传内联箭头函数：放 ref 里，避免它们每次 render 都让 `run` 重建。
-  const callbacks = useRef({ onSuccess, onError });
+  const callbacks = useRef({ onError });
   useEffect(() => {
-    callbacks.current = { onSuccess, onError };
-  }, [onSuccess, onError]);
+    callbacks.current = { onError };
+  }, [onError]);
 
   // 输入一变，上次结果立即作废 —— 否则用户改了选项还看着旧结论。
   useEffect(() => {
@@ -93,10 +96,14 @@ export function useExportRun({
       try {
         const outcome = await invoke();
         const built = buildOutcomeMessage({ mode, outcome, targetFolder });
-        setResult({ message: built.message, failed: built.failed });
+        setResult({
+          message: built.message,
+          failed: built.failed,
+          failures: built.failures,
+          folder: built.folder,
+        });
         // 取消时 `toast` 为 null：结果条已经把话说全，不再弹一次。
         if (built.toast?.kind === 'error') callbacks.current.onError?.(built.toast.text);
-        else if (built.toast) callbacks.current.onSuccess?.(built.toast.text);
       } catch (err) {
         // 用 getter 读最新值：这里读 `cancelRequested` 状态会是陈旧闭包。
         if (isCancelRequested()) {
@@ -105,7 +112,12 @@ export function useExportRun({
             outcome: CANCELLED_OUTCOME,
             targetFolder,
           });
-          setResult({ message: built.message, failed: built.failed });
+          setResult({
+            message: built.message,
+            failed: built.failed,
+            failures: built.failures,
+            folder: built.folder,
+          });
         } else {
           callbacks.current.onError?.(`导出出错：${String(err)}`);
         }
@@ -124,7 +136,5 @@ export function useExportRun({
     }
   }, [cancelTask]);
 
-  const reset = useCallback(() => setResult(null), []);
-
-  return { isRunning, progress, cancelRequested, result, run, cancel, reset };
+  return { isRunning, progress, cancelRequested, result, run, cancel };
 }

@@ -410,6 +410,7 @@ function AppShell() {
     onHoldOriginalEnd: handleHoldOriginalEnd,
     onFocusSearch: handleFocusSearch,
     onOpenShortcutHelp: () => setIsShortcutHelpOpen(true),
+    onOpenExport: () => setIsExportOpen(true),
     onUndo: () => void handleUndo(),
   });
 
@@ -635,7 +636,6 @@ function AppShell() {
         lumenDetail={lumenStatus.detail}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onError={(m) => toast.error(m)}
-        onSuccess={(m) => toast.success(m)}
       />
 
       {/* Settings Modal */}

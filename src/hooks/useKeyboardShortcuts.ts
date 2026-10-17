@@ -29,6 +29,13 @@ interface KeyboardShortcutsProps {
   onFocusSearch?: () => void;
   onOpenShortcutHelp?: () => void;
   /**
+   * 打开批量导出弹窗，绑定 `Ctrl/Cmd+E`。
+   *
+   * 必须单独开一档（放在通用守卫之后、组合键让路之前）：步骤 6 会把所有
+   * 带修饰键的按键直接 return，晚一步就永远收不到。
+   */
+  onOpenExport?: () => void;
+  /**
    * 单步撤销（L-11），绑定 `Ctrl/Cmd+Z`。
    *
    * 位置很关键：本分支排在**通用守卫之后**，所以焦点在输入框/文本域内时
@@ -57,6 +64,7 @@ export function useKeyboardShortcuts({
   onHoldOriginalEnd,
   onFocusSearch,
   onOpenShortcutHelp,
+  onOpenExport,
   onUndo,
 }: KeyboardShortcutsProps) {
   /** `\` 是否处于按住态 —— 供 blur / visibilitychange 复位兜底判断，避免误复位。 */
@@ -159,6 +167,21 @@ export function useKeyboardShortcuts({
         if (onUndo) {
           e.preventDefault();
           onUndo();
+        }
+        return;
+      }
+
+      // 5.6 打开导出弹窗：Ctrl/Cmd+E。
+      //     单独一档的原因：步骤 6 会把所有带修饰键的按键直接 return，
+      //     晚一步就永远收不到。也不与步骤 6 冲突 —— 这里先返回。
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        !e.altKey &&
+        (e.key === 'e' || e.key === 'E')
+      ) {
+        if (onOpenExport) {
+          e.preventDefault();
+          onOpenExport();
         }
         return;
       }
@@ -393,6 +416,7 @@ export function useKeyboardShortcuts({
     onHoldOriginalEnd,
     onFocusSearch,
     onOpenShortcutHelp,
+    onOpenExport,
     onUndo,
   ]);
 }

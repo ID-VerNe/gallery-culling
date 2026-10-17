@@ -1,4 +1,4 @@
-import React, { useEffect, useId } from 'react';
+import React, { useId } from 'react';
 import { FolderOpen, Download } from 'lucide-react';
 import { ExportItem, PhotoGroupInfo } from '../types';
 import { api } from '../services/api';
@@ -8,6 +8,7 @@ import { useExportForm } from '../hooks/useExportForm';
 import { useExportRun } from '../hooks/useExportRun';
 import { CopyOptions } from './export/CopyOptions';
 import { RenderOptions } from './export/RenderOptions';
+import { OverwriteToggle } from './export/OverwriteToggle';
 import { ExportModeSelector } from './export/ExportModeSelector';
 import { LumenGateNotice, type LumenGateStatus } from './export/LumenGateNotice';
 import { ExportResultPanel } from './export/ExportResultPanel';
@@ -28,7 +29,6 @@ interface BatchExportModalProps {
   /** 「去设置」入口。 */
   onOpenSettings?: () => void;
   onError?: (message: string) => void;
-  onSuccess?: (message: string) => void;
 }
 
 /**
@@ -37,6 +37,9 @@ interface BatchExportModalProps {
  * 职责只有三件：分区顺序、Modal 壳、footer 组装。
  * 表单状态归 `useExportForm`，执行与结果归 `useExportRun`，文案归 `exportMessages`，
  * 呈现归 `export/*` 组件。这里出现第二处 `if (mode === ...)` 就说明逻辑漏了。
+ *
+ * **成功不弹 Toast**：结果条就在本弹窗里、与用户视线同一屏，再弹一条同义句是
+ * 纯噪音。只有失败才走 `onError` —— 它是唯一能在用户关掉弹窗后仍然留存的提示。
  */
 export const BatchExportModal: React.FC<BatchExportModalProps> = ({
   isOpen,
@@ -46,10 +49,11 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
   lumenDetail,
   onOpenSettings,
   onError,
-  onSuccess,
 }) => {
   /** D8：把错误文案与输入框关联，读屏聚焦输入时也能读到。 */
   const folderErrorId = useId();
+  /** 阻断原因的常驻展示位（footer 左侧）。 */
+  const validationId = useId();
 
   // 探测中按「可用」放行（乐观）：用户此刻多半还在填目录，真不可用时后端会逐项计入 failed。
   const lumenAvailable = lumenStatus !== 'unavailable';
@@ -57,24 +61,19 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
   const run = useExportRun({
     mode: form.mode,
     resetSignal: form.resetSignal,
-    onSuccess,
     onError,
   });
 
   const isExporting = run.isRunning;
   const spec = EXPORT_MODES[form.mode];
-
-  // 每次打开都清掉上次结果，避免「第二次导出看到第一次的句子」。
-  useEffect(() => {
-    if (isOpen) run.reset();
-  }, [isOpen, run.reset]);
+  /** 复制模式下「组」与「文件」不是一回事，只有真的不等时才补一句，避免噪音。 */
+  const showFileCount =
+    form.mode === 'copy' && form.expectedFileCount !== form.candidates.length;
 
   const handleExport = async () => {
-    // 按钮的 disabled 与这里的提示同源（`form.validation`），不会出现「能点但点了报错」。
-    if (form.validation) {
-      onError?.(form.validation);
-      return;
-    }
+    // 按钮在 validation 非空时就是 disabled，正常路径走不到这里。
+    // 保留这道闸是因为 `run` 一旦发出就是一次真实写盘 —— 宁可多挡一次。
+    if (form.validation) return;
 
     const items: ExportItem[] = form.candidates.map((g) => ({
       baseName: g.baseName,
@@ -83,7 +82,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
     }));
 
     // 全组件唯一的模式分叉：调不同的命令，产出同一种 outcome。
-    // 之后的进度、取消、结果文案、Toast 分发全部共用。
+    // 之后的进度、取消、结果文案全部共用。
     await run.run({
       invoke:
         form.mode === 'copy'
@@ -93,6 +92,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
                 form.targetFolder,
                 form.includeRaw,
                 form.includeJpg,
+                form.overwrite,
               )
           : () =>
               api.batchRenderExport(
@@ -101,9 +101,24 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
                 form.renderFormat,
                 form.renderLongEdge,
                 form.quality,
+                form.overwrite,
               ),
       targetFolder: form.targetFolder,
     });
+  };
+
+  /**
+   * 打开结果目录。
+   *
+   * 传的是**结果里记录的那个目录**（`run.result.folder`），不是表单当前值 ——
+   * 用户可能在导出完成后改了输入框，那时该打开的是真的产生了文件的那个。
+   */
+  const handleOpenFolder = async (folder: string) => {
+    try {
+      await api.openFolder(folder);
+    } catch (e) {
+      onError?.(`无法打开导出目录：${String(e)}`);
+    }
   };
 
   return (
@@ -111,6 +126,9 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
       isOpen={isOpen}
       onClose={onClose}
       title="批量挑选导出"
+      // E-04：范围档作用于**全部已扫描照片**，与左侧筛选/多选无关。
+      // 不说清楚，用户会以为「我筛出来的那几张」就是导出范围。
+      subtitle="导出范围基于全部已扫描照片，不受左侧筛选与多选影响"
       maxWidth="max-w-lg"
       // D2：导出进行中拦截关闭路径（X / Esc），配合下方禁用的「关闭」按钮，
       // 避免用户误以为「关闭 = 取消导出」。
@@ -118,21 +136,44 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
       icon={<Download className="w-4 h-4" aria-hidden="true" />}
       footer={
         <>
-          <span className="mr-auto text-white/70 text-[11px]">
-            {spec.estimateVerb}:{' '}
-            <b className="text-white font-mono tabular-nums">
-              {form.candidates.length}
-            </b>{' '}
-            {spec.estimateUnit}
-          </span>
+          {/*
+            footer 左侧是**唯一的状态说明位**，按上下文切换：
+            导出中 → 关闭语义；否则 → 预计量 + 阻断原因。
+
+            阻断原因必须常驻可见：主按钮在 `validation` 非空时就是 disabled，
+            而 disabled 按钮不可聚焦，任何挂在它身上的说明（title /
+            aria-describedby）键盘与读屏都拿不到。唯一可靠的办法是画在屏幕上。
+          */}
+          <div className="mr-auto min-w-0 flex flex-col gap-0.5 text-[11px] leading-tight">
+            {isExporting ? (
+              <span className="text-white/70">导出进行中，关闭不会停止导出</span>
+            ) : (
+              <>
+                <span className="text-white/70">
+                  {spec.estimateVerb}:{' '}
+                  <b className="text-white font-mono tabular-nums">
+                    {form.candidates.length}
+                  </b>{' '}
+                  {spec.estimateUnit}
+                  {showFileCount && (
+                    <span className="text-white/50">
+                      （共{' '}
+                      <b className="font-mono tabular-nums">{form.expectedFileCount}</b>{' '}
+                      个文件）
+                    </span>
+                  )}
+                </span>
+                {form.validation && (
+                  <span id={validationId} className="text-amber-200/90">
+                    {form.validation}
+                  </span>
+                )}
+              </>
+            )}
+          </div>
           <button
             onClick={onClose}
             disabled={isExporting}
-            title={
-              isExporting
-                ? '导出进行中：请等待完成或点击「取消」，关闭不会停止导出'
-                : undefined
-            }
             className="focus-ring px-3.5 py-1.5 rounded-md bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-background-surface-hover"
           >
             关闭
@@ -140,6 +181,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
           <button
             onClick={handleExport}
             disabled={isExporting || !form.canRun}
+            aria-describedby={form.validation ? validationId : undefined}
             className="focus-ring flex items-center gap-1.5 px-3.5 py-1.5 bg-white hover:bg-white/90 text-black active:scale-[0.96] disabled:bg-white/10 disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-transform shadow-sm"
           >
             <Download className="w-3.5 h-3.5" aria-hidden="true" />
@@ -171,9 +213,10 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
             onChange={(e) => form.setTargetFolder(e.target.value)}
             disabled={isExporting}
             placeholder="请选择或粘贴保存挑选照片的文件夹…"
+            title={form.targetFolder || undefined}
             aria-describedby={form.targetIsSourceDir ? folderErrorId : undefined}
             aria-invalid={form.targetIsSourceDir || undefined}
-            className="focus-ring flex-1 min-w-0 bg-background-base border border-border-default rounded-md px-3 py-1.5 text-white outline-none font-mono text-[11px] focus:border-white/40 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="focus-ring flex-1 min-w-0 bg-background-base border border-border-default rounded-md px-3 py-1.5 text-white outline-none font-mono text-xs focus:border-white/40 disabled:opacity-50 disabled:cursor-not-allowed"
           />
           <button
             onClick={form.browseTarget}
@@ -237,6 +280,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
             format={form.renderFormat}
             longEdge={form.renderLongEdge}
             qualityText={form.qualityText}
+            qualityNotice={form.qualityNotice}
             jpgOnlyCount={form.jpgOnlyCount}
             onChangeFormat={form.setRenderFormat}
             onChangeLongEdge={form.setRenderLongEdge}
@@ -254,7 +298,14 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
         </>
       )}
 
-      {/* 5. 进度 + 取消（M-05） */}
+      {/* 5. 覆盖策略：两种模式共用的修饰项 */}
+      <OverwriteToggle
+        checked={form.overwrite}
+        onChange={form.setOverwrite}
+        disabled={isExporting}
+      />
+
+      {/* 6. 进度 + 取消（M-05） */}
       <TaskProgressBar
         isRunning={isExporting}
         processed={run.progress?.processed ?? 0}
@@ -266,8 +317,8 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
         className="bg-background-base border border-default rounded p-2.5"
       />
 
-      {/* 6. 结果：成功走绿色 status，部分失败走琥珀色 alert（必须立即知晓） */}
-      <ExportResultPanel result={run.result} />
+      {/* 7. 结果：成功走绿色 status，部分失败走琥珀色 alert（必须立即知晓） */}
+      <ExportResultPanel result={run.result} onOpenFolder={handleOpenFolder} />
     </Modal>
   );
 };

@@ -33,6 +33,11 @@ interface RenderOptionsProps {
    * 只在 JPEG 有质量参数时才有意义，所以由本组件按格式决定是否展示。
    */
   jpgOnlyCount?: number;
+  /**
+   * 质量被规整时的说明（输入 200 失焦后变 100）。`null` 表示本次没有规整。
+   * 静默改写输入框会让用户以为程序乱改，必须说出来。
+   */
+  qualityNotice?: string | null;
   disabled?: boolean;
 }
 
@@ -45,12 +50,19 @@ export const RenderOptions: React.FC<RenderOptionsProps> = ({
   onChangeQuality,
   onCommitQuality,
   jpgOnlyCount = 0,
+  qualityNotice = null,
   disabled = false,
 }) => {
   /** 质量参数只对 JPEG 有意义，提示同理：TIFF/DNG 不存在二次压缩问题。 */
   const usesQuality = formatUsesQuality(format);
   const warning = usesQuality ? buildJpegSourceWarning(jpgOnlyCount) : null;
+  const notice = usesQuality ? qualityNotice : null;
   const warningId = useId();
+  const noticeId = useId();
+  /** 两个说明都挂在质量输入上，读屏聚焦时能一次读到。 */
+  const describedBy =
+    [warning ? warningId : null, notice ? noticeId : null].filter(Boolean).join(' ') ||
+    undefined;
 
   return (
     <fieldset>
@@ -120,7 +132,7 @@ export const RenderOptions: React.FC<RenderOptionsProps> = ({
                 onChange={(e) => onChangeQuality(e.target.value)}
                 onBlur={onCommitQuality}
                 disabled={disabled}
-                aria-describedby={warning ? warningId : undefined}
+                aria-describedby={describedBy}
                 className="focus-ring w-full bg-background-base border border-border-default rounded-md px-2 py-1.5 text-white outline-none font-mono tabular-nums focus:border-white/40 disabled:opacity-50"
               />
             </div>
@@ -133,10 +145,19 @@ export const RenderOptions: React.FC<RenderOptionsProps> = ({
           占着一个 live region，这里只是静态说明，靠 aria-describedby 挂在
           质量输入上，读屏聚焦输入时自然会读到。
         */}
-        {warning && (
-          <p id={warningId} className="text-[11px] text-amber-200/80 leading-relaxed">
-            {warning}
-          </p>
+        {(warning || notice) && (
+          <div className="flex flex-col gap-1">
+            {warning && (
+              <p id={warningId} className="text-[11px] text-amber-200/80 leading-relaxed">
+                {warning}
+              </p>
+            )}
+            {notice && (
+              <p id={noticeId} className="text-[11px] text-amber-200/80 leading-relaxed">
+                {notice}
+              </p>
+            )}
+          </div>
         )}
       </div>
     </fieldset>

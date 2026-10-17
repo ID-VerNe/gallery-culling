@@ -42,15 +42,24 @@ export const EXPORT_FILTERS: ReadonlyArray<ExportFilterSpec> = [
   {
     value: 'star3_plus',
     label: '★ 3 星以上',
-    test: (g) => g.rating >= 3,
+    /**
+     * 淘汰守卫**不可省**：`rating` 与 `flag` 是两个独立字段，一张被判了淘汰的
+     * 照片星级仍然可能 ≥3（先打星、后淘汰）。少了这半句，用户明确判过死刑的
+     * 照片就能靠换一个范围档被导出 —— 与 `pick_or_rated` 里的同款守卫必须一致。
+     */
+    test: (g) => g.flag !== 'reject' && g.rating >= 3,
   },
   {
     value: 'raw_only',
-    label: '仅含 RAW 的组',
+    label: '含 RAW 的组',
     /**
      * 同样排除淘汰：这是按文件类型筛，不该顺手推翻「淘汰永不导出」的语义。
      * 用 `!!g.raw` 而不是 `status === 'COMPLETE'`：状态字段可能因扫描策略变化
      * （例如只扫 JPG 目录），而「有没有 raw 文件」是候选本身的事实。
+     *
+     * 标签写「含 RAW」而不是「仅含 RAW」：谓词收的是「有 RAW」的组，
+     * 混拍组（RAW + JPG 都在）同样命中。写成「仅含」会让用户以为筛掉了
+     * 带 JPG 的组，而计数明明把她们算进来了。
      */
     test: (g) => g.flag !== 'reject' && !!g.raw,
   },
