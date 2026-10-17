@@ -17,6 +17,14 @@
  *  4. **Tauri 关闭请求**：`getCurrentWindow().onCloseRequested` → `preventDefault`
  *     → flush → `destroy`（带兜底超时，避免 IPC 挂死导致窗口关不掉）。
  *
+ * 关闭链路的事故与兜底（2026-10-17）：`destroy` 需要 capability
+ * `core:window:allow-destroy`，而 `core:default` **不含**它。此前 permissions
+ * 只授了 `core:default`，于是点右上角 X 时 `preventDefault` 生效、`destroy`
+ * 被 ACL 拒绝 —— 窗口既不关也不再响应。现在两层修：
+ *  1. `capabilities/default.json` 显式授予该权限；
+ *  2. 这里记住 `destroy` 失败，**下一次关闭请求直接放行**原生关闭，任何权限/
+ *     环境异常都不会再把窗口拦死（宁可少一次会话写盘，也不能关不掉）。
+ *
  * 接入是"一行"：
  * ```tsx
  * useSessionDebounce({ jpgFolder, rawFolder, lastIndex: selectedIndex, sortOrder });
@@ -167,9 +175,14 @@ export const useSessionDebounce = (
 
     let unlisten: (() => void) | undefined;
     let disposed = false;
+    /** `destroy` 曾失败（ACL 拒绝 / 环境异常）→ 后续关闭请求不再拦截。 */
+    let destroyFailed = false;
 
     win
       .onCloseRequested(async (event) => {
+        // 兜底：上一次 destroy 已经失败，再 preventDefault 只会把窗口彻底拦死。
+        // 直接放行，交给原生关闭（代价是这一次会话进度不落盘）。
+        if (destroyFailed) return;
         event.preventDefault();
         try {
           // 给 flush 一个上限：宁可丢最后一次写，也不能让窗口关不掉。
@@ -183,7 +196,8 @@ export const useSessionDebounce = (
           try {
             await win?.destroy();
           } catch (e) {
-            console.error('窗口销毁失败:', e);
+            destroyFailed = true;
+            console.error('窗口销毁失败（下次关闭将放行原生关闭）:', e);
           }
         }
       })

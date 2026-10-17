@@ -10,11 +10,18 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useSessionDebounce } from './useSessionDebounce';
 import {
+  destroyCallCount,
   emitCloseRequested,
   invokeCount,
   lastInvokeArgs,
   mockInvokeCommand,
+  setDestroyError,
 } from '../test/setup';
+
+/** 让挂起的微任务（invoke / flush / destroy）跑完。 */
+const drainMicrotasks = async () => {
+  for (let i = 0; i < 4; i += 1) await Promise.resolve();
+};
 
 interface Props {
   folder?: string;
@@ -118,6 +125,43 @@ describe('useSessionDebounce —— M-17', () => {
 
     expect(invokeCount('save_session_cmd')).toBe(1);
     expect(lastInvokeArgs('save_session_cmd')).toMatchObject({ lastIndex: 7 });
+  });
+
+  it('关闭请求在 flush 后必须真的销毁窗口（右上角 X 能退出）', async () => {
+    renderHook(() => useIt({ idx: 3 }, true));
+
+    await act(async () => {
+      emitCloseRequested();
+      await drainMicrotasks();
+    });
+
+    expect(invokeCount('save_session_cmd')).toBe(1);
+    expect(destroyCallCount()).toBe(1);
+  });
+
+  it('destroy 被 ACL 拒绝时，下一次关闭请求放行原生关闭（不把窗口拦死）', async () => {
+    // 2026-10-17 线上问题：capabilities 缺 core:window:allow-destroy，
+    // destroy 被拒后窗口既不关也不再响应。这里锁死降级行为。
+    setDestroyError(
+      new Error(
+        'window.destroy not allowed. Permissions associated with this command: core:window:allow-destroy',
+      ),
+    );
+
+    renderHook(() => useIt({ idx: 3 }, true));
+
+    let firstPrevented = false;
+    await act(async () => {
+      firstPrevented = emitCloseRequested().prevented;
+      await drainMicrotasks();
+    });
+
+    expect(firstPrevented).toBe(true); // 第一次仍先拦截，争取把会话写盘
+    expect(destroyCallCount()).toBe(1); // 尝试过 destroy（失败）
+
+    // 第二次点 X：必须放行，交给原生关闭，否则用户永远关不掉窗口
+    expect(emitCloseRequested().prevented).toBe(false);
+    expect(destroyCallCount()).toBe(1);
   });
 
   it('jpgFolder 为空时不写 session', () => {
