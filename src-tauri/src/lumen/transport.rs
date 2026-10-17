@@ -402,7 +402,12 @@ fn drop_closes_stdin_so_child_exits() {
         incoming: rx,
     };
     drop(transport); // ← 契约本体：Drop 关 stdin
-    std::thread::sleep(std::time::Duration::from_millis(1500));
+    // 轮询而非固定 sleep：`cargo test --lib` 全量并发时（130+ 用例抢 CPU）
+    // cmd.exe 起进程 + 写标记经常超过 1.5s，固定等待会把这条用例跑成 flake。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline && !marker.exists() {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     assert!(
         marker.exists(),
         "Drop 后子进程应因 stdin EOF 退出并写标记（说明 stdin 已被关闭）"

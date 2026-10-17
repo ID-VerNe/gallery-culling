@@ -122,15 +122,50 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 type CloseRequestedHandler = (event: { preventDefault: () => void }) => void;
 let closeRequestedHandler: CloseRequestedHandler | null = null;
+/** 关闭请求里 `preventDefault()` 被调用的次数（区分"拦截后关闭"与"放行原生关闭"）。 */
+let closePreventCount = 0;
+/** `destroy()` 被调用的次数（"X 到底有没有真的关窗"的硬断言）。 */
+let destroyCalls = 0;
+/** 非 null 时 `destroy()` 抛错，模拟 Tauri ACL 拒绝（缺 `core:window:allow-destroy`）。 */
+let destroyError: Error | null = null;
 
-/** 触发一次「窗口关闭请求」，供 M-17 的关闭前 flush 用例使用。 */
-export function emitCloseRequested(): void {
-  closeRequestedHandler?.({ preventDefault: () => {} });
+/**
+ * 触发一次「窗口关闭请求」，供 M-17 的关闭前 flush 用例使用。
+ * 返回本次 handler 是否调用了 `preventDefault()`（无 handler 视为未拦截）。
+ */
+export function emitCloseRequested(): { prevented: boolean } {
+  if (!closeRequestedHandler) return { prevented: false };
+  let prevented = false;
+  closeRequestedHandler({
+    preventDefault: () => {
+      prevented = true;
+      closePreventCount += 1;
+    },
+  });
+  return { prevented };
+}
+
+/** 累计 `preventDefault()` 次数。 */
+export function closePreventedCount(): number {
+  return closePreventCount;
+}
+
+/** 累计 `destroy()` 调用次数。 */
+export function destroyCallCount(): number {
+  return destroyCalls;
+}
+
+/** 让下一次（及之后）`destroy()` 抛错；传 null 恢复成功。 */
+export function setDestroyError(error: Error | null): void {
+  destroyError = error;
 }
 
 /** 清空窗口钩子状态（套件之间隔离）。 */
 export function resetMockWindow(): void {
   closeRequestedHandler = null;
+  closePreventCount = 0;
+  destroyCalls = 0;
+  destroyError = null;
 }
 
 vi.mock('@tauri-apps/api/window', () => ({
@@ -142,7 +177,10 @@ vi.mock('@tauri-apps/api/window', () => ({
         if (closeRequestedHandler === handler) closeRequestedHandler = null;
       };
     }),
-    destroy: vi.fn(async () => undefined),
+    destroy: vi.fn(async () => {
+      destroyCalls += 1;
+      if (destroyError) throw destroyError;
+    }),
   }),
 }));
 
