@@ -15,7 +15,10 @@
     "e2e:unit": "vitest run",
     "e2e:rust": "cd src-tauri && cargo test --lib",
     "e2e:app": "node e2e/run.mjs",
-    "e2e": "npm run e2e:unit && npm run e2e:rust && npm run e2e:app"
+    "e2e:inapp": "node e2e/run-inapp.mjs",
+    "e2e:render": "node e2e/run-inapp.mjs --scenario=render-export",
+    "e2e:preset": "node e2e/run-inapp.mjs --scenario=lumen-preset",
+    "e2e": "npm run e2e:unit && npm run e2e:rust && npm run e2e:render"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.13.2",

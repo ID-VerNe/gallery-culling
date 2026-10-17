@@ -4,69 +4,79 @@
 
 与 `src/test/`（vitest）的分工：
 
-| | vitest（`e2e:unit`） | 本目录（`e2e:app`） |
+| | vitest（`e2e:unit`） | 本目录（真窗口） |
 |---|---|---|
 | 对象 | 组件 / hook 逻辑 | 真窗口 + 真后端 + 真磁盘 |
 | IPC | mock 掉 | 真发 |
 | 速度 | 秒级 | 分钟级 |
-| 能抓到 | 状态机、渲染分支 | XMP 落盘、扫描配对、导出文件、会话持久化 |
+| 能抓到 | 状态机、渲染分支 | XMP 落盘、扫描配对、成片导出、会话持久化 |
 
 ## 跑法
 
 ```bash
-npm run e2e:unit      # 前端 336 条（vitest）
-npm run e2e:rust      # Rust 128 条（cargo test --lib）
-npm run e2e:app       # 真窗口 105 条（本目录）
-npm run e2e           # 三档串起来，全绿才算过
+npm run e2e:unit      # 前端单测（vitest）
+npm run e2e:rust      # Rust 单测（cargo test --lib）
+npm run e2e:render    # 真窗口：调色成片导出
+npm run e2e:preset    # 真窗口：LUMEN 预设 + 自动调色
+npm run e2e           # 三档串起来（unit + rust + render），全绿才算过
 ```
 
-`e2e:app` 常用参数：
+真窗口用例的参数：
 
 ```bash
-npm run e2e:app -- --only=02,05      # 只跑指定套件
-npm run e2e:app -- --skip-session    # 跳过要重启应用的那套
-npm run e2e:app -- --attach          # 连已在跑的实例（不自己启停）
+node e2e/run-inapp.mjs --scenario=render-export
+node e2e/run-inapp.mjs --scenario=lumen-preset
+node e2e/run-inapp.mjs --scenario=render-export --timeout=600000
 ```
 
-退出码：`0` 全绿 / `1` 有用例失败 / `2` 启动或编排失败。
+退出码：`0` 全绿 / `1` 有用例失败 / `2` 启动或超时。
 
 ## 它自己管生命周期
 
-`e2e:app` 一条命令做完：
+`e2e:render` 一条命令做完：
 
 1. **重建素材** —— 每次清空 `e2e/.tmp/fixtures/` 重新生成（测试会就地写 rating/tone/export，不清就会互相污染）；
-2. **启动应用** —— 带 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` 起 `tauri dev`，轮询到 CDP 就绪且应用页面挂上；
-3. **逐个套件** —— 连 CDP 驱动真窗口；
-4. **关闭应用** —— 优雅关窗（触发会话落盘）后回收整棵 dev 进程树。
+2. **启动应用** —— 起 `tauri dev`，就绪信号是 `e2e/.tmp/e2e-app.log` 里出现场景日志（不是 CDP，见下节）；
+3. **等场景跑完** —— 应用内执行场景，日志同源落盘；
+4. **断言** —— 读日志断言 UI 表现，读文件系统断言落盘与清单；
+5. **关闭应用** —— 优雅关窗（触发会话落盘）后回收整棵 dev 进程树。
 
-首次或改过 Rust 要重新编译，启动约 30–90s；之后整轮约 3 分钟。
+首次或改过 Rust 要重新编译，启动约 30–90s；之后整轮约 2–4 分钟。
 
-## 为什么走 CDP
+## 为什么不走 CDP
 
-Tauri 的 WebView2 **不**把 DOM 暴露给 Windows UI Automation，所以无法用 UIA 断言界面。
-`--remote-debugging-port` 让 WebView2 开一个 CDP 端点，Playwright 用
-`chromium.connectOverCDP()` 连上去 —— 测的仍是真窗口与真后端。
+Tauri 的 WebView2 不把 DOM 暴露给 Windows UI Automation，所以界面断言本来只能靠
+`--remote-debugging-port` + Playwright `connectOverCDP()`。
+
+**但本机走不通**：WebView2 的调试端口**只服务第一个 HTTP 请求**，第二个请求
+（`/json/list`）就永久卡死，`connectOverCDP` 必然超时。实测 Edge 同版本内核正常，
+是 WebView2 自身的问题（详见 `.plan/lumen-preset-autotone-console-diagnosis-2026-10-15.md`）。
+
+因此真窗口用例改为**应用内驱动**：
+
+1. `src/devtools/e2eRunner.ts` 在应用内操作真实 DOM（点击 / 键盘 / 受控组件原生
+   setter），走完整 前端 → Tauri IPC → Rust → lumen-cli sidecar 链路；
+2. 每步日志同源 `POST /__e2e_log`，由 Vite 中间件落盘到 `e2e/.tmp/e2e-app.log`；
+3. `e2e/run-inapp.mjs` 读日志断言 UI 部分，并**直接读文件系统**断言落盘与清单
+   （浏览器里读不到目录，账实对账必须在外侧做）。
+
+`e2e/run.mjs` + `suites/01-08` 是旧的 Playwright 路线，本机只会白等到超时，
+保留只为在 CDP 正常的机器上仍可用。
 
 ## 目录
 
 ```
 e2e/
-  run.mjs                 编排器（重建素材 → 启停应用 → 跑套件 → 汇总）
+  run-inapp.mjs           应用内驱动编排器（真窗口用例走这条）
+  run.mjs                 旧 Playwright 编排器（本机不可用）
   lib/
-    app.mjs               应用生命周期：启动 / 就绪探测 / 优雅关闭 / 重启
-    harness.mjs           CDP 连接、弹窗清理、底栏读取、断言与报告
+    app.mjs               应用生命周期：启停 / 端口回收 / 日志等待
+    harness.mjs           CDP 连接、弹窗清理、底栏读取、断言与报告（旧路线用）
     close-app.ps1         CloseMainWindow（触发 onCloseRequested）
   fixtures/
     generate.mjs          确定性素材 + EXPECTED 期望态表
-  suites/
-    01-scan.mjs           扫描 + 筛选计数 + 缩略图解码
-    02-rating.mjs         星级/旗标/撤销 + XMP 落盘字节校验
-    03-nav.mjs            键盘导航、视图模式、缩放、搜索、多选
-    04-tone.mjs           调色面板 + 非破坏性写回
-    05-export.mjs         批量导出 + 同目录护栏 + manifest
-    06-raw-settings.mjs   RAW 配对 + 设置持久化
-    07-session.mjs        关窗重启后的会话恢复
-  .tmp/                   运行时产物（素材 / 日志 / 截图），已 gitignore
+  suites/                 旧 Playwright 套件（01-08）
+  .tmp/                   运行时产物（素材 / 日志），已 gitignore
 ```
 
 ## 期望值只有一份
@@ -86,6 +96,15 @@ e2e/
 
 ## 已知坑（都踩过，记下来）
 
+- **绝对不要裸传 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`。** `src-tauri/src/main.rs`
+  只在变量**未设置**时才写 `--in-process-gpu`（GPU 子进程崩溃 workaround）。
+  任何地方直接 set 这个变量都会把它抹掉 → GPU 子进程 9 连崩 → 白屏 +
+  `msedgewebview2 has stopped working` / `Error launching CrashSender.exe`。
+  要加参数请用 `lib/app.mjs` 的 `webviewArgs()`，它显式带上 `--in-process-gpu`。
+  应用内驱动**完全不需要** CDP，所以根本别传。
+- **CDP 调试端口只服务第一个请求。** 别拿 `cdpReady()` + `appPageReady()` 当就绪
+  信号 —— 本机第二个请求（`/json/list`）就卡死，只会白等到超时。应用内驱动的
+  就绪信号是 `e2e-app.log` 里的 `[boot-v2]` / `=== e2e done`。
 - **Windows 上不要用 Git bash 当 shell。** MSYS 会把 `/F` `/T` `/PID` 这类
   Windows 开关当路径改写（`/F` → `F:\`），`taskkill` 静默失败。
   `lib/app.mjs` 用 `cmd.exe`（`process.env.ComSpec`）。
@@ -99,6 +118,9 @@ e2e/
   拿句柄再逐个 `innerText` 会超时。
 - **缩略图是异步的。** 首轮还要现生成，必须 `waitForFunction` 等解码完成，
   固定 `sleep` 会 flaky。
+- **成片导出的 e2e 不能断言「渲出来几张」。** 夹具里走 RAW 的那几张必然失败
+  （RAW 是 JPEG 改后缀），纯 JPG 能否成功取决于引擎。要断言的是**账实一致**：
+  清单 `rendered` 项都有同名成片、`failed` 项一个都没落地、结果条读数与清单相符。
 
 ## vitest 偶发超时
 
@@ -107,5 +129,5 @@ e2e/
 里记录的上游竞态，不是用例本身的问题。逃生阀（命令行，非终态）：
 
 ```bash
-npx vitest run --maxWorkers=1      # 本机验证 336/336 全绿，但慢（约 5 分钟）
+npx vitest run --pool=vmForks      # 换隔离策略，绕开默认 pool 的竞态
 ```

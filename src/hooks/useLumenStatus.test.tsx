@@ -5,7 +5,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import { LUMEN_UNAVAILABLE, useLumenStatus } from './useLumenStatus';
+import {
+  LUMEN_PROBING_DETAIL,
+  LUMEN_UNAVAILABLE,
+  toLumenGateStatus,
+  useLumenStatus,
+} from './useLumenStatus';
 import { invokeCount, lastInvokeArgs, mockInvokeCommand, mockInvokeError } from '../test/setup';
 
 /** 握手刻意延迟 1500ms（不阻塞首屏、给 sidecar 冷启动留时间）。 */
@@ -208,5 +213,47 @@ describe('useLumenStatus —— 重探（N-12）', () => {
     rerender({ enabled: true });
     await advance(HANDSHAKE_DELAY);
     expect(invokeCount('lumen_status_cmd')).toBe(1);
+  });
+});
+
+describe('toLumenGateStatus —— 折叠成导出弹窗的三态', () => {
+  it('available=true → available', () => {
+    expect(toLumenGateStatus({ ...LUMEN_UNAVAILABLE, available: true })).toBe(
+      'available',
+    );
+  });
+
+  it('开关关闭 → unavailable，不能误判成 probing', () => {
+    expect(toLumenGateStatus(LUMEN_UNAVAILABLE)).toBe('unavailable');
+  });
+
+  it('开关启用但握手未返回 → probing', () => {
+    expect(
+      toLumenGateStatus({
+        ...LUMEN_UNAVAILABLE,
+        enabled: true,
+        detail: LUMEN_PROBING_DETAIL,
+      }),
+    ).toBe('probing');
+  });
+
+  it('启用但探测抛错 → unavailable（detail 变了就不算探测中）', () => {
+    expect(
+      toLumenGateStatus({
+        ...LUMEN_UNAVAILABLE,
+        enabled: true,
+        detail: '无法连接 LUMEN RAW：路径不存在（请检查设置中的路径）',
+      }),
+    ).toBe('unavailable');
+  });
+
+  it('探测完成但仍不可用 → unavailable', () => {
+    expect(
+      toLumenGateStatus({
+        ...LUMEN_UNAVAILABLE,
+        enabled: true,
+        detail: '未找到 lumen-cli',
+      }),
+    ).toBe('unavailable');
   });
 });

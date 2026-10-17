@@ -1,5 +1,12 @@
 /**
- * 真窗口 E2E 编排器。
+ * 真窗口 E2E 编排器（**Playwright / CDP 路线**）。
+ *
+ * ⚠️ 本机跑不通：WebView2 的 `--remote-debugging-port` 只服务第一个 HTTP
+ * 请求，`launchApp` 里等页面 target 的 `appPageReady()` 永远为假，最终白等到
+ * 超时（详见 `.plan/lumen-preset-autotone-console-diagnosis-2026-10-15.md`）。
+ * 真窗口用例请用应用内驱动：`npm run e2e:render` / `npm run e2e:preset`
+ * （见 `e2e/run-inapp.mjs` 与 `src/devtools/e2eRunner.ts`）。
+ * 保留本文件只为在 CDP 正常的机器上仍可用。
  *
  * 流程：重建素材 -> 启动应用(带 CDP) -> 逐个套件 -> 关应用 -> 汇总。
  * 退出码：全绿 0，有失败 1，启动失败 2。

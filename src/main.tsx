@@ -29,7 +29,12 @@ if (import.meta.env.DEV) {
   void (async () => {
     try {
       const res = await fetch('/__e2e_scenario');
-      const cfg = (await res.json()) as { scenario?: string; jpg?: string };
+      const cfg = (await res.json()) as {
+        scenario?: string;
+        jpg?: string;
+        raw?: string;
+        out?: string;
+      };
       // 启动诊断：无论是否要跑场景，都上报一次，便于外部脚本确认链路通了。
       void fetch('/__e2e_log', {
         method: 'POST',
@@ -37,7 +42,10 @@ if (import.meta.env.DEV) {
       });
       if (!cfg.scenario) return;
       const mod = await import('./devtools/e2eRunner');
-      await mod.runE2E(cfg.scenario, cfg.jpg || '');
+      await mod.runE2E(cfg.scenario, cfg.jpg || '', {
+        raw: cfg.raw || '',
+        out: cfg.out || '',
+      });
     } catch {
       // dev-only 便利功能，不可用时静默跳过，不影响应用本身
     }

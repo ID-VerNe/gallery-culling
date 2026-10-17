@@ -70,9 +70,10 @@ pub use tone::{
 };
 
 pub use export::{
-    __cmd__batch_export_cmd, __cmd__cancel_export_cmd,
-    __tauri_command_name_batch_export_cmd, __tauri_command_name_cancel_export_cmd,
-    batch_export_cmd, cancel_export_cmd,
+    __cmd__batch_export_cmd, __cmd__batch_render_export_cmd, __cmd__cancel_export_cmd,
+    __tauri_command_name_batch_export_cmd, __tauri_command_name_batch_render_export_cmd,
+    __tauri_command_name_cancel_export_cmd,
+    batch_export_cmd, batch_render_export_cmd, cancel_export_cmd,
 };
 
 pub use apps::{

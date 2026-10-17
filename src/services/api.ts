@@ -13,6 +13,7 @@ import {
   LumenRecipe,
   LumenStatus,
   MaskAdjustments,
+  RenderFormat,
   ToneAdjustments,
   ToneState,
   ToneWriteReport,
@@ -117,6 +118,32 @@ export const api = {
       targetFolder,
       includeRaw,
       includeJpg,
+    });
+  },
+
+  /**
+   * Batch render exports —— 按每张照片的 `.lumen` 工程渲染成片。
+   *
+   * 与 `batchExport` 的差异：源仍是同一批 `ExportItem`（渲染器自己按 baseName 找工程），
+   * 但产物是「一张图一个文件」，所以没有 `includeRaw/includeJpg`，改由
+   * 格式 / 长边 / 质量描述目标形态。返回结构刻意与 `batchExport` 保持一致，
+   * 这样前端的结果呈现与 Toast 分发可以完全共用。
+   */
+  batchRenderExport: async (
+    items: ExportItem[],
+    targetFolder: string,
+    format: RenderFormat,
+    longEdge: number,
+    quality: number,
+  ): Promise<ExportOutcome> => {
+    return await invoke<ExportOutcome>('batch_render_export_cmd', {
+      items,
+      targetFolder,
+      format,
+      // UI 用 0 表示「原始尺寸」，后端契约是 Option<u32> 且要求「不缩放就不传键」。
+      // 在这里翻译一次，避免 0 被渲染器当成「长边 0 像素」。
+      longEdge: longEdge === 0 ? null : longEdge,
+      quality,
     });
   },
 

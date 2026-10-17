@@ -45,6 +45,7 @@ pub fn run() {
             commands::open_in_default_app_cmd,
             commands::trash_photos_cmd,
             commands::batch_export_cmd,
+            commands::batch_render_export_cmd,
             commands::cancel_export_cmd,
             commands::batch_update_metadata_cmd,
             commands::get_settings_cmd,

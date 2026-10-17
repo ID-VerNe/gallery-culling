@@ -1,219 +1,109 @@
-import React, { useState, useEffect, useId } from 'react';
-import { FolderOpen, Download, CheckCircle2, AlertTriangle } from 'lucide-react';
+import React, { useEffect, useId } from 'react';
+import { FolderOpen, Download } from 'lucide-react';
 import { ExportItem, PhotoGroupInfo } from '../types';
 import { api } from '../services/api';
 import { Modal } from './Modal';
 import { TaskProgressBar } from './TaskProgressBar';
-import { useTaskProgress } from '../hooks/useTaskProgress';
+import { useExportForm } from '../hooks/useExportForm';
+import { useExportRun } from '../hooks/useExportRun';
+import { CopyOptions } from './export/CopyOptions';
+import { RenderOptions } from './export/RenderOptions';
+import { ExportModeSelector } from './export/ExportModeSelector';
+import { LumenGateNotice, type LumenGateStatus } from './export/LumenGateNotice';
+import { ExportResultPanel } from './export/ExportResultPanel';
+import { EXPORT_FILTERS } from './export/exportFilters';
+import { EXPORT_MODES } from './export/exportConfig';
 
 interface BatchExportModalProps {
   isOpen: boolean;
   onClose: () => void;
   groups: PhotoGroupInfo[];
+  /**
+   * LUMEN 引擎状态。默认 `available` 让本组件在未接入探测时保持既有行为
+   * （复制路径完全不依赖引擎）。
+   */
+  lumenStatus?: LumenGateStatus;
+  /** 引擎不可用的具体原因。 */
+  lumenDetail?: string;
+  /** 「去设置」入口。 */
+  onOpenSettings?: () => void;
   onError?: (message: string) => void;
   onSuccess?: (message: string) => void;
 }
 
-const FILTERS = [
-  {
-    value: 'pick_or_rated' as const,
-    label: '已保留或已打星',
-    test: (g: PhotoGroupInfo) =>
-      g.flag !== 'reject' && (g.flag === 'pick' || g.rating > 0),
-  },
-  {
-    value: 'pick_only' as const,
-    label: '仅标记保留 Pick',
-    test: (g: PhotoGroupInfo) => g.flag === 'pick',
-  },
-  {
-    value: 'star3_plus' as const,
-    label: '★ 3 星以上',
-    test: (g: PhotoGroupInfo) => g.rating >= 3,
-  },
-  {
-    value: 'all' as const,
-    label: '全部非淘汰照片',
-    test: (g: PhotoGroupInfo) => g.flag !== 'reject',
-  },
-];
-
 /**
- * 目标目录不能是源照片所在目录：`fs::copy(src, src)` 会截断原片（不可逆）。
- * 这是前端即时护栏；后端也会强制拒绝，前端只负责让用户当场看到并禁用按钮。
- * 归一化：统一分隔符、去掉尾部分隔符、统一小写（Windows 下大小写不敏感）。
- * 不追求与 Rust `canonicalize` 完全等价，但「同一目录」必须被判定为相同。
+ * 导出弹窗的**容器**。
+ *
+ * 职责只有三件：分区顺序、Modal 壳、footer 组装。
+ * 表单状态归 `useExportForm`，执行与结果归 `useExportRun`，文案归 `exportMessages`，
+ * 呈现归 `export/*` 组件。这里出现第二处 `if (mode === ...)` 就说明逻辑漏了。
  */
-const normalizeDir = (p: string): string =>
-  p.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
-
-/** 取文件的父目录（同步归一化前的形态由调用方再 normalizeDir）。 */
-const parentDirOf = (filePath: string): string => {
-  const normalized = filePath.replace(/\\/g, '/');
-  const slash = normalized.lastIndexOf('/');
-  return slash > 0 ? normalized.slice(0, slash) : normalized;
-};
-
-const TARGET_IS_SOURCE_MESSAGE =
-  '导出目标不能是源照片所在目录，请另选一个目标文件夹';
-
-/**
- * 取消后的精确陈述。Q4 已拍板「临时目录 + 原子搬迁」= all-or-nothing：
- * 取消时后端删掉临时目录，**目标目录零污染**。所以这里绝不能写"已复制 N 个"。
- */
-const EXPORT_CANCELLED_MESSAGE = '已取消导出：目标目录未产生任何文件。';
-
 export const BatchExportModal: React.FC<BatchExportModalProps> = ({
   isOpen,
   onClose,
   groups,
+  lumenStatus = 'available',
+  lumenDetail,
+  onOpenSettings,
   onError,
   onSuccess,
 }) => {
-  const [targetFolder, setTargetFolder] = useState('');
   /** D8：把错误文案与输入框关联，读屏聚焦输入时也能读到。 */
   const folderErrorId = useId();
-  const [includeRaw, setIncludeRaw] = useState(true);
-  const [includeJpg, setIncludeJpg] = useState(true);
-  const [exportFilter, setExportFilter] =
-    useState<(typeof FILTERS)[number]['value']>('pick_or_rated');
-  /** 导出任务：进度事件订阅 + 协作式取消（M-05）。`isRunning` 取代旧的 `isExporting`。 */
-  const exportTask = useTaskProgress('export');
-  const isExporting = exportTask.isRunning;
-  /** 导出结果提示；`failed` 决定用警示态还是成功态呈现。 */
-  const [exportResult, setExportResult] = useState<{
-    message: string;
-    failed: boolean;
-  } | null>(null);
 
-  // Reset per-open state so a second export does not inherit the last result,
-  // and clear the confirmation as soon as the user changes any input.
+  // 探测中按「可用」放行（乐观）：用户此刻多半还在填目录，真不可用时后端会逐项计入 failed。
+  const lumenAvailable = lumenStatus !== 'unavailable';
+  const form = useExportForm({ groups, lumenAvailable, lumenDetail });
+  const run = useExportRun({
+    mode: form.mode,
+    resetSignal: form.resetSignal,
+    onSuccess,
+    onError,
+  });
+
+  const isExporting = run.isRunning;
+  const spec = EXPORT_MODES[form.mode];
+
+  // 每次打开都清掉上次结果，避免「第二次导出看到第一次的句子」。
   useEffect(() => {
-    if (isOpen) setExportResult(null);
-  }, [isOpen]);
-
-  useEffect(() => {
-    setExportResult(null);
-  }, [targetFolder, exportFilter, includeRaw, includeJpg]);
-
-  const activeFilter =
-    FILTERS.find((f) => f.value === exportFilter) ?? FILTERS[0];
-  const exportCandidates = groups.filter(activeFilter.test);
-
-  // 源照片所在目录集合（从每个候选的 jpg/raw 父目录取；可能跨多个目录）。
-  const sourceDirs = new Set<string>();
-  for (const g of exportCandidates) {
-    for (const p of [g.jpg?.path, g.raw?.path]) {
-      if (p) sourceDirs.add(normalizeDir(parentDirOf(p)));
-    }
-  }
-  // 命中「目标 = 源目录」即拦截：不能只靠后端报错。
-  const targetIsSourceDir =
-    targetFolder.trim() !== '' && sourceDirs.has(normalizeDir(targetFolder));
-
-  const handleBrowseTarget = async () => {
-    const selected = await api.selectFolderDialog(targetFolder);
-    if (selected) setTargetFolder(selected);
-  };
+    if (isOpen) run.reset();
+  }, [isOpen, run.reset]);
 
   const handleExport = async () => {
-    if (!targetFolder.trim()) {
-      onError?.('请先选择导出目标文件夹。');
-      return;
-    }
-    if (targetIsSourceDir) {
-      onError?.(TARGET_IS_SOURCE_MESSAGE);
-      return;
-    }
-    if (exportCandidates.length === 0) {
-      onError?.('当前导出范围内没有照片，请先给照片打星或标记保留。');
-      return;
-    }
-    if (!includeRaw && !includeJpg) {
-      onError?.('请至少勾选一种要复制的文件类型。');
+    // 按钮的 disabled 与这里的提示同源（`form.validation`），不会出现「能点但点了报错」。
+    if (form.validation) {
+      onError?.(form.validation);
       return;
     }
 
-    exportTask.start();
-    setExportResult(null);
-
-    const items: ExportItem[] = exportCandidates.map((g) => ({
+    const items: ExportItem[] = form.candidates.map((g) => ({
       baseName: g.baseName,
       jpgPath: g.jpg?.path,
       rawPath: g.raw?.path,
     }));
 
-    try {
-      const outcome = await api.batchExport(
-        items,
-        targetFolder,
-        includeRaw,
-        includeJpg,
-      );
-
-      // 取消优先判定：后端 all-or-nothing，取消即目标目录零污染。
-      // 决策：取消不算失败，用中性/成功态呈现，且不写"已复制 N 个"。
-      if (outcome.cancelled) {
-        setExportResult({
-          message: `${EXPORT_CANCELLED_MESSAGE}（目标：${targetFolder}）`,
-          failed: false,
-        });
-        return;
-      }
-
-      // 如实呈现三个计数：成功 / 跳过（目标已存在同名文件）/ 失败。
-      // 部分失败绝不能走「成功」呈现 —— 导出是本轮最高危的数据写入路径。
-      const failedCount = outcome.failed.length;
-      const summaryParts: string[] = [];
-      // 失败数放最前，让用户第一眼看到这次没完全成功。
-      if (failedCount > 0) summaryParts.push(`失败 ${failedCount} 个`);
-      summaryParts.push(`已导出 ${outcome.exported} 个`);
-      if (outcome.skipped > 0) {
-        summaryParts.push(`跳过 ${outcome.skipped} 个（目标已存在同名文件）`);
-      }
-      const summary = summaryParts.join(' · ');
-      const failureDetail =
-        failedCount > 0
-          ? ` 失败原因：${outcome.failed
-              .slice(0, 3)
-              .map((f) => `${f.path}（${f.reason}）`)
-              .join('；')}${failedCount > 3 ? ' 等' : ''}`
-          : '';
-      setExportResult({
-        message: `${
-          failedCount > 0 ? '导出未完全成功' : '导出完成'
-        }：${summary}。${failureDetail}（目标：${targetFolder}）`,
-        failed: failedCount > 0,
-      });
-      if (failedCount > 0) {
-        // 不是全盘失败：措辞只否定「完全」二字，别让用户以为一张都没导出。
-        onError?.(`导出未完全成功：失败 ${failedCount} 个，成功 ${outcome.exported} 个`);
-      } else {
-        onSuccess?.(`${summary}，目标：${targetFolder}`);
-      }
-    } catch (err) {
-      // 取消后后端若以 Err 返回，也按「已取消」呈现，而不是红色的失败。
-      // 用 ref getter 读最新值：这里读 `exportTask.cancelRequested` 会是陈旧闭包。
-      if (exportTask.isCancelRequested()) {
-        setExportResult({
-          message: `${EXPORT_CANCELLED_MESSAGE}（目标：${targetFolder}）`,
-          failed: false,
-        });
-      } else {
-        onError?.(`导出出错：${String(err)}`);
-      }
-    } finally {
-      exportTask.finish();
-    }
-  };
-
-  /** 取消导出：置位后端取消标志。命令失败时用错误提示，不静默。 */
-  const handleCancelExport = async () => {
-    try {
-      await exportTask.cancel();
-    } catch (err) {
-      onError?.(`取消导出失败：${String(err)}`);
-    }
+    // 全组件唯一的模式分叉：调不同的命令，产出同一种 outcome。
+    // 之后的进度、取消、结果文案、Toast 分发全部共用。
+    await run.run({
+      invoke:
+        form.mode === 'copy'
+          ? () =>
+              api.batchExport(
+                items,
+                form.targetFolder,
+                form.includeRaw,
+                form.includeJpg,
+              )
+          : () =>
+              api.batchRenderExport(
+                items,
+                form.targetFolder,
+                form.renderFormat,
+                form.renderLongEdge,
+                form.quality,
+              ),
+      targetFolder: form.targetFolder,
+    });
   };
 
   return (
@@ -229,11 +119,11 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
       footer={
         <>
           <span className="mr-auto text-white/70 text-[11px]">
-            预计导出:{' '}
+            {spec.estimateVerb}:{' '}
             <b className="text-white font-mono tabular-nums">
-              {exportCandidates.length}
+              {form.candidates.length}
             </b>{' '}
-            组照片
+            {spec.estimateUnit}
           </span>
           <button
             onClick={onClose}
@@ -249,22 +139,23 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
           </button>
           <button
             onClick={handleExport}
-            disabled={
-              isExporting ||
-              targetIsSourceDir ||
-              exportCandidates.length === 0 ||
-              !targetFolder.trim() ||
-              (!includeRaw && !includeJpg)
-            }
+            disabled={isExporting || !form.canRun}
             className="focus-ring flex items-center gap-1.5 px-3.5 py-1.5 bg-white hover:bg-white/90 text-black active:scale-[0.96] disabled:bg-white/10 disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-transform shadow-sm"
           >
             <Download className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>{isExporting ? '导出中…' : '开始导出'}</span>
+            <span>{isExporting ? spec.running : spec.action}</span>
           </button>
         </>
       }
     >
-      {/* Target Folder */}
+      {/* 1. 导出方式：最上层的决策，决定下面出现哪些选项 */}
+      <ExportModeSelector
+        value={form.mode}
+        onChange={form.setMode}
+        disabled={isExporting}
+      />
+
+      {/* 2. 目标目录 */}
       <div className="flex flex-col gap-1.5">
         <label
           htmlFor="export-target-folder"
@@ -276,118 +167,106 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
           <input
             id="export-target-folder"
             type="text"
-            value={targetFolder}
-            onChange={(e) => setTargetFolder(e.target.value)}
+            value={form.targetFolder}
+            onChange={(e) => form.setTargetFolder(e.target.value)}
+            disabled={isExporting}
             placeholder="请选择或粘贴保存挑选照片的文件夹…"
-            aria-describedby={targetIsSourceDir ? folderErrorId : undefined}
-            aria-invalid={targetIsSourceDir || undefined}
-            className="focus-ring flex-1 min-w-0 bg-background-base border border-border-default rounded-md px-3 py-1.5 text-white outline-none font-mono text-[11px] focus:border-white/40"
+            aria-describedby={form.targetIsSourceDir ? folderErrorId : undefined}
+            aria-invalid={form.targetIsSourceDir || undefined}
+            className="focus-ring flex-1 min-w-0 bg-background-base border border-border-default rounded-md px-3 py-1.5 text-white outline-none font-mono text-[11px] focus:border-white/40 disabled:opacity-50 disabled:cursor-not-allowed"
           />
           <button
-            onClick={handleBrowseTarget}
-            className="focus-ring px-3.5 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white rounded-md flex items-center gap-1.5 transition-colors shrink-0"
+            onClick={form.browseTarget}
+            disabled={isExporting}
+            className="focus-ring px-3.5 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white rounded-md flex items-center gap-1.5 transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <FolderOpen className="w-3.5 h-3.5" aria-hidden="true" />
             <span>浏览</span>
           </button>
         </div>
-        {targetIsSourceDir && (
+        {form.targetIsSourceDir && (
           <p id={folderErrorId} role="alert" className="text-[11px] text-red-300/90">
-            {TARGET_IS_SOURCE_MESSAGE}
+            {form.validation}
           </p>
         )}
       </div>
 
-      {/* Filter Range */}
+      {/* 3. 导出范围 */}
       <fieldset>
         <legend className="text-white/80 font-medium mb-1.5">导出范围</legend>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-background-base p-2.5 rounded border border-default">
-          {FILTERS.map((filter) => {
-            const count = groups.filter(filter.test).length;
-            return (
-              <label
-                key={filter.value}
-                className="focus-ring flex items-center gap-2 cursor-pointer rounded p-1 hover:bg-background-surface-hover transition-colors"
-              >
-                <input
-                  type="radio"
-                  name="export_filter"
-                  value={filter.value}
-                  checked={exportFilter === filter.value}
-                  onChange={() => setExportFilter(filter.value)}
-                  className="accent-white"
-                />
-                <span className="text-white/80">
-                  {filter.label}{' '}
-                  <span className="text-white/60 font-mono tabular-nums">
-                    ({count})
-                  </span>
+          {EXPORT_FILTERS.map((filter) => (
+            <label
+              key={filter.value}
+              htmlFor={`export-filter-${filter.value}`}
+              className="focus-ring flex items-center gap-2 cursor-pointer rounded p-1 hover:bg-background-surface-hover transition-colors"
+            >
+              <input
+                id={`export-filter-${filter.value}`}
+                type="radio"
+                name="export_filter"
+                value={filter.value}
+                checked={form.filter === filter.value}
+                onChange={() => form.setFilter(filter.value)}
+                disabled={isExporting}
+                className="accent-white"
+              />
+              <span className="text-white/80">
+                {filter.label}{' '}
+                <span className="text-white/60 font-mono tabular-nums">
+                  ({form.countsByFilter[filter.value]})
                 </span>
-              </label>
-            );
-          })}
+              </span>
+            </label>
+          ))}
         </div>
       </fieldset>
 
-      {/* Options */}
-      <fieldset>
-        <legend className="text-white/80 font-medium mb-1.5">
-          包含文件类型
-        </legend>
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3 bg-background-base p-2.5 rounded border border-default">
-          <label className="focus-ring flex items-center gap-2 cursor-pointer rounded p-1 hover:bg-background-surface-hover transition-colors">
-            <input
-              type="checkbox"
-              checked={includeRaw}
-              onChange={(e) => setIncludeRaw(e.target.checked)}
-              className="accent-white"
-            />
-            <span className="text-white/80">复制 RAW 原片及 XMP 侧边栏</span>
-          </label>
+      {/* 4. 模式专属选项：同一位置互换，用户不会看到两套并存 */}
+      {form.mode === 'copy' ? (
+        <CopyOptions
+          includeRaw={form.includeRaw}
+          includeJpg={form.includeJpg}
+          onChangeRaw={form.setIncludeRaw}
+          onChangeJpg={form.setIncludeJpg}
+          disabled={isExporting}
+        />
+      ) : (
+        <>
+          <RenderOptions
+            format={form.renderFormat}
+            longEdge={form.renderLongEdge}
+            qualityText={form.qualityText}
+            onChangeFormat={form.setRenderFormat}
+            onChangeLongEdge={form.setRenderLongEdge}
+            onChangeQuality={form.setQualityText}
+            onCommitQuality={form.commitQuality}
+            disabled={isExporting}
+          />
+          {/* 引擎状态只在成片模式有意义；复制路径完全不依赖它 */}
+          <LumenGateNotice
+            status={lumenStatus}
+            detail={lumenDetail}
+            onOpenSettings={onOpenSettings}
+            disabled={isExporting}
+          />
+        </>
+      )}
 
-          <label className="focus-ring flex items-center gap-2 cursor-pointer rounded p-1 hover:bg-background-surface-hover transition-colors">
-            <input
-              type="checkbox"
-              checked={includeJpg}
-              onChange={(e) => setIncludeJpg(e.target.checked)}
-              className="accent-white"
-            />
-            <span className="text-white/80">复制对应 JPG 预览</span>
-          </label>
-        </div>
-      </fieldset>
-
-      {/* 导出进度 + 取消（M-05）。任务进行中才出现；由 useTaskProgress 驱动。 */}
+      {/* 5. 进度 + 取消（M-05） */}
       <TaskProgressBar
         isRunning={isExporting}
-        processed={exportTask.progress?.processed ?? 0}
-        total={exportTask.progress?.total ?? 0}
-        label="正在导出照片"
-        current={exportTask.progress?.current}
-        onCancel={handleCancelExport}
-        cancelRequested={exportTask.cancelRequested}
+        processed={run.progress?.processed ?? 0}
+        total={run.progress?.total ?? 0}
+        label={spec.progressLabel}
+        current={run.progress?.current}
+        onCancel={run.cancel}
+        cancelRequested={run.cancelRequested}
         className="bg-background-base border border-default rounded p-2.5"
       />
 
-      {/* Result Message：成功走绿色 status，部分失败走琥珀色 alert（必须立即知晓） */}
-      {exportResult &&
-        (exportResult.failed ? (
-          <div
-            className="p-3 bg-amber-950/40 border border-amber-800/50 rounded flex items-start gap-2 text-amber-200 select-text"
-            role="alert"
-          >
-            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
-            <span>{exportResult.message}</span>
-          </div>
-        ) : (
-          <div
-            className="p-3 bg-emerald-950/40 border border-emerald-800/50 rounded flex items-center gap-2 text-emerald-300 select-text"
-            role="status"
-          >
-            <CheckCircle2 className="w-4 h-4 shrink-0" aria-hidden="true" />
-            <span>{exportResult.message}</span>
-          </div>
-        ))}
+      {/* 6. 结果：成功走绿色 status，部分失败走琥珀色 alert（必须立即知晓） */}
+      <ExportResultPanel result={run.result} />
     </Modal>
   );
 };

@@ -443,3 +443,93 @@ impl LumenRuntime {
         Ok(applied)
     }
 }
+
+// ---- 成片导出（B 通道单发）----
+//
+// 刻意**不用**常驻 session 的 `export_photo` 工具：
+//  1. `photo.export` 传 `path` 会自动 open，不要求照片先 add 进图库；
+//  2. 单发进程不占常驻 MCP 的 `Mutex`，也不会撞上 120s 读超时
+//     （一张 4 亿像素的 TIFF 完全可能超过它）；
+//  3. 某张渲染卡死只拖慢这一张，不会毒化整批的失败计数。
+
+/// 构造 `photo.export` 的调用参数。
+///
+/// 抽成纯函数是为了让参数形状能被单测直接锁死（R8），不必 spawn 真进程：
+///  - `quality` 夹到 50–100（schema 硬约束，越界会被直接拒）；
+///  - `long_edge` 为 `None` 时**必须省略键** —— 发 `null` 会被 schema 拒绝
+///    （lumen 侧用「键是否存在」判断是否缩放，而不是判 null）；
+///  - `overwrite` 恒为 `false`：目标同名文件在调用前就已被 skipped 拦下，
+///    这里再声明一次是让渲染器本身也成为一道保险。
+pub fn build_export_args(
+    photo: &str,
+    output: &str,
+    quality: u8,
+    long_edge: Option<u32>,
+) -> Value {
+    let mut args = serde_json::json!({
+        "path": photo,
+        "output": output,
+        "quality": quality.clamp(50, 100) as i64,
+        "overwrite": false,
+    });
+    if let Some(le) = long_edge {
+        // schema: 16..=20000
+        args["long_edge"] = serde_json::json!(le.clamp(16, 20_000) as i64);
+    }
+    args
+}
+
+/// 用 B 通道单发渲染一张成片（`photo.export`）。
+///
+/// 返回渲染器报告的 `output` 路径。调用方**不能**据此认为文件已落盘 ——
+/// 必须再 `is_file()` 校验一次（渲染器返回 Ok 却没写盘是真实存在的情况）。
+pub fn export_photo(
+    exe: &Path,
+    photo: &str,
+    output: &str,
+    quality: u8,
+    long_edge: Option<u32>,
+) -> Result<String, LumenError> {
+    let args = build_export_args(photo, output, quality, long_edge);
+    let out = run_lumen(exe, "photo.export", &args)?;
+    out.get("output")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| LumenError::Protocol("photo.export 未返回 output".to_string()))
+}
+
+#[cfg(test)]
+mod export_args_tests {
+    use super::*;
+
+    /// R8：`long_edge=None` 必须**省略键**，而不是发 `null`。
+    #[test]
+    fn omits_long_edge_when_none() {
+        let args = build_export_args("D:/a.CR2", "D:/out/a.jpg", 92, None);
+        assert!(
+            args.get("long_edge").is_none(),
+            "long_edge=None 必须省略键；发 null 会被 lumen schema 拒绝"
+        );
+        assert_eq!(args["path"], "D:/a.CR2");
+        assert_eq!(args["output"], "D:/out/a.jpg");
+        assert_eq!(args["quality"], 92);
+        assert_eq!(args["overwrite"], false);
+    }
+
+    /// R8：quality 夹到 50–100，long_edge 夹到 16–20000。
+    #[test]
+    fn clamps_quality_and_long_edge() {
+        let high = build_export_args("x", "y", 200, Some(1));
+        assert_eq!(high["quality"], 100);
+        assert_eq!(high["long_edge"], 16);
+
+        let low = build_export_args("x", "y", 10, Some(999_999));
+        assert_eq!(low["quality"], 50);
+        assert_eq!(low["long_edge"], 20_000);
+
+        // 合法值原样透传，不被无谓改写
+        let ok = build_export_args("x", "y", 92, Some(2560));
+        assert_eq!(ok["quality"], 92);
+        assert_eq!(ok["long_edge"], 2560);
+    }
+}

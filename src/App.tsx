@@ -23,7 +23,7 @@ import { useBatchOps } from './hooks/useBatchOps';
 import { useRatingFlagSync } from './hooks/useRatingFlagSync';
 import { useToneEditing } from './hooks/useToneEditing';
 import { useSessionDebounce } from './hooks/useSessionDebounce';
-import { useLumenStatus } from './hooks/useLumenStatus';
+import { toLumenGateStatus, useLumenStatus } from './hooks/useLumenStatus';
 import { useLumenOrchestration } from './hooks/useLumenOrchestration';
 import { useExternalApps } from './hooks/useExternalApps';
 import type { ViewportEmptyState } from './components/PreviewViewport';
@@ -631,6 +631,9 @@ function AppShell() {
         isOpen={isExportOpen}
         onClose={() => setIsExportOpen(false)}
         groups={groups}
+        lumenStatus={toLumenGateStatus(lumenStatus)}
+        lumenDetail={lumenStatus.detail}
+        onOpenSettings={() => setIsSettingsOpen(true)}
         onError={(m) => toast.error(m)}
         onSuccess={(m) => toast.success(m)}
       />

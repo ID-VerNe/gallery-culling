@@ -12,6 +12,14 @@ export const LUMEN_UNAVAILABLE: LumenStatus = {
 };
 
 /**
+ * 探测窗口内的提示文案。
+ *
+ * 提成常量而不是字面量，因为它同时充当「是否仍在探测」的判据 ——
+ * 两处各写一遍的话，改文案就会让 `toLumenGateStatus` 静默失效。
+ */
+export const LUMEN_PROBING_DETAIL = '正在探测引擎…';
+
+/**
  * E7：握手前的过渡态。开关已存为"启用"、但 1500ms 探测尚未返回时，不能沿用
  * `LUMEN_UNAVAILABLE.detail`（"未启用…"），否则状态行与勾选框自相矛盾。
  * 这里给出"正在探测引擎…"，让 UI 在探测窗口内呈现中性的进行中状态。
@@ -19,8 +27,24 @@ export const LUMEN_UNAVAILABLE: LumenStatus = {
 const probingStatus = (): LumenStatus => ({
   ...LUMEN_UNAVAILABLE,
   enabled: true,
-  detail: '正在探测引擎…',
+  detail: LUMEN_PROBING_DETAIL,
 });
+
+/**
+ * 把握手状态折叠成导出弹窗需要的三态。
+ *
+ * 为什么需要这层：`LumenStatus` 是给设置页用的详细对象（版本、路径、AI flavor），
+ * 而导出弹窗只关心「能不能渲」。让弹窗自己从五个字段里推断状态，会把这份
+ * 判断复制到每个消费方 —— 这里折叠一次，弹窗只读一个字符串。
+ */
+export function toLumenGateStatus(
+  status: LumenStatus,
+): 'probing' | 'unavailable' | 'available' {
+  if (status.available) return 'available';
+  // 开关已启用但握手未返回 → 仍在探测（唯一可靠判据，见 LUMEN_PROBING_DETAIL 注释）
+  if (status.enabled && status.detail === LUMEN_PROBING_DETAIL) return 'probing';
+  return 'unavailable';
+}
 
 /**
  * LUMEN RAW 引擎握手状态。

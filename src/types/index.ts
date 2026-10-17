@@ -171,6 +171,17 @@ export interface ExportItem {
   rawPath?: string;
 }
 
+/**
+ * 导出内容模式。
+ *
+ * - `copy`：现有行为，复制 RAW / JPG 原文件；
+ * - `render`：由 LUMEN RAW 按每张照片的 `.lumen` 工程渲染成片。
+ */
+export type ExportMode = 'copy' | 'render';
+
+/** 成片输出格式（对应 LUMEN `photo.export` 支持的扩展名子集）。 */
+export type RenderFormat = 'jpg' | 'tif' | 'dng';
+
 /** 导出中单个失败项（batch_export_cmd 的错误累计，不再静默吞掉 Err） */
 export interface ExportFailure {
   path: string;

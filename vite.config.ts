@@ -79,12 +79,17 @@ const e2eLogEndpoint = (): Plugin => ({
     });
 
     // 场景配置端点：从 Node 侧（process.env）读，避免依赖前端 import.meta.env 注入。
+    //
+    // 四个字段而不是一个 JSON blob：启动命令里逐个 env 传参最不容易出错，
+    // 且缺省为空串（场景代码据此判断「这条素材没配」而不是收到 undefined）。
     server.middlewares.use('/__e2e_scenario', (_req, res) => {
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       res.end(
         JSON.stringify({
           scenario: process.env.VITE_E2E_SCENARIO || '',
           jpg: process.env.VITE_E2E_JPG || '',
+          raw: process.env.VITE_E2E_RAW || '',
+          out: process.env.VITE_E2E_OUT || '',
         }),
       );
     });
@@ -109,7 +114,7 @@ const e2eLogEndpoint = (): Plugin => ({
     });
 
     console.log(
-      `[e2e-endpoint] 就绪 | VITE_E2E_SCENARIO=${process.env.VITE_E2E_SCENARIO || '(未设置)'} | VITE_E2E_JPG=${process.env.VITE_E2E_JPG || '(未设置)'}`,
+      `[e2e-endpoint] 就绪 | VITE_E2E_SCENARIO=${process.env.VITE_E2E_SCENARIO || '(未设置)'} | VITE_E2E_JPG=${process.env.VITE_E2E_JPG || '(未设置)'} | VITE_E2E_RAW=${process.env.VITE_E2E_RAW || '(未设置)'} | VITE_E2E_OUT=${process.env.VITE_E2E_OUT || '(未设置)'}`,
     );
   },
 });
