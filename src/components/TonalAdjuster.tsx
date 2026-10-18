@@ -15,6 +15,7 @@ import {
 import { ToneAdjustments } from '../types';
 import { DEFAULT_TONE } from '../utils/autoTone';
 import { usePanelInitialFocus } from '../hooks/usePanelInitialFocus';
+import { useActivity, useTaskMutex } from '../hooks/useTaskMutex';
 import { ConfirmDialog } from './ConfirmDialog';
 
 /** AI 蒙版可选区域（中文展示，英文 id 落进 .lumen 工程）。 */
@@ -199,6 +200,14 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
   const [appliedPreset, setAppliedPreset] = useState<string | null>(null);
   /** FR-07：套用时是否同时写 LUMEN 工程（默认关 —— 200 张会非常慢）。 */
   const [applyWriteLumen, setApplyWriteLumen] = useState(false);
+  /**
+   * FR-09：AI 蒙版与批量套用都接进全局互斥表。
+   * AI 蒙版占用 LUMEN 编辑态，运行期间不能让渲染导出或套用调色插进来。
+   */
+  const mutex = useTaskMutex();
+  useActivity('ai', isMasking);
+  const aiBlockedReason = mutex.blockReason('ai');
+  const applyBlockedReason = mutex.blockReason('apply-tone');
   /** 上一次渲染的 photoId：换照片的同一帧就清掉 appliedPreset（免闪一帧旧名）。 */
   const [presetPhotoId, setPresetPhotoId] = useState(photoId);
   if (presetPhotoId !== photoId) {
@@ -439,9 +448,9 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
             </select>
             <button
               onClick={() => setPendingMask(true)}
-              disabled={isMasking}
+              disabled={isMasking || !!aiBlockedReason}
               className="focus-ring shrink-0 px-2.5 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.98] text-white rounded-md text-xs transition-colors disabled:opacity-50"
-              title="用 AI 检测该区域并只对它应用去薄雾"
+              title={aiBlockedReason ?? '用 AI 检测该区域并只对它应用去薄雾'}
             >
               {isMasking ? '检测中…' : '套用'}
             </button>
@@ -485,6 +494,12 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
               {maskError}
             </p>
           )}
+          {/* FR-09：被其它长任务挡住时常驻说明（AI 蒙版要占 LUMEN 编辑态）。 */}
+          {aiBlockedReason && (
+            <p role="status" className="text-[10px] text-amber-200/90">
+              {aiBlockedReason}
+            </p>
+          )}
         </div>
       )}
 
@@ -494,13 +509,18 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
         <div className="pt-3 mt-3 border-t border-default">
           <button
             onClick={() => onApplyToSelected({ writeLumen: applyWriteLumen })}
-            disabled={applying}
+            disabled={applying || !!applyBlockedReason}
             className="focus-ring w-full flex items-center justify-center gap-1.5 py-2 px-2 bg-background-surface-hover hover:bg-white/10 text-white font-medium rounded-lg text-xs active:scale-[0.98] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-            title="把当前面板里的 6 个调色参数套用到其余选中照片；星级/旗标/色标不受影响"
+            title={applyBlockedReason ?? '把当前面板里的 6 个调色参数套用到其余选中照片；星级/旗标/色标不受影响'}
           >
             <Copy className="w-3.5 h-3.5 text-white/60" aria-hidden="true" />
             <span>{applying ? '套用中…' : `套用到选中 ${selectedCount} 张`}</span>
           </button>
+          {applyBlockedReason && (
+            <p role="status" className="mt-1 text-[10px] text-amber-200/90">
+              {applyBlockedReason}
+            </p>
+          )}
           <label className="mt-1.5 flex items-start gap-1.5 text-[10px] text-white/60 cursor-pointer select-none">
             <input
               type="checkbox"

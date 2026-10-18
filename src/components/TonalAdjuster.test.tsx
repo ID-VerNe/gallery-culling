@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TonalAdjuster } from './TonalAdjuster';
+import { TaskMutexProvider } from '../hooks/useTaskMutex';
 import { DEFAULT_TONE } from '../utils/autoTone';
 import type { ToneAdjustments } from '../types';
 
@@ -32,7 +33,11 @@ function renderAdjuster(overrides: Partial<Props> = {}) {
     ...overrides,
   };
   const user = userEvent.setup();
-  const view = render(<TonalAdjuster {...props} />);
+  const view = render(
+    <TaskMutexProvider>
+      <TonalAdjuster {...props} />
+    </TaskMutexProvider>,
+  );
   return { props, user, view };
 }
 
@@ -213,7 +218,11 @@ describe('TonalAdjuster —— LUMEN RAW 预设', () => {
     await waitFor(() => expect(presetSelect()).toHaveValue('Neutral'));
 
     // 箭头键切图时面板不卸载：仅换 photoId，显示必须回到占位项
-    view.rerender(<TonalAdjuster {...props} photoId="IMG_011" />);
+    view.rerender(
+      <TaskMutexProvider>
+        <TonalAdjuster {...props} photoId="IMG_011" />
+      </TaskMutexProvider>,
+    );
     expect(presetSelect()).toHaveValue('');
   });
 

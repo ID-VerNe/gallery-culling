@@ -66,6 +66,11 @@ export function useBatchOps(opts: {
   } | null>(null);
   /** 批量执行中"跳过剩余"的协作标志（读取走 ref，避免闭包陈旧）。 */
   const batchCancelRef = useRef(false);
+  /**
+   * FR-09：重入保护。快捷键可以在批量进行中再次触发（确认框 → 确认），
+   * 两批同时写同一批文件会互相覆盖，且共用一条进度条。
+   */
+  const runningRef = useRef(false);
   const [batchCancelling, setBatchCancelling] = useState(false);
   /**
    * B1：执行批量写盘。逐张乐观更新 + 写 XMP，进度条实时推进；单张失败不中断
@@ -73,9 +78,11 @@ export function useBatchOps(opts: {
    */
   const runBatch = useCallback(
     async (action: BatchAction) => {
+      if (runningRef.current) return;
       const targets = filteredGroups.filter((g) => selectedIds.has(g.id));
       if (targets.length === 0) return;
 
+      runningRef.current = true;
       batchCancelRef.current = false;
       setBatchCancelling(false);
       setBatchProgress({ processed: 0, total: targets.length });
@@ -147,6 +154,7 @@ export function useBatchOps(opts: {
       }
 
       const cancelled = batchCancelRef.current;
+      runningRef.current = false;
       setBatchProgress(null);
       setBatchCancelling(false);
       if (failed > 0) {

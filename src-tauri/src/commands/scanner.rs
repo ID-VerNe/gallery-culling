@@ -38,6 +38,12 @@ pub async fn scan_folders_cmd(
     raw_folder: Option<String>,
     sort_order: Option<String>,
 ) -> Result<FolderScanResult, String> {
+    // FR-09：必须在碰取消标志**之前**抢占。重入时如果先 `store(false)`，
+    // 会把正在跑的第一次扫描的取消请求抹掉 —— 用户点了取消，任务却继续。
+    let _guard = state
+        .tasks
+        .try_begin(crate::taskgate::Activity::Scan)
+        .map_err(|e| e.to_string())?;
     let sort = sort_order.unwrap_or_else(|| "time_filename".to_string());
     let cancel = state.scan_cancel.clone();
     cancel.store(false, Ordering::SeqCst); // 复位上一轮遗留的取消标志

@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TonalAdjuster } from './TonalAdjuster';
+import { TaskMutexProvider } from '../hooks/useTaskMutex';
 import { DEFAULT_TONE } from '../utils/autoTone';
 
 const baseProps = {
@@ -19,7 +20,11 @@ const baseProps = {
 };
 
 function renderAdjuster(over: Record<string, unknown> = {}) {
-  return render(<TonalAdjuster {...baseProps} {...(over as object)} />);
+  return render(
+    <TaskMutexProvider>
+      <TonalAdjuster {...baseProps} {...(over as object)} />
+    </TaskMutexProvider>,
+  );
 }
 
 const MASK_LABEL = /AI 局部蒙版/;

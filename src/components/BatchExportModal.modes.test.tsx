@@ -11,6 +11,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BatchExportModal } from './BatchExportModal';
+import { TaskMutexProvider } from '../hooks/useTaskMutex';
 import type { LumenGateStatus } from './export/LumenGateNotice';
 import {
   emitMockEvent,
@@ -61,6 +62,10 @@ interface SetupProps {
   onOpenSettings?: () => void;
 }
 
+/** FR-09：导出弹窗会读全局互斥表，组件测试必须提供 Provider。 */
+const renderWithProvider = (ui: Parameters<typeof render>[0]) =>
+  render(ui, { wrapper: TaskMutexProvider });
+
 function setup(props: SetupProps = {}) {
   const onError = vi.fn();
   const onClose = vi.fn();
@@ -73,6 +78,7 @@ function setup(props: SetupProps = {}) {
       onError={onError}
       {...props}
     />,
+    { wrapper: TaskMutexProvider },
   );
   return { user, onError, onClose };
 }
@@ -318,6 +324,7 @@ describe('导出范围：含 RAW', () => {
     const user = userEvent.setup();
     render(
       <BatchExportModal isOpen onClose={vi.fn()} groups={[group, groupWithRaw]} />,
+      { wrapper: TaskMutexProvider },
     );
 
     // 两组都是 pick：全部 = 2，含 RAW = 1
@@ -335,7 +342,7 @@ describe('导出范围：含 RAW', () => {
 
   it('候选全被该档排除时拦下，提示先打星/保留', async () => {
     const user = userEvent.setup();
-    render(<BatchExportModal isOpen onClose={vi.fn()} groups={[group]} />);
+    renderWithProvider(<BatchExportModal isOpen onClose={vi.fn()} groups={[group]} />);
     await user.click(screen.getByLabelText(/含 RAW 的组/));
     await user.type(screen.getByLabelText('目标导出目录'), 'D:/out');
 
@@ -354,7 +361,7 @@ describe('成片质量提示（JPG 源二次压缩）', () => {
 
   it('候选全部带 RAW 时不提示', async () => {
     const user = userEvent.setup();
-    render(<BatchExportModal isOpen onClose={vi.fn()} groups={[groupWithRaw]} />);
+    renderWithProvider(<BatchExportModal isOpen onClose={vi.fn()} groups={[groupWithRaw]} />);
     await user.click(screen.getByLabelText(/调色成片/));
     expect(screen.queryByText(/仅含 JPG/)).toBeNull();
   });

@@ -10,6 +10,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BatchExportModal } from './BatchExportModal';
+import { TaskMutexProvider } from '../hooks/useTaskMutex';
 import {
   emitMockEvent,
   invokeCount,
@@ -45,6 +46,7 @@ function setup() {
       groups={[group]}
       onError={onError}
     />,
+    { wrapper: TaskMutexProvider },
   );
   return { user, onError };
 }

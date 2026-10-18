@@ -23,6 +23,7 @@ import { useBatchOps } from './hooks/useBatchOps';
 import { useRatingFlagSync, type UndoConflict } from './hooks/useRatingFlagSync';
 import { useToneEditing } from './hooks/useToneEditing';
 import { useToneBatch } from './hooks/useToneBatch';
+import { useTaskMutex, useActivity, TaskMutexProvider } from './hooks/useTaskMutex';
 import { useSessionDebounce } from './hooks/useSessionDebounce';
 import { toLumenGateStatus, useLumenStatus } from './hooks/useLumenStatus';
 import { useLumenOrchestration } from './hooks/useLumenOrchestration';
@@ -38,6 +39,8 @@ import { DEFAULT_TONE } from './utils/autoTone';
 
 function AppShell() {
   const toast = useToast();
+  /** FR-09：一张表回答「现在能不能开始」。各任务只声明自己是否在跑。 */
+  const mutex = useTaskMutex();
 
   // 读回设置并回填默认目录。必须在 jpgFolder/rawFolder/sortOrder 的 state
   // 声明之后挂载，所以放在它们后面。
@@ -291,6 +294,12 @@ function AppShell() {
     onToneDiscarded: discardToneEditsFor,
   });
 
+  // FR-09：把三个「App 层可见」的长任务接进互斥表。
+  // 导出/渲染在弹窗内部自己注册（它们的状态不在 App 层）；AI 蒙版同理。
+  useActivity('scan', scanTask.isRunning);
+  useActivity('batch-write', batchProgress !== null);
+  useActivity('apply-tone', toneBatch.toneBatchProgress !== null);
+
   const swapIndices = useCallback(() => {
     const temp = selectedIndex;
     setSelectedIndex(compareIndex);
@@ -502,6 +511,7 @@ function AppShell() {
         tonalToggleDisabled={!currentGroup}
         onOpenLuminar={external.openLuminar}
         isLuminarRunning={external.isLuminarRunning}
+        scanBlockedReason={mutex.blockReason('scan')}
       />
 
       {/* Scan progress (M-05) — 空闲时不渲染，不留空白条 */}
@@ -796,7 +806,9 @@ function conflictMessage(conflict: UndoConflict | null): string {
 export default function App() {
   return (
     <ToastProvider>
-      <AppShell />
+      <TaskMutexProvider>
+        <AppShell />
+      </TaskMutexProvider>
     </ToastProvider>
   );
 }

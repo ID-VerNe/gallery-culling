@@ -110,6 +110,8 @@ pub struct AppState {
     pub export_cancel: Arc<AtomicBool>,
     /// 写盘合并队列（FR-03）：同一照片的连续改动折叠成一次落盘。
     pub sync: Arc<syncqueue::Coalescer>,
+    /// 任务槽（FR-09）：扫描/导出/渲染/AI 互斥，重入返回 E_BUSY。
+    pub tasks: crate::taskgate::TaskGate,
 }
 
 impl AppState {
@@ -123,6 +125,7 @@ impl AppState {
             scan_cancel: Arc::new(AtomicBool::new(false)),
             export_cancel: Arc::new(AtomicBool::new(false)),
             sync: Arc::new(syncqueue::Coalescer::new(sink)),
+            tasks: crate::taskgate::TaskGate::new(),
         }
     }
 }

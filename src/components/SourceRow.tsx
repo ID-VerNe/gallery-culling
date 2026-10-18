@@ -25,6 +25,13 @@ export interface SourceRowProps {
   scanError?: string | null;
   onDismissScanError?: () => void;
   onOpenSettingsModal: () => void;
+  /**
+   * FR-09：扫描被其它长任务挡住的原因（常驻文案，不是 title）。
+   *
+   * disabled 按钮不可聚焦，读屏拿不到 title —— 原因必须画在屏幕上。
+   * null/缺省表示没有被挡。
+   */
+  scanBlockedReason?: string | null;
 }
 
 /** 一个「标签 + 路径输入 + 浏览按钮」的文件夹选择器。 */
@@ -86,10 +93,12 @@ export const SourceRow: React.FC<SourceRowProps> = ({
   scanError,
   onDismissScanError,
   onOpenSettingsModal,
+  scanBlockedReason,
 }) => {
   // UX-15：失败态优先于一切 —— 禁用扫描按钮并把原因说清楚，
   // 否则用户只看到按钮转圈结束却不知道出了什么事。
   const hasError = !!scanError;
+  const blocked = !!scanBlockedReason;
   const scanned = scanProgress ? scanProgress.processed : 0;
   const total = scanProgress ? scanProgress.total : 0;
 
@@ -136,7 +145,7 @@ export const SourceRow: React.FC<SourceRowProps> = ({
       {/* Scan / Refresh */}
       <button
         onClick={onScan}
-        disabled={isLoading || hasError || !jpgFolder.trim()}
+        disabled={isLoading || hasError || blocked || !jpgFolder.trim()}
         className="focus-ring flex items-center gap-1.5 px-3.5 py-1 bg-white hover:bg-white/90 text-black active:scale-[0.96] disabled:bg-white/10 disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-transform shadow-sm shrink-0 whitespace-nowrap"
         aria-label={isLoading ? '正在扫描照片目录' : '扫描照片目录'}
         aria-live="polite"
@@ -145,9 +154,11 @@ export const SourceRow: React.FC<SourceRowProps> = ({
             ? scanError!
             : isLoading
               ? '正在扫描照片目录…'
-              : !jpgFolder.trim()
-                ? '请先选择或输入 JPG 文件夹'
-                : '扫描照片目录'
+              : blocked
+                ? scanBlockedReason!
+                : !jpgFolder.trim()
+                  ? '请先选择或输入 JPG 文件夹'
+                  : '扫描照片目录'
         }
       >
         <RefreshCw
@@ -163,6 +174,17 @@ export const SourceRow: React.FC<SourceRowProps> = ({
             : '扫描照片'}
         </span>
       </button>
+
+      {/* FR-09：被别的长任务挡住时常驻显示原因。
+          不能只放 title —— disabled 按钮不可聚焦，键盘与读屏都拿不到。 */}
+      {blocked && !hasError && (
+        <span
+          role="status"
+          className="text-[10px] leading-tight text-amber-200/90 max-w-[150px] shrink-0"
+        >
+          {scanBlockedReason}
+        </span>
+      )}
 
       {/* UX-15：失败原因用 role=alert 说出来，并给出关闭入口（否则用户只能靠猜）。 */}
       {hasError && (

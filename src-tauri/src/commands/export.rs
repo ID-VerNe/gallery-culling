@@ -332,6 +332,11 @@ pub async fn batch_export_cmd(
     include_jpg: bool,
     overwrite: Option<bool>,
 ) -> Result<ExportOutcome, String> {
+    // FR-09：导出与渲染共用 `export_cancel`，并发会互相抹掉取消请求。
+    let _guard = state
+        .tasks
+        .try_begin(crate::taskgate::Activity::Export)
+        .map_err(|e| e.to_string())?;
     let cancel = state.export_cancel.clone();
     cancel.store(false, Ordering::SeqCst); // 复位上一轮遗留的取消标志
     let app_for_progress = app.clone();
@@ -693,6 +698,12 @@ pub async fn batch_render_export_cmd(
     if !matches!(format.as_str(), "jpg" | "tif" | "dng") {
         return Err(format!("不支持的成片格式: {}", format));
     }
+
+    // FR-09：渲染与 AI 共用 LUMEN 常驻进程的编辑态，必须串行。
+    let _guard = state
+        .tasks
+        .try_begin(crate::taskgate::Activity::Render)
+        .map_err(|e| e.to_string())?;
 
     let settings = state.db.load_settings()?;
     // 引擎不可用 → 立即失败，**绝不静默回退到复制**。

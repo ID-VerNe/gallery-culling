@@ -7,6 +7,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { TonalAdjuster } from './TonalAdjuster';
+import { TaskMutexProvider } from '../hooks/useTaskMutex';
 import { DEFAULT_TONE } from '../utils/autoTone';
 
 function renderPanel(overrides: {
@@ -16,6 +17,7 @@ function renderPanel(overrides: {
 } = {}) {
   const onApplyToSelected = overrides.onApplyToSelected ?? vi.fn();
   render(
+    <TaskMutexProvider>
     <TonalAdjuster
       tone={{ ...DEFAULT_TONE }}
       onChange={() => {}}
@@ -24,7 +26,8 @@ function renderPanel(overrides: {
       selectedCount={overrides.selectedCount}
       onApplyToSelected={onApplyToSelected}
       applying={overrides.applying}
-    />,
+    />
+    </TaskMutexProvider>,
   );
   return { onApplyToSelected };
 }

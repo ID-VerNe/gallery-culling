@@ -445,6 +445,11 @@ pub async fn lumen_apply_mask_cmd(
     region: String,
     adjustments: MaskAdjustments,
 ) -> Result<LumenMaskResult, String> {
+    // FR-09：AI 蒙版占用 LUMEN 编辑态，与渲染导出、套用调色互斥。
+    let _guard = state
+        .tasks
+        .try_begin(crate::taskgate::Activity::Ai)
+        .map_err(|e| e.to_string())?;
     let settings = state.db.load_settings()?;
     let exe = require_lumen(&settings)?;
     if !lumen::detect_ai_flavor(&exe) {

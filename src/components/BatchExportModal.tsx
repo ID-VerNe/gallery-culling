@@ -6,6 +6,7 @@ import { Modal } from './Modal';
 import { TaskProgressBar } from './TaskProgressBar';
 import { useExportForm } from '../hooks/useExportForm';
 import { useExportRun } from '../hooks/useExportRun';
+import { useActivity, useTaskMutex } from '../hooks/useTaskMutex';
 import { CopyOptions } from './export/CopyOptions';
 import { RenderOptions } from './export/RenderOptions';
 import { OverwriteToggle } from './export/OverwriteToggle';
@@ -74,15 +75,24 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
   });
 
   const isExporting = run.isRunning;
+  /**
+   * FR-09：导出/渲染接进全局互斥表。
+   * 复制与渲染在后端是两个命令、两种资源（渲染还要占 LUMEN 进程），
+   * 所以注册成两种活动，各自的阻塞原因也不同。
+   */
+  const mutex = useTaskMutex();
+  const activity = form.mode === 'render' ? 'render' : 'export';
+  useActivity(activity, isExporting);
+  const blockedReason = mutex.blockReason(activity);
   const spec = EXPORT_MODES[form.mode];
   /** 复制模式下「组」与「文件」不是一回事，只有真的不等时才补一句，避免噪音。 */
   const showFileCount =
     form.mode === 'copy' && form.expectedFileCount !== form.candidates.length;
 
   const handleExport = async () => {
-    // 按钮在 validation 非空时就是 disabled，正常路径走不到这里。
+    // 按钮在 validation / 互斥阻塞时就是 disabled，正常路径走不到这里。
     // 保留这道闸是因为 `run` 一旦发出就是一次真实写盘 —— 宁可多挡一次。
-    if (form.validation) return;
+    if (form.validation || blockedReason) return;
 
     const items: ExportItem[] = form.candidates.map((g) => ({
       baseName: g.baseName,
@@ -177,6 +187,12 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
                     {form.validation}
                   </span>
                 )}
+                {/* FR-09：被其它长任务挡住时同样常驻说明。 */}
+                {!form.validation && blockedReason && (
+                  <span id={validationId} className="text-amber-200/90">
+                    {blockedReason}
+                  </span>
+                )}
               </>
             )}
           </div>
@@ -189,8 +205,8 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
           </button>
           <button
             onClick={handleExport}
-            disabled={isExporting || !form.canRun}
-            aria-describedby={form.validation ? validationId : undefined}
+            disabled={isExporting || !form.canRun || !!blockedReason}
+            aria-describedby={form.validation || blockedReason ? validationId : undefined}
             className="focus-ring flex items-center gap-1.5 px-3.5 py-1.5 bg-white hover:bg-white/90 text-black active:scale-[0.96] disabled:bg-white/10 disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-transform shadow-sm"
           >
             <Download className="w-3.5 h-3.5" aria-hidden="true" />

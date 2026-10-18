@@ -7,6 +7,7 @@ pub mod models;
 mod proc;
 mod scanner;
 mod syncqueue;
+mod taskgate;
 mod thumbnail;
 pub mod xmp;
 

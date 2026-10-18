@@ -2,18 +2,21 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TonalAdjuster } from './TonalAdjuster';
+import { TaskMutexProvider } from '../hooks/useTaskMutex';
 import { DEFAULT_TONE } from '../utils/autoTone';
 
 function renderAdjuster(props: Partial<React.ComponentProps<typeof TonalAdjuster>> = {}) {
   return render(
-    <TonalAdjuster
-      tone={DEFAULT_TONE}
-      onChange={() => undefined}
-      onReset={() => undefined}
-      onSave={async () => undefined}
-      onClose={() => undefined}
-      {...props}
-    />,
+    <TaskMutexProvider>
+      <TonalAdjuster
+        tone={DEFAULT_TONE}
+        onChange={() => undefined}
+        onReset={() => undefined}
+        onSave={async () => undefined}
+        onClose={() => undefined}
+        {...props}
+      />
+    </TaskMutexProvider>,
   );
 }
 

@@ -28,6 +28,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   scanError,
   onDismissScanError,
   onOpenSettingsModal,
+  scanBlockedReason,
 
   // Row 2 — ToolbarRow
   filterMode,
@@ -68,6 +69,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       scanError={scanError}
       onDismissScanError={onDismissScanError}
       onOpenSettingsModal={onOpenSettingsModal}
+      scanBlockedReason={scanBlockedReason}
     />
 
     {/* -----------------------------------------------------------
