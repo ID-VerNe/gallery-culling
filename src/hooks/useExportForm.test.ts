@@ -11,7 +11,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useExportForm } from './useExportForm';
-import type { CullFlag, PhotoGroupInfo } from '../types';
+import type { CullFlag, FilterMode, PhotoGroupInfo } from '../types';
+import { parseQuery } from '../utils/queryMatch';
 
 const file = (path: string) => ({
   name: path.split('/').pop() ?? '',
@@ -95,6 +96,8 @@ describe('导出范围', () => {
       // D 是 reject + 3 星：星级够但已被淘汰，不得计入
       star3_plus: 1,
       raw_only: 3,
+      // 无查询、无 chips 时，「当前筛选结果」等价于「全部非淘汰」
+      current_query: 4,
       all: 4,
     });
     expect(result.current.candidates.map((g) => g.baseName)).toEqual(['A', 'B']);
@@ -375,5 +378,59 @@ describe('browseTarget', () => {
     });
 
     expect(result.current.targetFolder).toBe('D:/keep');
+  });
+});
+
+/**
+ * `current_query` 档 —— 报告 §5.5 第 5 点：导出范围必须复用宫格的谓词，
+ * 不能在导出侧再写一套筛选逻辑（两处漂移 = 导出了用户没看到的照片）。
+ */
+describe('导出范围「当前筛选结果」', () => {
+  const setupQuery = (query: string, filterMode: FilterMode = 'all') =>
+    renderHook(() =>
+      useExportForm({
+        groups,
+        lumenAvailable: true,
+        filterMode,
+        queryParse: parseQuery(query),
+      }),
+    );
+
+  it('无查询、无 chips 时等价于「全部非淘汰」', () => {
+    const { result } = setupQuery('');
+    act(() => result.current.setFilter('current_query'));
+
+    // A/B/C/E，D 是淘汰
+    expect(result.current.candidates.map((g) => g.baseName)).toEqual(['A', 'B', 'C', 'E']);
+  });
+
+  it('叠加查询语法后按语法收窄，且仍排除淘汰', () => {
+    const { result } = setupQuery('rating>=3');
+    act(() => result.current.setFilter('current_query'));
+
+    // B(5★) 命中；D(3★) 被淘汰守卫排除
+    expect(result.current.candidates.map((g) => g.baseName)).toEqual(['B']);
+  });
+
+  it('chips 与语法是交集（不是后者覆盖前者）', () => {
+    const { result } = setupQuery('rating>=3', 'pick');
+    act(() => result.current.setFilter('current_query'));
+
+    // Pick 只有 A（0★），语法要求 ≥3★ → 空集
+    expect(result.current.candidates).toEqual([]);
+  });
+
+  it('语法有错时候选归零，绝不按「放行全部」导出', () => {
+    const { result } = setupQuery('ratng:3');
+    act(() => result.current.setFilter('current_query'));
+
+    expect(result.current.candidates).toEqual([]);
+    expect(result.current.validation).not.toBeNull();
+  });
+
+  it('计数与候选来自同一份谓词', () => {
+    const { result } = setupQuery('rating>=3');
+    expect(result.current.countsByFilter.current_query).toBe(1);
+    expect(result.current.countsByFilter.all).toBe(4);
   });
 });

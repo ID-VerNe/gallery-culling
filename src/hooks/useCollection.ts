@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '../components/Toast';
 import { countByFilter, matchesFilter } from '../utils/filterMatch';
+import { matchesParsedQuery, parseQuery } from '../utils/queryMatch';
 import type { FilterMode, PhotoGroupInfo } from '../types';
 
 /**
@@ -46,14 +47,32 @@ export function useCollection() {
   // `utils/filterMatch` 的唯一原因。O(n) 单遍，万张规模亚毫秒级。
   const filterCounts = useMemo(() => countByFilter(groups), [groups]);
 
+  /**
+   * FR-06：搜索框升级为查询语法（`rating>=3 label:red -flag:reject`）。
+   *
+   * 解析放在 `filteredGroups` 之后而不是并进它：chips（固定档位）与语法是
+   * **AND 关系**，chips 决定「工作集」，语法在这个工作集里再收窄。这样
+   * `selectedIndex` 的坐标系仍是 `filteredGroups` 的下标，`filteredIndices`
+   * 只负责「可见位置 → 工作集下标」的映射 —— 与升级前完全一致。
+   */
+  const queryParse = useMemo(() => parseQuery(gridSearch), [gridSearch]);
+
   // Search narrowing applied inside the filtered set.
+  //
+  // 裸词仍是文件名子串（`parseQuery` 把它变成 name/contains 词条），所以
+  // 老用户的 `DSC0` 输入不需要改写就能继续工作。
   const filteredIndices = useMemo(() => {
-    const q = gridSearch.trim().toLowerCase();
-    if (!q) return filteredGroups.map((_, i) => i);
+    // 只在**既无词条也无错误**时短路（空查询是最常见的路径，省一次 map）。
+    // 有错误时不短路：与短路的行为等价（都是放行全部），但短路会让
+    // `matchesParsedQuery` 的错误分支变成死代码 —— 未来改错误策略时没有
+    // 任何测试能守住它。多一次 map 换一条活路径，值得。
+    if (queryParse.terms.length === 0 && queryParse.errors.length === 0) {
+      return filteredGroups.map((_, i) => i);
+    }
     return filteredGroups
-      .map((g, i) => (g.baseName.toLowerCase().includes(q) ? i : -1))
+      .map((g, i) => (matchesParsedQuery(g, queryParse) ? i : -1))
       .filter((i) => i >= 0);
-  }, [filteredGroups, gridSearch]);
+  }, [filteredGroups, queryParse]);
 
   const visibleGroups = useMemo(
     () => filteredIndices.map((i) => filteredGroups[i]),
@@ -191,6 +210,8 @@ export function useCollection() {
     compareIndex,
     currentGroup,
     filterMode,
+    /** FR-06：查询解析结果，供宫格显示「N 个条件 / 错误提示」。 */
+    queryParse,
     selectedIds,
     gridSearch,
     gridSearchOpen,

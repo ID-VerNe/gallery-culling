@@ -154,8 +154,8 @@ describe('L-11 —— 撤销：键盘', () => {
     await waitFor(() => expect(rateCalls()).toBe(1));
 
     // 打开宫格搜索框并聚焦，在其中按 Ctrl+Z
-    fireEvent.click(screen.getByRole('button', { name: '按文件名搜索' }));
-    const input = screen.getByRole('textbox', { name: '在宫格中按文件名搜索照片' });
+    fireEvent.click(screen.getByRole('button', { name: '按条件筛选照片' }));
+    const input = screen.getByRole('textbox', { name: '按查询条件筛选照片' });
     input.focus();
     fireEvent.keyDown(input, { key: 'z', ctrlKey: true });
 

@@ -15,6 +15,7 @@ import { PhotoGroupInfo } from '../types';
 import { api } from '../services/api';
 import { useGridKeyboard } from '../hooks/useGridKeyboard';
 import { LABEL_DOT_CLASS, LABEL_NAMES, isColorLabel } from '../utils/labels';
+import { QUERY_EXAMPLES, type QueryParseResult } from '../utils/queryMatch';
 
 /**
  * 宫格子格子的高度（px）。
@@ -32,6 +33,9 @@ const GRID_ROW_GAP_BOTTOM = 6;
 
 /** 稳定的空集合引用：避免每次渲染新建 Set 让依赖抖动。 */
 const EMPTY_ID_SET: ReadonlySet<string> = new Set<string>();
+
+/** 同理，`queryParse` 缺省时的空错误列表 —— 每次 `?? []` 都会新建数组。 */
+const EMPTY_STRINGS: readonly string[] = [];
 
 /**
  * 虚拟化的精确估算行高 = 子格子高度 + 行容器底部内边距（3 列 138 / 4 列 116）。
@@ -62,6 +66,13 @@ interface ThumbnailGridProps {
   searchFocusToken?: number;
   onSearchQueryChange?: (value: string) => void;
   onSearchOpenChange?: (open: boolean) => void;
+  /**
+   * FR-06：查询解析结果（由 `useCollection` 提供，与过滤共用同一份解析）。
+   *
+   * 宫格只负责**呈现**条件数与错误，不自己再解析一遍 —— 两处解析必然漂移，
+   * 而漂移的表现是「提示说 2 个条件，实际筛出的是另 2 个条件的结果」。
+   */
+  queryParse?: QueryParseResult;
   /** Total photos loaded, before the grid's own search is applied. */
   totalLoaded?: number;
   /**
@@ -94,6 +105,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   onSearchQueryChange,
   onFilterReset,
   onSearchOpenChange,
+  queryParse,
   totalLoaded,
   lumenThumbnails = false,
   selectedIds,
@@ -187,6 +199,11 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   const isSearchFiltering = searchQuery.trim().length > 0;
   const isEmpty = groups.length === 0;
 
+  // FR-06：查询状态。`queryParse` 缺省（独立使用本组件的测试）时全部为空。
+  const queryErrors = queryParse?.errors ?? EMPTY_STRINGS;
+  const queryTermCount = queryParse?.terms.length ?? 0;
+  const queryPending = queryParse?.pending.length ?? 0;
+
   // B7：虚拟化会把滚出窗口的行整行卸载，`aria-activedescendant` 随即指向不存在
   // 的节点、读屏静默。这里在选中行未被渲染时补一个视觉隐藏的 `role="option"`
   // 幽灵节点，保证引用始终可解析（比改成 roving tabindex 改动面小得多）。
@@ -229,8 +246,8 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
                   ? 'bg-white text-black font-medium'
                   : 'text-white/60 hover:text-white hover:bg-white/10'
               }`}
-              title="按文件名搜索 (快捷键 /)"
-              aria-label="按文件名搜索"
+              title="按条件筛选 (快捷键 /)"
+              aria-label="按条件筛选照片"
               aria-pressed={searchOpen}
             >
               <Search className="w-3 h-3" aria-hidden="true" />
@@ -282,8 +299,9 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
               value={searchQuery}
               onChange={(e) => onSearchQueryChange?.(e.target.value)}
               onKeyDown={handleSearchKeyDown}
-              placeholder="在宫格中按文件名搜索…"
-              aria-label="在宫格中按文件名搜索照片"
+              placeholder="筛选：rating>=3 label:red -flag:reject"
+              aria-label="按查询条件筛选照片"
+              aria-describedby="grid-query-hint"
               className="focus-ring bg-transparent border-none outline-none text-white w-full min-w-0 text-[11px]"
             />
             {searchQuery && (
@@ -295,6 +313,37 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
                 <X className="w-3 h-3" aria-hidden="true" />
               </button>
             )}
+          </div>
+
+          {/* FR-06 状态行：错误 / 示例 / 条件数。
+              刻意不做成红色输入框：语法门槛是这条需求的主要风险，报错要像
+              「提示」而不是「拒绝」，用户才不会因为怕报错而不去用语法。 */}
+          <div id="grid-query-hint" className="mt-1 min-h-[15px] text-[10px] leading-[15px]">
+            {queryErrors.length > 0 ? (
+              <span className="text-amber-400/90" title={queryErrors.join('\n')}>
+                {queryErrors[0]}
+                {queryErrors.length > 1 && `（另有 ${queryErrors.length - 1} 处）`}
+              </span>
+            ) : searchQuery.trim() === '' ? (
+              <span className="flex items-center gap-1 flex-wrap text-white/35">
+                <span>试试：</span>
+                {QUERY_EXAMPLES.map((example) => (
+                  <button
+                    key={example}
+                    onClick={() => onSearchQueryChange?.(example)}
+                    className="focus-ring font-mono px-1.5 rounded bg-white/5 hover:bg-white/10 text-white/60 transition-colors"
+                  >
+                    {example}
+                  </button>
+                ))}
+              </span>
+            ) : queryPending > 0 ? (
+              <span className="text-white/40">输入中…</span>
+            ) : queryTermCount > 0 ? (
+              <span className="text-white/45">
+                {queryTermCount} 个条件 · 匹配 {groups.length} 张
+              </span>
+            ) : null}
           </div>
         </div>
       )}

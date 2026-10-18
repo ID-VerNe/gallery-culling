@@ -1,6 +1,6 @@
 import React, { useId } from 'react';
 import { FolderOpen, Download } from 'lucide-react';
-import { ExportItem, PhotoGroupInfo } from '../types';
+import { ExportItem, FilterMode, PhotoGroupInfo } from '../types';
 import { api } from '../services/api';
 import { Modal } from './Modal';
 import { TaskProgressBar } from './TaskProgressBar';
@@ -14,6 +14,7 @@ import { LumenGateNotice, type LumenGateStatus } from './export/LumenGateNotice'
 import { ExportResultPanel } from './export/ExportResultPanel';
 import { EXPORT_FILTERS } from './export/exportFilters';
 import { EXPORT_MODES } from './export/exportConfig';
+import type { QueryParseResult } from '../utils/queryMatch';
 
 interface BatchExportModalProps {
   isOpen: boolean;
@@ -29,6 +30,12 @@ interface BatchExportModalProps {
   /** 「去设置」入口。 */
   onOpenSettings?: () => void;
   onError?: (message: string) => void;
+  /**
+   * 宫格当前的 chips 档位与查询解析结果。
+   * 供「当前筛选结果」这一档复用宫格的谓词（报告 §5.5 第 5 点）。
+   */
+  filterMode?: FilterMode;
+  queryParse?: QueryParseResult;
 }
 
 /**
@@ -49,6 +56,8 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
   lumenDetail,
   onOpenSettings,
   onError,
+  filterMode,
+  queryParse,
 }) => {
   /** D8：把错误文案与输入框关联，读屏聚焦输入时也能读到。 */
   const folderErrorId = useId();
@@ -57,7 +66,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
 
   // 探测中按「可用」放行（乐观）：用户此刻多半还在填目录，真不可用时后端会逐项计入 failed。
   const lumenAvailable = lumenStatus !== 'unavailable';
-  const form = useExportForm({ groups, lumenAvailable, lumenDetail });
+  const form = useExportForm({ groups, lumenAvailable, lumenDetail, filterMode, queryParse });
   const run = useExportRun({
     mode: form.mode,
     resetSignal: form.resetSignal,

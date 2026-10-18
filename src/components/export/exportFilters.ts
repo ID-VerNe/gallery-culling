@@ -12,13 +12,30 @@ export type ExportFilterValue =
   | 'pick_only'
   | 'star3_plus'
   | 'raw_only'
+  | 'current_query'
   | 'all';
+
+/**
+ * 谓词的上下文。
+ *
+ * 存在的原因只有一个：`current_query` 档必须复用宫格的 chips 与查询语法，
+ * 而不是在导出侧再写一遍。报告 §5.5 第 5 点明确要求合并 —— 导出是最高危的
+ * 写入路径，两套筛选逻辑一旦漂移，用户会导出「看到的」之外的照片。
+ */
+export interface ExportFilterContext {
+  /** 当前 chips 档位（`matchesFilter`）。 */
+  matchesChips: (g: PhotoGroupInfo) => boolean;
+  /** 当前查询语法（`matchesQuery`，**不含**错误放行）。 */
+  matchesQuery: (g: PhotoGroupInfo) => boolean;
+  /** 查询语法是否有错误 —— 有错时 `current_query` 一律不命中。 */
+  queryInvalid: boolean;
+}
 
 export interface ExportFilterSpec {
   value: ExportFilterValue;
   label: string;
   /** 命中即进入导出候选集。 */
-  test: (g: PhotoGroupInfo) => boolean;
+  test: (g: PhotoGroupInfo, ctx: ExportFilterContext) => boolean;
 }
 
 /**
@@ -62,6 +79,22 @@ export const EXPORT_FILTERS: ReadonlyArray<ExportFilterSpec> = [
      * 带 JPG 的组，而计数明明把她们算进来了。
      */
     test: (g) => g.flag !== 'reject' && !!g.raw,
+  },
+  {
+    value: 'current_query',
+    label: '当前筛选结果',
+    /**
+     * 与宫格看到的一致：chips 档位 ∧ 查询语法。
+     *
+     * 两处刻意的收紧：
+     * - **语法有错时一律不命中**（候选变 0）。宫格在语法错误时是放行的
+     *   （提示而非拒绝），但导出不能沿用这个宽容：用户以为筛了 40 张，
+     *   实际导出 500 张，是不可撤销的错误。宁可拦住让他先改语法。
+     * - 仍然排除淘汰。`matchesChips` 在 chips 选「已淘汰」时会命中淘汰，
+     *   这一档不能因此把淘汰放出去。
+     */
+    test: (g, ctx) =>
+      g.flag !== 'reject' && !ctx.queryInvalid && ctx.matchesChips(g) && ctx.matchesQuery(g),
   },
   {
     value: 'all',

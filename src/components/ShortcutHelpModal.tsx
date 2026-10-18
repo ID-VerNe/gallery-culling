@@ -10,6 +10,8 @@ interface ShortcutHelpModalProps {
 interface ShortcutGroup {
   title: string;
   items: Array<{ keys: string; label: string }>;
+  /** 占满两列（字段表这类需要横向空间的组）。 */
+  wide?: boolean;
 }
 
 const GROUPS: ShortcutGroup[] = [
@@ -52,6 +54,27 @@ const GROUPS: ShortcutGroup[] = [
       { keys: '] 或 空格', label: '将右图设为新基准' },
       { keys: 'S', label: '左右互换' },
       { keys: 'M', label: '手动镜头元数据编辑' },
+    ],
+  },
+  {
+    title: '筛选语法（宫格搜索框，与上方档位叠加）',
+    wide: true,
+    items: [
+      { keys: 'rating>=3', label: '星级：= >= <= > <（rating:3 即等于 3 星）' },
+      { keys: 'flag:pick', label: '旗标：pick / reject / none' },
+      { keys: 'label:red', label: '色标：red / yellow / green / blue / purple / none' },
+      { keys: 'name:DSC0*', label: '文件名（* 任意串、? 单字符；裸词按子串匹配）' },
+      { keys: 'ext:arw', label: '扩展名（组内任一文件命中即可）' },
+      { keys: 'folder:2024', label: '所在目录包含该文本' },
+      { keys: 'edited', label: '有精修成果' },
+      { keys: 'iso>=3200', label: 'ISO' },
+      { keys: 'aperture>=2.8', label: '光圈（按 f 值比较）' },
+      { keys: 'shutter<=1/500', label: '快门（按秒比较，更快 = 数值更小）' },
+      { keys: 'focal>=85', label: '焦距（mm）' },
+      { keys: 'camera:sony', label: '机身（厂商或型号包含）' },
+      { keys: 'lens:85mm', label: '镜头型号包含' },
+      { keys: '-flag:reject', label: '任意条件前加 - 取反' },
+      { keys: 'picked / rejected / unflagged', label: '旗标简写' },
     ],
   },
 ];
@@ -138,7 +161,7 @@ export const ShortcutHelpModal: React.FC<ShortcutHelpModalProps> = ({
       ) : (
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
         {filtered.map((group) => (
-          <section key={group.title}>
+          <section key={group.title} className={group.wide ? 'sm:col-span-2' : undefined}>
             <h3 className="text-[11px] font-semibold text-white/60 uppercase tracking-wide mb-2">
               {group.title}
             </h3>

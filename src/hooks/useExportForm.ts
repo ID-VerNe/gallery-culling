@@ -11,14 +11,17 @@
  */
 import { useCallback, useMemo, useState } from 'react';
 import { api } from '../services/api';
-import type { ExportMode, PhotoGroupInfo, RenderFormat } from '../types';
+import type { ExportMode, FilterMode, PhotoGroupInfo, RenderFormat } from '../types';
 import { buildValidationMessage } from '../components/export/exportMessages';
 import {
   DEFAULT_EXPORT_FILTER,
   EXPORT_FILTERS,
   resolveExportFilter,
+  type ExportFilterContext,
   type ExportFilterValue,
 } from '../components/export/exportFilters';
+import { matchesFilter } from '../utils/filterMatch';
+import { matchesQuery, type QueryParseResult } from '../utils/queryMatch';
 import {
   DEFAULT_RENDER_QUALITY,
   RENDER_QUALITY_MAX,
@@ -27,12 +30,23 @@ import {
 } from '../components/export/exportConfig';
 import { normalizeDir, parentDirOf } from '../utils/pathNormalize';
 
+/** 无查询时的空解析结果（稳定引用，避免每次渲染新建）。 */
+const EMPTY_QUERY: QueryParseResult = { terms: [], errors: [], pending: [] };
+
 export interface UseExportFormOptions {
   groups: PhotoGroupInfo[];
   /** LUMEN 引擎是否可用 —— 成片模式的硬前置。 */
   lumenAvailable: boolean;
   /** 引擎不可用时的具体原因，透传给校验文案。 */
   lumenDetail?: string;
+  /**
+   * 宫格当前的 chips 档位与查询解析结果。
+   *
+   * 只服务 `current_query` 这一档 —— 让「导出范围 = 当前筛选结果」复用同一份
+   * 谓词，而不是在导出侧再实现一遍。缺省时该档等价于「全部非淘汰」。
+   */
+  filterMode?: FilterMode;
+  queryParse?: QueryParseResult;
 }
 
 export interface ExportForm {
@@ -150,6 +164,8 @@ export function useExportForm({
   groups,
   lumenAvailable,
   lumenDetail,
+  filterMode = 'all',
+  queryParse,
 }: UseExportFormOptions): ExportForm {
   const [mode, setModeRaw] = useState<ExportMode>('copy');
   const [targetFolder, setTargetFolderRaw] = useState('');
@@ -182,18 +198,36 @@ export function useExportForm({
     bump,
   );
 
+  /**
+   * `current_query` 档的求值上下文。
+   *
+   * 刻意用 `matchesQuery` 而不是 `matchesParsedQuery`：后者在语法出错时放行
+   * 全部（宫格的行为），而导出绝不能靠猜。错误时 `queryInvalid` 让这一档
+   * 候选归零，走既有的「没有候选」校验拦住导出。
+   */
+  const filterContext = useMemo<ExportFilterContext>(() => {
+    const parsed = queryParse ?? EMPTY_QUERY;
+    return {
+      matchesChips: (g) => matchesFilter(g, filterMode),
+      matchesQuery: (g) => matchesQuery(g, parsed.terms),
+      queryInvalid: parsed.errors.length > 0,
+    };
+  }, [filterMode, queryParse]);
+
   // `resolveExportFilter` 返回配置表里的常量引用，所以下面这层 useMemo 依赖是稳定的。
   const activeFilter = resolveExportFilter(filter);
   const candidates = useMemo(
-    () => groups.filter(activeFilter.test),
-    [groups, activeFilter],
+    () => groups.filter((g) => activeFilter.test(g, filterContext)),
+    [groups, activeFilter, filterContext],
   );
 
   const countsByFilter = useMemo(() => {
     const counts = {} as Record<ExportFilterValue, number>;
-    for (const f of EXPORT_FILTERS) counts[f.value] = groups.filter(f.test).length;
+    for (const f of EXPORT_FILTERS) {
+      counts[f.value] = groups.filter((g) => f.test(g, filterContext)).length;
+    }
     return counts;
-  }, [groups]);
+  }, [groups, filterContext]);
 
   /** 仅含 JPG 的候选组数（成片模式的二次压缩提示用）。 */
   const jpgOnlyCount = useMemo(

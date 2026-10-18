@@ -78,8 +78,8 @@ async function scanFive() {
 
 /** 打开宫格搜索并返回输入框。 */
 function openSearch() {
-  fireEvent.click(screen.getByRole('button', { name: '按文件名搜索' }));
-  return screen.getByRole('textbox', { name: '在宫格中按文件名搜索照片' });
+  fireEvent.click(screen.getByRole('button', { name: '按条件筛选照片' }));
+  return screen.getByRole('textbox', { name: '按查询条件筛选照片' });
 }
 
 describe('WP6 集成 —— 搜索计数单一真值 (M-07)', () => {

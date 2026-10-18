@@ -65,6 +65,7 @@ function AppShell() {
     compareIndex,
     currentGroup,
     filterMode,
+    queryParse,
     selectedIds,
     gridSearch,
     gridSearchOpen,
@@ -605,6 +606,7 @@ function AppShell() {
               searchFocusToken={gridSearchFocusToken}
               onSearchQueryChange={setGridSearch}
               onFilterReset={() => setFilterMode('all')}
+              queryParse={queryParse}
               onSearchOpenChange={(open) => {
                 setGridSearchOpen(open);
                 if (!open) setGridSearch('');
@@ -651,6 +653,8 @@ function AppShell() {
         lumenDetail={lumenStatus.detail}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onError={(m) => toast.error(m)}
+        filterMode={filterMode}
+        queryParse={queryParse}
       />
 
       {/* Settings Modal */}
