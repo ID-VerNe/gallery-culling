@@ -88,8 +88,14 @@ pub use apps::{
     open_folder_cmd, open_in_default_app_cmd, open_in_photoshop_cmd, trash_photos_cmd,
 };
 mod cullcheck;
+mod albumcmds;
 mod xmprw;
 mod xmprefresh;
+
+pub use albumcmds::{
+    __cmd__open_album_cmd, __cmd__save_album_cmd, __tauri_command_name_open_album_cmd,
+    __tauri_command_name_save_album_cmd, open_album_cmd, save_album_cmd,
+};
 
 pub use cullcheck::{
     __cmd__check_cull_state_cmd, __tauri_command_name_check_cull_state_cmd,

@@ -1,3 +1,4 @@
+mod album;
 mod commands;
 mod cullstore;
 mod db;
@@ -53,6 +54,8 @@ pub fn run() {
             commands::get_thumbnail_cmd,
             commands::update_rating_flag_cmd,
             commands::check_cull_state_cmd,
+            commands::save_album_cmd,
+            commands::open_album_cmd,
             commands::refresh_from_xmp_cmd,
             commands::resolve_xmp_conflicts_cmd,
             commands::open_in_photoshop_cmd,
