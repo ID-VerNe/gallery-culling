@@ -96,32 +96,41 @@ e.tone = scanner::extract_tone_from_xmp(&m);
 
 按目录缓存 `cullstore`：2000 张散在几个目录时不会重复读同一个 JSON。
 
-### 6. **不读 EXIF**（打开速度的决定性取舍）
+### 6. EXIF：**读配对 JPG**（2026-10-19 修订，推翻原「不读 EXIF」）
 
-实测（`real_album_open_smoke`，真实相册 156 张 24.2MP ARW）：
+> **原决策错在哪。** 第一版写的是「打开时完全不读 EXIF」，依据是一次 bench：
+> `exif` crate 读一张 25MB ARW 要 9.41 ms/张（其中 9.26 是读文件），156 张
+> 1468 ms、2000 张约 19 秒。结论「读 RAW 的 EXIF 贵」本身没错，**但推广错了**：
+> 本应用的常规摆法是 RAW 与 JPG 分目录，而 `scanner.rs` 早在扫描路径里写着
+> `// Read EXIF: prefer JPG (faster to read header), fallback to RAW` ——
+> 我 bench 的是主路径（RAW），却把结论套到了整条 EXIF 读取上。
+>
+> 复核数据（同一台机器、同一批 156 组，2026-10-19）：
 
-| 项 | 耗时 |
-|---|---|
-| 打开（无 EXIF，最终实现） | **33 ms（0.21 ms/张）** |
-| `exif` crate 读 EXIF | 1468 ms（9.41/张） |
-| 其中「整文件读取」 | 1444 ms（9.26/张） |
-| 只 stat | 3.3 ms |
+| 读法 | 单张 | 156 张 | 2000 张外推 |
+|---|---|---|---|
+| **配对 JPG（1.5MB）** | **0.14 ms** | **20 ms** | **~0.26 s** |
+| 主路径 RAW（25MB） | 11.12 ms | 1521 ms | ~19.5 s |
 
-关键发现：**不是解析贵，是读文件贵**。`exif` crate 对 ARW 是整文件读取（24MP
-约 25MB），9.4 ms/张几乎全是 IO。按此线性外推 2000 张 ≈ 19 秒，超出「点击即开」
-两个数量级；带 EXIF 时 156 张就已经 1959 ms，被我自己的 `<1000ms` 断言打红。
+> **差 80 倍。** 所以现在的实现是：`resolve_documents` 里 **配对 JPG 优先，
+> 没有 JPG 才读主路径** —— 与 `scanner.rs` 同一顺序、同一个
+> `read_exif_metadata`。真机复测 156 张 **50 ms**（0.32 ms/张，含 stat 与
+> XMP 读取），2000 张约 0.6 秒，仍在「点击即开」的量级里。
+>
+> 顺带修掉一个更隐蔽的不一致：同一张照片在文件夹视图有相机参数、在选片集里
+> 没有 —— 这种「换个视图就查不到」本身就是 bug 级别的体验问题。
 
-选片集的验收标准是「相对路径 / 换机可开 / 缺失列出 / ≤2000 / 原子写」，不含
-相机参数。所以：**不读**。
+剩下没有相机参数的只有一种组：**没有配对 JPG、主路径也读不出**（文件损坏或
+非图片）。界面因此从「全部没有」改成「**N 张没有**」：
 
-**代价必须在界面上说出来，不能静默**：底栏不显示 ISO/快门；查询语法里 `iso:800`
-会安静返回 0 张，用户会以为自己没拍过。兜底是 `ThumbnailGrid` 的
-`queryExifUnavailable`：查询用到 `EXIF_FIELDS`（iso/camera/lens/aperture/shutter/
-focal）且当前集合一条 `exif` 都没有时，状态行显示琥珀色「相机参数未加载（选片集
-不读 EXIF），iso / 快门等条件不会命中」。
+- `queryExifMissing` 由 App 算 `groups.filter((g) => !g.exif).length`；
+- 只在查询用到 `EXIF_FIELDS`（iso/camera/lens/aperture/shutter/focal）时才传，
+  否则一打开选片集就先提示一次，与用户当下要做的事无关；
+- 宫格状态行：「N 张没有相机参数，iso / 快门等条件不会命中它们」（`title`
+  给原因：缺配对 JPG 或 EXIF 读不出）。
 
-顺序是 `错误 → 输入中 → EXIF 不可用 → 条件数`：语法错误最要紧，`iso:` 打到一半
-的「输入中」也不该被这条提示盖掉。
+顺序仍是 `错误 → 输入中 → EXIF 缺失 → 条件数`：语法错误最要紧，`iso:` 打到
+一半的「输入中」也不该被这条提示盖掉。
 
 ### 7. 前端 id 用**归一化路径**，不用 baseName
 
@@ -186,8 +195,11 @@ baseName 合并只因为它「只扫一个目录对」；这个前提在选片�
 ARW+JPG，24.2MP）：
 
 ```
-[real_album_open] 156 张 / 33 ms（0.21 ms/张）/ 缺失 0
+[real_album_open] 156 张 / 50 ms（0.32 ms/张）/ 缺失 0
 ```
+
+（修订前不读 EXIF 时是 33 ms；读配对 JPG 的 EXIF 多花 17 ms，2000 张外推约
+0.6 秒。）
 
 命令：
 
@@ -200,19 +212,19 @@ GALLERY_REAL_ALBUM_DIR="C:/Users/VerNe/Pictures/Camera Roll/2026年9月12日-惠
 
 ## 测试
 
-新增 46 例前端 + 20 例后端（另有 2 例 `--ignored` 真机冒烟）：
+新增 49 例前端 + 23 例后端（另有 2 例 `--ignored` 真机冒烟）：
 
 | 层 | 文件 | 数量 | 覆盖要点 |
 |---|---|---|---|
-| 格式层 | `album.rs` | 18 | 双校验（外来的 JSON / 版本不符）、≤2000 与 ≤128MB 边界、空选片集往返、全字段往返、相对/绝对路径选择、缺失不阻塞其余、**配对 JPG 跨目录往返**、配对被删报 absent、`is_raw` 跟随 scanner 表、`has_xmp` 留给命令层、原子写不留 tmp |
+| 格式层 | `album.rs` | 21 | 双校验（外来的 JSON / 版本不符）、≤2000 与 ≤128MB 边界、空选片集往返、全字段往返、相对/绝对路径选择、缺失不阻塞其余、**配对 JPG 跨目录往返**、配对被删报 absent、`is_raw` 跟随 scanner 表、`has_xmp` 留给命令层、**EXIF 配对 JPG 优先**、**无 JPG 时兜底主路径**、**主路径不存在时不编 EXIF**、原子写不留 tmp |
 | 命令层 | `commands/albumcmds.rs` | 11 + 1 ignored | 保存→打开往返、空路径拒绝、相对路径拒绝（主路径与配对 JPG 各一条）、缺失保留快照、磁盘状态覆盖快照、`has_xmp` 来自磁盘、**重开保留 JPG 配对**、**调色基线来自 XMP**、外来文件报可读错误、真机冒烟 |
-| 转换层 | `utils/albumGroups.ts` | 16 | COMPLETE 重建、RAW_ONLY 不造假 jpg、JPG_ONLY、缺失进 `missing` 不进集合、配对被删（含 `jpgExists=false` 兜底）、同名跨目录不合并、调色进 `tones`、旗标归一化、`hasXmp` 透传、`toAlbumItems` 三条、`sortAlbumGroups` 四条（含不改原数组） |
+| 转换层 | `utils/albumGroups.ts` | 18 | COMPLETE 重建、RAW_ONLY 不造假 jpg、JPG_ONLY、缺失进 `missing` 不进集合、配对被删（含 `jpgExists=false` 兜底）、同名跨目录不合并、调色进 `tones`、旗标归一化、`hasXmp` 透传、**exif 透传**、**无 exif 时保持 undefined**、`toAlbumItems` 三条、`sortAlbumGroups` 四条（含不改原数组） |
 | 加载器 | `hooks/useAlbum.ts` | 13 | 互斥原因、空清单不弹对话框、取消静默、保存不改 `path`、打开失败不动集合、重入保护、报告生命周期 |
 | 对话框 | `components/AlbumDialog.tsx` | 11 | 范围与张数写进按钮、0 张禁用并说明、缺失报告列表、收起只清报告、键盘可达 |
-| 集成 | `App.album.test.tsx` | 4 | 打开后集合替换且顶栏标出来源、**选片集视图排序不重扫**（`scan_folders_cmd` 调用数不变）、扫描后身份撤销、`open_album_cmd` 收到对话框选中的路径 |
-| 宫格提示 | `ThumbnailGrid.stateA11y.test.tsx` | 2 | EXIF 条件 + 无相机参数时提示、不涉及 EXIF 时不误报 |
+| 集成 | `App.album.test.tsx` | 5 | 打开后集合替换且顶栏标出来源、**选片集视图排序不重扫**（`scan_folders_cmd` 调用数不变）、扫描后身份撤销、`open_album_cmd` 收到对话框选中的路径、**缺参数时说出缺几张** |
+| 宫格提示 | `ThumbnailGrid.stateA11y.test.tsx` | 2 | 缺相机参数时说出 N 张、缺 0 张时不误报 |
 
-**变异验证 8 处 8 抓**：
+**变异验证 11 处 11 抓**：
 
 - 后端 4：`jpg_path/jpg_exists` 置空、`is_raw` 置 false、`has_xmp` 置 false →
   4 failed；还原后全绿。
@@ -220,14 +232,19 @@ GALLERY_REAL_ALBUM_DIR="C:/Users/VerNe/Pictures/Camera Roll/2026年9月12日-惠
 - App 层 2：`handleSortChange` 直接转 `handleSortOrderChange` + 删
   `albumClearRef.current()` → 2 failed。
 - 宫格提示 2：提示永不渲染 → 正向用例红；改成「有条件就提示」→ 反向用例红。
+- EXIF 3（修订后补）：不优先读 JPG → 只有「JPG 优先」那条红、兜底那条仍绿；
+  删掉主路径兜底 → 只有兜底那条红；转换层丢 `exif` → 透传 + App 两条红。
 
-回归：`tsc --noEmit` 0 错；前端 `76 files / 747 passed`；Rust `294 passed /
-5 ignored`；clippy 只剩 `export.rs` 两处既有的 `too many arguments (9/7)`。
+回归：`tsc --noEmit` 0 错；前端 `80 files / 793 passed`；Rust `315 passed /
+6 ignored`；clippy 只剩 `export.rs` 两处既有的 `too many arguments (9/7)`。
 
 ## 代价与风险
 
-1. **EXIF 条件在选片集里查不到**。`iso:800` 返回 0 张，靠提示说明原因。用户若真
-   要在选片集里按相机参数筛，只能回文件夹视图。补的成本见「后续」。
+1. **RAW_ONLY 组仍要 9.4 ms/张**。没有配对 JPG 的组只能读主路径，2000 张全是
+   这种组时要 19 秒。但选片集保存时若组有 JPG 就会记下来，RAW_ONLY 只出现在
+   「JPG 后来被删了」或「本来就没出 JPG」，实践中应当罕见 —— 而一旦出现，代价
+   是慢而不是错。真要做预算，可以给兜底路径设张数上限（暂未做：没有实测数据
+   支撑阈值，设了反而是拍脑袋）。
 2. **`tone` 不在 album 里**，所以选片集本身不携带调色。换一台机器、XMP 没跟过去
    时，选片集能打开、评级也在（快照），但调色是 0。这是「唯一真值」的必然代价，
    比存两份不同步安全。
@@ -246,18 +263,21 @@ GALLERY_REAL_ALBUM_DIR="C:/Users/VerNe/Pictures/Camera Roll/2026年9月12日-惠
    给全路径；根治要等设置里能管「最近打开的选片集」，不在本轮范围。
 8. **互斥粒度粗**。打开选片集期间不能扫描/导出，哪怕只读 2000 条 XMP 只需 0.4 秒。
    这是 FR-09 的既定风格（宁可挡住也不并发），不为此开特例。
-9. **`has_xmp` 逐个 `is_file()`**。2000 张 = 2000 次 stat，实测在 33 ms 的量级里
+9. **`has_xmp` 逐个 `is_file()`**。2000 张 = 2000 次 stat，实测在 50 ms 的量级里
    （stat 3.3 ms / 156 张）。没有优化空间也没有必要。
+10. **EXIF 读取没有时间预算**。有配对 JPG 时 0.14 ms/张；全是 RAW_ONLY 时
+    9.4 ms/张、2000 张 19 秒。选片集保存时若有 JPG 就会记下配对，所以这种极端
+    形态需要「2000 个 JPG 全被删」，实践中罕见 —— 但它是**已知的最坏情况**，
+    没有护栏。要加就加张数上限，别加时间预算（时间预算在不同机器上表现不同，
+    同一份选片集在快慢机上会读到不同张数，更不可解释）。
 
 ## 后续
 
-要补 EXIF 的话，唯一可行的方向是**异步补齐**而不是打开时同步读：
-
-1. 打开先返回（33 ms），底栏/查询用「参数未知」状态；
-2. 后台低优先级任务逐张读 EXIF（9.4 ms/张，2000 张约 19 秒），走 `taskgate` 的
-   独立活动；
-3. 读到一批就刷新一次集合（`queryExifUnavailable` 随之变 false）。
-
-不建议的方向：改用「只读文件头 N KB」的解析器。ARW 的 EXIF 在 TIFF 头之后，
-理论上可以只读前几 MB，但要自己实现 TIFF IFD 遍历 —— 为省 19 秒引入一个自研
-解析器，维护成本远高于异步补齐。
+- **RAW_ONLY 组的 EXIF 兜底**：如果真实使用中出现「选片集里大量 RAW_ONLY」，
+  先查保存端为什么没记配对 JPG（保存时该组是否本来就没有 JPG），再决定要不要
+  给兜底路径设张数上限。不要先优化读取 —— 9.4 ms/张 是文件大小的物理下限。
+- **EXIF 写回**：目前只读不写。选片集里的评级/旗标/色标写回 XMP 是另一条链路
+  （`update_rating_flag_cmd`），与 EXIF 无关。
+- **不做的方向**：自研「只读文件头 N KB」的 TIFF 解析器。ARW 的 IFD 可能分散在
+  文件各处，截断读取会静默丢掉字段（表现为「有些照片没有光圈」这种随机不一致），
+  而收益只有 RAW_ONLY 那部分组 —— 不值得为一个边缘形态引入不可预测的解析路径。
