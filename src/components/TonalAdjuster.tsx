@@ -9,6 +9,7 @@ import {
   Thermometer,
   CloudSun,
   Droplets,
+  Copy,
   X,
 } from 'lucide-react';
 import { ToneAdjustments } from '../types';
@@ -66,6 +67,15 @@ interface TonalAdjusterProps {
   masks?: Array<{ index?: number; name?: string; kind?: string }>;
   /** C3：当前编辑值相对磁盘基线是否有未保存改动（未保存会打标记 + 离开确认）。 */
   dirty?: boolean;
+  /**
+   * FR-07：当前选中照片数。`>= 2` 时才出现「套用到选中」入口 ——
+   * 只有当前这一张时，套用等于什么都没做。
+   */
+  selectedCount?: number;
+  /** FR-07：把当前面板值套用到其余选中照片。 */
+  onApplyToSelected?: (opts: { writeLumen: boolean }) => void;
+  /** FR-07：批量套用进行中（按钮禁用，避免开出第二批）。 */
+  applying?: boolean;
 }
 
 /**
@@ -165,6 +175,9 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
   masks = [],
   isSaving = false,
   dirty = false,
+  selectedCount = 0,
+  onApplyToSelected,
+  applying = false,
 }) => {
   const [saveFeedback, setSaveFeedback] = useState(false);
   /** 保存失败提示（统一命令的 rejection 出口） */
@@ -184,6 +197,8 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
    * 失败/取消一律不改 —— 显示的名字永远对应「确实写进了这张照片的 .lumen」。
    */
   const [appliedPreset, setAppliedPreset] = useState<string | null>(null);
+  /** FR-07：套用时是否同时写 LUMEN 工程（默认关 —— 200 张会非常慢）。 */
+  const [applyWriteLumen, setApplyWriteLumen] = useState(false);
   /** 上一次渲染的 photoId：换照片的同一帧就清掉 appliedPreset（免闪一帧旧名）。 */
   const [presetPhotoId, setPresetPhotoId] = useState(photoId);
   if (presetPhotoId !== photoId) {
@@ -470,6 +485,36 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
               {maskError}
             </p>
           )}
+        </div>
+      )}
+
+      {/* FR-07：套用到其余选中照片。只在 ≥2 张时出现 —— 只有当前这一张时，
+          套用等于什么都没做。默认只写 XMP：200 张逐张落 .lumen 工程可能几分钟。 */}
+      {selectedCount >= 2 && onApplyToSelected && (
+        <div className="pt-3 mt-3 border-t border-default">
+          <button
+            onClick={() => onApplyToSelected({ writeLumen: applyWriteLumen })}
+            disabled={applying}
+            className="focus-ring w-full flex items-center justify-center gap-1.5 py-2 px-2 bg-background-surface-hover hover:bg-white/10 text-white font-medium rounded-lg text-xs active:scale-[0.98] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            title="把当前面板里的 6 个调色参数套用到其余选中照片；星级/旗标/色标不受影响"
+          >
+            <Copy className="w-3.5 h-3.5 text-white/60" aria-hidden="true" />
+            <span>{applying ? '套用中…' : `套用到选中 ${selectedCount} 张`}</span>
+          </button>
+          <label className="mt-1.5 flex items-start gap-1.5 text-[10px] text-white/60 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={applyWriteLumen}
+              onChange={(e) => setApplyWriteLumen(e.target.checked)}
+              disabled={applying}
+              className="mt-0.5 accent-white"
+            />
+            <span>同时写入 LUMEN 工程（慢）</span>
+          </label>
+          <p className="mt-1 text-[10px] leading-relaxed text-white/45">
+            只复制曝光/高光/阴影/色温/色调/对比度 6 个参数，不动星级、旗标与色标。
+            关闭时只写 XMP，LUMEN 预览可能仍显示旧调色。
+          </p>
         </div>
       )}
 

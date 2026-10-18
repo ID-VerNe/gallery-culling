@@ -330,11 +330,22 @@ export const api = {
   },
 
   /**
-   * 统一调色写入：XMP + （引擎可用时）LUMEN RAW 编辑态并落盘 .lumen 工程。
-   * 引擎失败不会回滚 XMP，只在 report.warnings 里说明。
+   * 统一调色写入：XMP + （引擎可用且 `writeLumen` 时）LUMEN RAW 编辑态并落盘
+   * `.lumen` 工程。引擎失败不会回滚 XMP，只在 report.warnings 里说明。
+   *
+   * `writeLumen` 默认 true（单张保存的既有语义）。批量套用默认传 false：
+   * 200 张逐张 `apply + save_project` 可能几分钟，用户可按需勾选。
    */
-  applyTone: async (filePath: string, tone: ToneAdjustments): Promise<ToneWriteReport> => {
-    return await invoke<ToneWriteReport>('apply_tone_cmd', { filePath, tone });
+  applyTone: async (
+    filePath: string,
+    tone: ToneAdjustments,
+    writeLumen = true,
+  ): Promise<ToneWriteReport> => {
+    return await invoke<ToneWriteReport>('apply_tone_cmd', {
+      filePath,
+      tone,
+      writeLumen,
+    });
   },
 
   /** 统一调色读取：返回生效值 + 两个真值 + 是否分歧 */

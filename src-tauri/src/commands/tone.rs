@@ -23,14 +23,19 @@ use super::{blocking, blocking_value, lumen_exe, AppState};
 /// 统一调色写入：**一条命令，两个落点**。
 ///
 /// - 总是写 XMP（互操作底线，引擎挂了也不受影响）；
-/// - 引擎可用时在**同一常驻进程**内 `apply_edits` → `save_project`（落盘持久，
-///   否则重启后调色消失）；
+/// - 引擎可用且 `write_lumen != false` 时在**同一常驻进程**内 `apply_edits`
+///   → `save_project`（落盘持久，否则重启后调色消失）；
 /// - 引擎失败不回滚 XMP，只在报告里带 warning。
+///
+/// `write_lumen` 为 `Some(false)` 是 FR-07 批量套用的「只写 XMP」模式：200 张
+/// 逐张落 `.lumen` 工程可能几分钟，用户按需开启。**主动不写工程不算警告**——
+/// 否则批量会产生 N 条同义提示。
 #[tauri::command]
 pub async fn apply_tone_cmd(
     state: State<'_, AppState>,
     file_path: String,
     tone: ToneAdjustments,
+    write_lumen: Option<bool>,
 ) -> Result<ToneWriteReport, String> {
     let settings = state.db.load_settings()?;
     let path = PathBuf::from(&file_path);
@@ -62,6 +67,12 @@ pub async fn apply_tone_cmd(
         ..Default::default()
     };
 
+    // 用户主动选择「只写 XMP」：不是异常，静默返回（批量默认走这条）。
+    // 必须排在引擎可用性检查**之前** —— 否则批量默认模式会为每张照片
+    // 攒一条「引擎未启用」，前端汇总时变成 N 条同义提示。
+    if write_lumen == Some(false) {
+        return Ok(report);
+    }
     if !settings.lumen_enabled {
         report
             .warnings

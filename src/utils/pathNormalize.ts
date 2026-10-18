@@ -28,3 +28,23 @@ export const parentDirOf = (filePath: string): string => {
 /** 两个路径是否指向同一目录（两侧都归一化后比较）。 */
 export const isSameDir = (a: string, b: string): boolean =>
   normalizeDir(a) === normalizeDir(b);
+
+/**
+ * 文件路径归一化：统一分隔符 + 小写。
+ *
+ * 与 `normalizeDir` 的区别：**不去尾部分隔符**。文件路径的尾部分隔符本身就
+ * 说明它不是文件（`D:/a/` 是目录），保留它可以让「文件 vs 目录」不会被误判
+ * 成同一个东西。
+ */
+export const normalizeFilePath = (p: string): string =>
+  p.replace(/\\/g, '/').toLowerCase();
+
+/**
+ * 两个路径是否指向同一个文件（FR-07 判断「源照片是否也在选中里」）。
+ *
+ * 只做字符串级归一化：不做 canonicalize（会碰文件系统、要处理符号链接）。
+ * 这里的用途是**避免对自己重复写盘**，漏判的代价是多写一次同样的值，
+ * 远小于误判的代价（把该写的目标跳过），所以保守取「显然相同才算相同」。
+ */
+export const isSameFile = (a: string, b: string): boolean =>
+  normalizeFilePath(a) === normalizeFilePath(b);

@@ -22,6 +22,7 @@ import { useFolderScan } from './hooks/useFolderScan';
 import { useBatchOps } from './hooks/useBatchOps';
 import { useRatingFlagSync, type UndoConflict } from './hooks/useRatingFlagSync';
 import { useToneEditing } from './hooks/useToneEditing';
+import { useToneBatch } from './hooks/useToneBatch';
 import { useSessionDebounce } from './hooks/useSessionDebounce';
 import { toLumenGateStatus, useLumenStatus } from './hooks/useLumenStatus';
 import { useLumenOrchestration } from './hooks/useLumenOrchestration';
@@ -274,7 +275,21 @@ function AppShell() {
     setShowTonalPanel,
     seedToneMap: toneSeed,
     toneDirty,
+    discardToneEditsFor,
   } = tone;
+
+  /**
+   * FR-07：把当前面板的 6 个调色参数套用到其余选中照片。
+   * 目标 = 选中 ∩ 当前筛选 − 源本身；进度与取消都在这里。
+   */
+  const toneBatch = useToneBatch({
+    filteredGroups,
+    selectedIds,
+    sourceGroup: currentGroup,
+    tone: currentTone,
+    onGroupPatched: patchGroup,
+    onToneDiscarded: discardToneEditsFor,
+  });
 
   const swapIndices = useCallback(() => {
     const temp = selectedIndex;
@@ -513,6 +528,17 @@ function AppShell() {
         cancelRequested={batchCancelling}
       />
 
+      {/* FR-07：套用调色进度（逐张写 XMP / 可选 LUMEN 工程） */}
+      <TaskProgressBar
+        className="px-4 py-2 border-b border-default bg-background-header shrink-0"
+        isRunning={toneBatch.toneBatchProgress !== null}
+        processed={toneBatch.toneBatchProgress?.processed ?? 0}
+        total={toneBatch.toneBatchProgress?.total ?? 0}
+        label="正在套用调色"
+        onCancel={toneBatch.skipRemaining}
+        cancelRequested={toneBatch.toneBatchCancelling}
+      />
+
       {/* Main Content Area */}
       <div className="flex-1 flex overflow-hidden">
         {/* Center Viewport */}
@@ -594,6 +620,11 @@ function AppShell() {
               onApplyPreset={lumenAvailable ? handleApplyLumenPreset : undefined}
               onClose={closeTonePanel}
               dirty={toneDirty}
+              selectedCount={selectedIds.size}
+              onApplyToSelected={({ writeLumen }) =>
+                void toneBatch.runApplyTone({ writeLumen })
+              }
+              applying={toneBatch.toneBatchProgress !== null}
             />
           ) : (
             <ThumbnailGrid

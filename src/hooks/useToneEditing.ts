@@ -101,15 +101,27 @@ export function useToneEditing(opts: {
     !!currentTone &&
     !toneEquals(currentTone, currentGroup.tone ?? DEFAULT_TONE);
 
+  /**
+   * FR-07：批量套用成功后，丢弃这些照片的未保存编辑。
+   *
+   * 套用写的是磁盘真值，而 `toneMap` 里的旧编辑是内存值且优先级更高
+   * （`currentTone` 先读 toneMap）。不清掉的话，用户切过去看到的是套用前的
+   * 调色，还会误以为套用失败。一次批量只调一次，避免 N 次 setState。
+   */
+  const discardToneEditsFor = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    setToneMap((prev) => {
+      const next = { ...prev };
+      for (const id of ids) delete next[id];
+      return next;
+    });
+  }, []);
+
   /** C3：丢弃当前照片的未保存编辑，回到磁盘基线。 */
   const discardToneEdits = useCallback(() => {
     if (!currentGroup) return;
-    setToneMap((prev) => {
-      const next = { ...prev };
-      delete next[currentGroup.id];
-      return next;
-    });
-  }, [currentGroup]);
+    discardToneEditsFor([currentGroup.id]);
+  }, [currentGroup, discardToneEditsFor]);
 
   /**
    * C3：离开保护。切图 / 关面板前若存在未保存改动，先弹确认，避免静默丢失。
@@ -418,6 +430,7 @@ export function useToneEditing(opts: {
     handleToneChange,
     handleResetTone,
     discardToneEdits,
+    discardToneEditsFor,
     guardToneLeave,
     closeTonePanel,
     handleAutoTone,
