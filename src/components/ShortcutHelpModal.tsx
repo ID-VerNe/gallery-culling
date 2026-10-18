@@ -44,6 +44,7 @@ const GROUPS: ShortcutGroup[] = [
       { keys: 'C', label: '切换单图 / 双图对比' },
       { keys: 'Y', label: '切换前后对照' },
       { keys: 'E', label: '打开 / 关闭调色面板' },
+      { keys: 'Z', label: '1:1 细节（RAW-only 首次需 6–8 秒，再按回适应）' },
       { keys: '\\（按住）', label: '临时查看原片' },
     ],
   },

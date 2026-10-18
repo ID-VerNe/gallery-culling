@@ -14,8 +14,18 @@ export interface Vec2 {
 
 /** 缩放下限。scale=1 即「适应窗口」，再小没有选片意义。 */
 export const ZOOM_MIN = 0.2;
-/** 缩放上限（10x 以上是像素级噪点）。 */
-export const ZOOM_MAX = 10;
+/**
+ * 缩放上限。
+ *
+ * 这个数不是「看着合适」定的，是被 1:1 反推出来的：`scale` 是相对适应窗口
+ * 的倍数，真 1:1 的倍数 = 原图宽 / 显示宽。24MP（6024px）在 600px 宽的
+ * 窄窗口下就是 10.04× —— 旧的 10 会把它夹住，让「1:1」在窄窗口里变成
+ * 一个假读数。留到 32 足够覆盖 45MP + 更窄的窗口。
+ *
+ * 代价：滚轮能滚到 32×，在 1600 预览上就是一团糊。但那是用户自己滚的，
+ * 比「1:1 永远到不了」要好得多。
+ */
+export const ZOOM_MAX = 32;
 /** 每格滚轮 / 每次 ± 的缩放倍数。 */
 export const ZOOM_STEP = 1.25;
 /** 双击在「适应 ↔ 此比例」之间切换。 */
@@ -24,6 +34,19 @@ export const DOUBLE_CLICK_SCALE = 2.5;
 /** 夹到量程内。 */
 export function clampScale(s: number): number {
   return Math.min(Math.max(s, ZOOM_MIN), ZOOM_MAX);
+}
+
+/**
+ * 真 1:1 的缩放倍数：`naturalWidth / displayedWidth`。
+ *
+ * `scale` 的语义是「相对适应窗口的倍数」，所以 1:1 的倍数取决于原图尺寸与
+ * 窗口大小 —— 24MP 在 1200px 宽窗口是 5×，在 600px 窄窗口是 10×。
+ * 分母缺失/非法时返回 `null`：调用方应保留原缩放，而不是跳到一个 NaN。
+ */
+export function oneToOneScale(naturalWidth: number, displayedWidth: number): number | null {
+  if (!Number.isFinite(naturalWidth) || !Number.isFinite(displayedWidth)) return null;
+  if (naturalWidth <= 0 || displayedWidth <= 0) return null;
+  return clampScale(naturalWidth / displayedWidth);
 }
 
 /**

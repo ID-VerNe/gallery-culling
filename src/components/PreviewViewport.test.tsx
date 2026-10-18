@@ -9,9 +9,15 @@
  * left/top = 0，width 1200 / height 800，故视口中心 O = (600, 400)。
  */
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import React from 'react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PreviewViewport } from './PreviewViewport';
-import { mockInvokeCommand, mockInvokeError } from '../test/setup';
+import {
+  invokeCount,
+  mockInvokeCommand,
+  mockInvokeError,
+  setInvokeHandler,
+} from '../test/setup';
 import type { LumenStatus, PhotoGroupInfo } from '../types';
 
 const group: PhotoGroupInfo = {
@@ -187,5 +193,239 @@ describe('PreviewViewport —— 自动调色采样的 CORS 前提', () => {
     const img = container.querySelector('img') as HTMLImageElement;
     expect(img).not.toBeNull();
     expect(img.crossOrigin).toBe('anonymous');
+  });
+});
+
+/**
+ * FR-05：RAW-only 的 1:1 细节。
+ *
+ * 按 Z 之前看到的是 1600px 预览拉大，判断不了对焦；按 Z 之后必须换成
+ * `photo.export` 出的原生尺寸图，并把缩放切到真 1:1（`naturalWidth /
+ * 显示宽度`，不是写死的倍数）。
+ *
+ * jsdom 不布局，`naturalWidth` / `offsetWidth` 恒为 0 —— 每个用例显式打桩，
+ * 否则算出来的比例是 null，断言会误判成「实现没生效」。
+ */
+describe('PreviewViewport —— 1:1 细节（FR-05）', () => {
+  const AVAILABLE: LumenStatus = {
+    available: true,
+    enabled: true,
+    pinnedVersion: '1.6.0',
+    foundVersion: '1.6.0',
+    detail: 'ok',
+  };
+
+  const jpgGroup: PhotoGroupInfo = {
+    id: 'jpg1',
+    baseName: 'jpg1',
+    jpg: { name: 'jpg1.jpg', extension: 'jpg', path: 'D:/shoot/jpg1.jpg', size: 1, mtime: 0 },
+    status: 'JPG_ONLY',
+    rating: 0,
+    flag: 'none',
+    label: '',
+    hasXmp: false,
+  };
+
+  const rawGroup: PhotoGroupInfo = {
+    id: 'raw1',
+    baseName: 'raw1',
+    raw: { name: 'raw1.ARW', extension: 'ARW', path: 'D:/shoot/raw1.ARW', size: 1, mtime: 0 },
+    status: 'RAW_ONLY',
+    rating: 0,
+    flag: 'none',
+    label: '',
+    hasXmp: false,
+  };
+
+  /** jsdom 不布局：给元素补上真实像素与显示宽度。 */
+  function stubMetrics(img: HTMLImageElement, naturalWidth: number, displayedWidth: number) {
+    Object.defineProperty(img, 'naturalWidth', { value: naturalWidth, configurable: true });
+    Object.defineProperty(img, 'offsetWidth', { value: displayedWidth, configurable: true });
+  }
+
+  function renderWithRef(group: PhotoGroupInfo, status?: LumenStatus) {
+    const ref = { current: () => {} } as React.MutableRefObject<() => void>;
+    const { container } = render(
+      <PreviewViewport
+        group={group}
+        onPrev={vi.fn()}
+        onNext={vi.fn()}
+        onRate={vi.fn()}
+        onFlag={vi.fn()}
+        onOpenExternal={vi.fn()}
+        lumenStatus={status}
+        oneToOneRef={ref}
+      />,
+    );
+    return { container, ref };
+  }
+
+  it('JPG 分组：按 Z 直接进 1:1，不请求细节（原图本身就是全分辨率）', () => {
+    mockInvokeCommand('lumen_preview_cmd', { previewPath: null, width: 1600, original: false, cached: false });
+    const { container, ref } = renderWithRef(jpgGroup, AVAILABLE);
+    const img = container.querySelector('img') as HTMLImageElement;
+    stubMetrics(img, 6024, 1200);
+
+    act(() => ref.current());
+
+    expect(img.style.transform).toContain('scale(5.02)');
+    expect(invokeCount('lumen_detail_cmd')).toBe(0);
+  });
+
+  it('已在 1:1 再按 Z → 回到适应窗口（同一键来回切）', () => {
+    mockInvokeCommand('lumen_preview_cmd', { previewPath: null, width: 1600, original: false, cached: false });
+    const { container, ref } = renderWithRef(jpgGroup, AVAILABLE);
+    const img = container.querySelector('img') as HTMLImageElement;
+    stubMetrics(img, 6024, 1200);
+
+    act(() => ref.current());
+    expect(img.style.transform).toContain('scale(5.02)');
+
+    act(() => ref.current());
+    expect(img.style.transform).toContain('scale(1)');
+  });
+
+  it('RAW-only：按 Z 请求细节，就绪后换成全分辨率图并切到 1:1', async () => {
+    mockInvokeCommand('lumen_preview_cmd', (args) => ({
+      previewPath: `${String(args?.filePath)}.preview`,
+      width: 1600,
+      original: false,
+      cached: false,
+    }));
+    mockInvokeCommand('lumen_detail_cmd', {
+      detailPath: 'D:/cache/lumen/raw1_detail_lumen.jpg',
+      cached: false,
+      elapsedMs: 6500,
+    });
+
+    const { container, ref } = renderWithRef(rawGroup, AVAILABLE);
+    await waitFor(() => expect(container.querySelector('img')).not.toBeNull());
+    const img = container.querySelector('img') as HTMLImageElement;
+    stubMetrics(img, 1600, 1200); // 预览阶段：1600px 源
+
+    act(() => ref.current());
+
+    // 细节返回 → src 换成 detail（不再是预览）
+    await waitFor(() => expect(img.src).toContain('raw1_detail_lumen.jpg'));
+
+    // 浏览器加载完真实尺寸的图后 onLoad 才触发；jsdom 不会自己加载。
+    stubMetrics(img, 6024, 1200);
+    fireEvent.load(img);
+
+    expect(img.style.transform).toContain('scale(5.02)');
+    expect(invokeCount('lumen_detail_cmd')).toBe(1);
+  });
+
+  it('细节渲染失败：保留预览图并明确说明，不静默', async () => {
+    mockInvokeCommand('lumen_preview_cmd', (args) => ({
+      previewPath: `${String(args?.filePath)}.preview`,
+      width: 1600,
+      original: false,
+      cached: false,
+    }));
+    mockInvokeError('lumen_detail_cmd', new Error('sidecar 挂了'));
+
+    const { container, ref } = renderWithRef(rawGroup, AVAILABLE);
+    await waitFor(() => expect(container.querySelector('img')).not.toBeNull());
+    const img = container.querySelector('img') as HTMLImageElement;
+    stubMetrics(img, 1600, 1200);
+
+    act(() => ref.current());
+
+    await waitFor(() => {
+      expect(screen.getByText(/细节渲染失败，已退回预览图/)).toBeInTheDocument();
+    });
+    // 仍是 1600 预览，不是破图
+    expect(img.src).toContain('.preview');
+  });
+
+  it('细节图加载失败（缓存被删 / 写坏）→ 退回预览，不永久破图', async () => {
+    mockInvokeCommand('lumen_preview_cmd', (args) => ({
+      previewPath: `${String(args?.filePath)}.preview`,
+      width: 1600,
+      original: false,
+      cached: false,
+    }));
+    mockInvokeCommand('lumen_detail_cmd', {
+      detailPath: 'D:/cache/lumen/raw1_detail_lumen.jpg',
+      cached: false,
+      elapsedMs: 6500,
+    });
+
+    const { container, ref } = renderWithRef(rawGroup, AVAILABLE);
+    await waitFor(() => expect(container.querySelector('img')).not.toBeNull());
+    const img = container.querySelector('img') as HTMLImageElement;
+    stubMetrics(img, 1600, 1200);
+
+    act(() => ref.current());
+    await waitFor(() => expect(img.src).toContain('raw1_detail_lumen.jpg'));
+
+    // 缓存文件被 LRU 删掉 / 写坏了：浏览器加载失败
+    fireEvent.error(img);
+
+    await waitFor(() => expect(img.src).toContain('.preview'));
+    expect(screen.getByText(/细节渲染失败，已退回预览图/)).toBeInTheDocument();
+  });
+
+  it('细节渲染中显示可取消说明（6-8 秒不能只有转圈没有话）', async () => {
+    mockInvokeCommand('lumen_preview_cmd', (args) => ({
+      previewPath: `${String(args?.filePath)}.preview`,
+      width: 1600,
+      original: false,
+      cached: false,
+    }));
+    // 永不完成：停在渲染中
+    setInvokeHandler((cmd) => {
+      if (cmd === 'lumen_detail_cmd') return new Promise(() => {});
+      if (cmd === 'lumen_preview_cmd') {
+        return { previewPath: 'D:/c/p.preview', width: 1600, original: false, cached: false };
+      }
+      return undefined;
+    });
+
+    const { container, ref } = renderWithRef(rawGroup, AVAILABLE);
+    await waitFor(() => expect(container.querySelector('img')).not.toBeNull());
+
+    act(() => ref.current());
+
+    await waitFor(() => {
+      expect(screen.getByText(/正在生成 1:1 细节/)).toBeInTheDocument();
+    });
+  });
+
+  it('渲染中点「取消」：提示消失，仍停在预览图（不是失败）', async () => {
+    mockInvokeCommand('lumen_preview_cmd', (args) => ({
+      previewPath: `${String(args?.filePath)}.preview`,
+      width: 1600,
+      original: false,
+      cached: false,
+    }));
+    // 永不完成：停在渲染中
+    setInvokeHandler((cmd) => {
+      if (cmd === 'lumen_detail_cmd') return new Promise(() => {});
+      if (cmd === 'lumen_preview_cmd') {
+        return { previewPath: 'D:/c/p.preview', width: 1600, original: false, cached: false };
+      }
+      return undefined;
+    });
+
+    const { container, ref } = renderWithRef(rawGroup, AVAILABLE);
+    await waitFor(() => expect(container.querySelector('img')).not.toBeNull());
+    const img = container.querySelector('img') as HTMLImageElement;
+    stubMetrics(img, 1600, 1200);
+
+    act(() => ref.current());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '取消' })).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+
+    await waitFor(() =>
+      expect(screen.queryByText(/正在生成 1:1 细节/)).toBeNull(),
+    );
+    // 取消 ≠ 失败：不能顺手弹出「渲染失败」吓人
+    expect(screen.queryByText(/细节渲染失败/)).toBeNull();
+    expect(img.src).toContain('.preview');
   });
 });

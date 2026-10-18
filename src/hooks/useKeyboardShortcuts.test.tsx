@@ -163,3 +163,74 @@ describe('useKeyboardShortcuts 守卫作用域', () => {
     expect(h.onFocusSearch).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * FR-05：`Z` = 1:1 细节开关。
+ *
+ * 这条键位与 `Ctrl+Z`（撤销）只差一个修饰键，所以最需要锁死的是
+ * 「撤销不被抢走」与「重做不被抢走」——两条都已经在更早的分支 return，
+ * 但如果有人把 `case 'z'` 提到组合键判断之前，这里会立刻红。
+ */
+describe('useKeyboardShortcuts —— Z 键 1:1', () => {
+  function setupOneToOne() {
+    const handlers = {
+      onPrev: vi.fn(),
+      onNext: vi.fn(),
+      onRate: vi.fn(),
+      onFlag: vi.fn(),
+      onOpenExternal: vi.fn(),
+      onToggleCompare: vi.fn(),
+      onToggleOneToOne: vi.fn(),
+      onUndo: vi.fn(),
+      onRedo: vi.fn(),
+    };
+    renderHook(() => useKeyboardShortcuts(handlers));
+    return handlers;
+  }
+
+  it('无修饰键的 Z 触发 1:1，并阻止默认', () => {
+    const h = setupOneToOne();
+    const notPrevented = fireEvent.keyDown(document.body, { key: 'z' });
+    expect(h.onToggleOneToOne).toHaveBeenCalledTimes(1);
+    expect(notPrevented).toBe(false); // fireEvent 返回 false = preventDefault 已调用
+  });
+
+  it('大写 Z 同样触发（CapsLock / Shift 之外的输入法状态）', () => {
+    const h = setupOneToOne();
+    fireEvent.keyDown(document.body, { key: 'Z' });
+    expect(h.onToggleOneToOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('Ctrl+Z 仍是撤销，不触发 1:1', () => {
+    const h = setupOneToOne();
+    fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true });
+    expect(h.onUndo).toHaveBeenCalledTimes(1);
+    expect(h.onToggleOneToOne).not.toHaveBeenCalled();
+  });
+
+  it('Ctrl+Shift+Z 仍是重做，不触发 1:1', () => {
+    const h = setupOneToOne();
+    fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true, shiftKey: true });
+    expect(h.onRedo).toHaveBeenCalledTimes(1);
+    expect(h.onToggleOneToOne).not.toHaveBeenCalled();
+  });
+
+  it('文本输入框里按 z 不触发（留给原生输入）', () => {
+    const h = setupOneToOne();
+    const input = mount(document.createElement('input'));
+    fireEvent.keyDown(input, { key: 'z' });
+    expect(h.onToggleOneToOne).not.toHaveBeenCalled();
+  });
+
+  it('模态打开时按 z 不触发', () => {
+    const h = setupOneToOne();
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    document.body.appendChild(dialog);
+    mounted.push(dialog);
+
+    fireEvent.keyDown(document.body, { key: 'z' });
+    expect(h.onToggleOneToOne).not.toHaveBeenCalled();
+  });
+});

@@ -95,6 +95,14 @@ export interface LumenPreviewResult {
   cached: boolean;
 }
 
+/** lumen_detail_cmd 返回：detailPath = null 表示引擎不可用（前端退回 1600 预览） */
+export interface LumenDetailResult {
+  detailPath: string | null;
+  /** 本次是否命中磁盘缓存（true = 没花那 6–8 秒） */
+  cached: boolean;
+  elapsedMs: number;
+}
+
 /** LUMEN RAW 侧调色 recipe（宿主调色面板的初始态） */
 export interface LumenRecipe {
   available: boolean;

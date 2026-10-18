@@ -6,6 +6,7 @@ import {
   ExportOutcome,
   FolderScanResult,
   LumenCapabilities,
+  LumenDetailResult,
   LumenMask,
   LumenMaskResult,
   LumenPreviewResult,
@@ -323,6 +324,23 @@ export const api = {
       width: opts?.width ?? null,
       original: opts?.original ?? null,
       recipe: opts?.recipe ? JSON.stringify(opts.recipe) : null,
+    });
+  },
+
+  /**
+   * 渲染 RAW 的**全分辨率**细节图（1:1 对焦检查）。
+   *
+   * 每张 6–8 秒、峰值 761MB（24MP 实测），只在用户明确按 Z / 双击时调用。
+   * 引擎不可用返回 `detailPath: null`（静默降级为 1600 预览）；
+   * 全局并发上限 1 —— 第二个请求会拿到 E_BUSY，前端队列自己排队。
+   */
+  getLumenDetail: async (
+    filePath: string,
+    recipe?: unknown,
+  ): Promise<LumenDetailResult> => {
+    return await invoke<LumenDetailResult>('lumen_detail_cmd', {
+      filePath,
+      recipe: recipe ? JSON.stringify(recipe) : null,
     });
   },
 

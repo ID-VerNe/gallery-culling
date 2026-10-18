@@ -437,6 +437,12 @@ function AppShell() {
     setGridSearchFocusToken((t) => t + 1);
   }, [setShowTonalPanel]);
 
+  // FR-05：`Z` = 1:1 细节。缩放状态属于视口，App 只做键位 → 视口的转发，
+  // 因此用 ref 通道（而不是把 zoom 提到 App：双栏/前后对照各有一份，提上来
+  // 就说不清 `Z` 该切哪个）。
+  const oneToOneRef = useRef<() => void>(() => {});
+  const handleToggleOneToOne = useCallback(() => oneToOneRef.current(), []);
+
   // Register single-handed keyboard shortcuts
   useKeyboardShortcuts({
     onPrev: guardedPrev,
@@ -458,6 +464,7 @@ function AppShell() {
     onOpenMetadataModal: () => setIsMetadataOpen(true),
     onToggleBeforeAfter: external.toggleBeforeAfter,
     onToggleTonalPanel: handleToggleTonalPanel,
+    onToggleOneToOne: handleToggleOneToOne,
     onHoldOriginalStart: handleHoldOriginalStart,
     onHoldOriginalEnd: handleHoldOriginalEnd,
     onFocusSearch: handleFocusSearch,
@@ -588,6 +595,7 @@ function AppShell() {
             isLuminarRunning={external.isLuminarRunning}
             emptyState={viewportEmptyState}
             onImageElement={setPreviewImage}
+            oneToOneRef={oneToOneRef}
           />
         )}
 

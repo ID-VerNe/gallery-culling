@@ -1,4 +1,5 @@
 import React from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -17,6 +18,7 @@ import { getToneFilterString } from '../utils/autoTone';
 import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from '../utils/viewportZoom';
 import { useZoomPan } from '../hooks/useZoomPan';
 import { useViewportImage } from '../hooks/useViewportImage';
+import { useLumenDetail } from '../hooks/useLumenDetail';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
 import { ExifCapsule } from './ExifCapsule';
@@ -47,6 +49,12 @@ interface PreviewViewportProps {
   lumenStatus?: LumenStatus;
   /** 渲染中的宽边（默认 1600，宿主侧上限）。 */
   lumenPreviewWidth?: number;
+  /**
+   * 1:1 的触发通道：视口把自己的 toggle 注册进这个 ref，App 的全局快捷键
+   * 只负责把 `Z` 映射过来。缩放状态属于视口，不能提到 App（否则双栏/前后
+   * 对照各有一份，`Z` 该切哪个就说不清了）。
+   */
+  oneToOneRef?: React.MutableRefObject<() => void>;
 }
 
 /** Everything the viewports need to render a meaningful empty state. */
@@ -73,6 +81,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
   isTonalPanelOpen = false,
   lumenStatus,
   lumenPreviewWidth = 1600,
+  oneToOneRef,
   emptyState = {
     title: '未加载照片',
     description: '请选择存放 JPG 的文件夹用于浏览与选片；RAW 文件夹可选。',
@@ -84,18 +93,59 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
   // 图片源解析（LUMEN 预览 + 失败 latch + C2 口径，三视口共用）。
   const image = useViewportImage(group, lumenStatus ?? LUMEN_UNAVAILABLE, lumenPreviewWidth);
 
+  // FR-05：RAW-only 的全分辨率细节（按 Z 才请求，6–8 秒/张）。
+  const detail = useLumenDetail(group, lumenStatus ?? LUMEN_UNAVAILABLE);
+  /** 上一次 1:1 的比例（用于「再按一次回适应」的判定）。 */
+  const oneToOneScaleRef = useRef<number | null>(null);
+  /** 按 Z 时细节还没就绪 → 等 img onLoad 再切，不能立刻用预览宽度算。 */
+  const pendingOneToOneRef = useRef(false);
+
+  const toggleOneToOne = useCallback(() => {
+    // 已在 1:1 → 回适应（同一个键来回切，与双击的「适应 ↔ 放大」同构）。
+    const known = oneToOneScaleRef.current;
+    if (known !== null && Math.abs(zoom.scale - known) < 0.02) {
+      zoom.reset();
+      oneToOneScaleRef.current = null;
+      return;
+    }
+
+    // JPG 分组：原图就是全分辨率，不需要（也不该）花 6–8 秒渲染。
+    const hasJpg = Boolean(group?.jpg?.path);
+    if (!hasJpg && !detail.url) {
+      // 还没细节：先请求，等图真正加载完再切（onLoad 里接手）。
+      pendingOneToOneRef.current = true;
+      detail.request();
+      return;
+    }
+
+    const s = zoom.oneToOne();
+    if (s !== null) oneToOneScaleRef.current = s;
+  }, [zoom, group, detail]);
+
+  // 把 toggle 注册给全局快捷键（Z）。视口不在时（双栏 / 前后对照）清空，
+  // 避免 `Z` 打到已经卸载的视口上。
+  useEffect(() => {
+    if (!oneToOneRef) return;
+    oneToOneRef.current = toggleOneToOne;
+    return () => {
+      oneToOneRef.current = () => {};
+    };
+  }, [oneToOneRef, toggleOneToOne]);
+
   if (!group) {
     return <ViewportEmptyStateView emptyState={emptyState} />;
   }
 
   // A LUMEN render is already tone-mapped: never stack the CSS tone filter on it
-  // (that would develop the image twice).
-  const toneFilter = image.lumenActive
+  // (that would develop the image twice). 细节图同样是 LUMEN 渲染的成品。
+  const usingDetail = Boolean(detail.url);
+  const displaySrc = detail.url ?? image.src;
+  const toneFilter = image.lumenActive || usingDetail
     ? 'none'
     : getToneFilterString(isHoldOriginal ? undefined : tone);
 
   // C1/C2：RAW-only 解码中 → 走主视图显示「正在渲染 RAW…」横幅；失败/未启用 → 明确占位而非破图。
-  if (!image.src && !(image.rawOnly && image.loading)) {
+  if (!displaySrc && !(image.rawOnly && image.loading)) {
     const engineAvailable = lumenStatus?.available === true;
     return (
       <ViewportEmptyStateView
@@ -143,10 +193,45 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
         </div>
       )}
 
-      {image.src && (
+      {/* FR-05：1:1 细节是 6–8 秒的操作，必须说清楚在做什么（不能只有转圈）。 */}
+      {detail.loading && (
+        <div
+          role="status"
+          className="absolute top-14 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-background-base/90 backdrop-blur-md pl-3.5 pr-1.5 py-1 rounded-md text-xs font-semibold text-sky-300 border border-sky-500/40 pointer-events-none"
+        >
+          正在生成 1:1 细节…（6–8 秒，可继续浏览其它照片）
+          {/* 出口标准要求「渲染中可取消」：取消只让提示消失，渲染会跑完并落缓存。 */}
+          <button
+            type="button"
+            onClick={detail.cancel}
+            title="只是不再等待；渲染会继续跑完并落缓存，下次按 Z 直接命中"
+            className="pointer-events-auto px-2 py-0.5 rounded text-[11px] font-semibold text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+          >
+            取消
+          </button>
+        </div>
+      )}
+      {detail.busy && (
+        <div
+          role="status"
+          className="absolute top-14 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3.5 py-1.5 rounded-md text-xs font-semibold text-amber-300 border border-amber-500/40 pointer-events-none"
+        >
+          另一张的 1:1 细节正在生成，请稍候再按 Z
+        </div>
+      )}
+      {detail.failed && (
+        <div
+          role="status"
+          className="absolute top-14 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3.5 py-1.5 rounded-md text-xs font-semibold text-rose-300 border border-rose-500/40 pointer-events-none"
+        >
+          细节渲染失败，已退回预览图
+        </div>
+      )}
+
+      {displaySrc && (
         <img
           ref={zoom.imageRef}
-          src={image.src}
+          src={displaySrc}
           alt={group.baseName}
           draggable={false}
           // 自动调色会对这张图做 canvas 采样（getImageData）。asset:// 是跨源
@@ -155,7 +240,19 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           // 对全部响应返回 Access-Control-Allow-Origin（tauri 2.11.5
           // protocol/asset.rs），可安全启用。
           crossOrigin="anonymous"
-          onError={image.markBroken}
+          onLoad={() => {
+            // 细节图加载完才知道真实像素宽：此刻才能算 1:1。
+            if (!pendingOneToOneRef.current) return;
+            pendingOneToOneRef.current = false;
+            const s = zoom.oneToOne();
+            if (s !== null) oneToOneScaleRef.current = s;
+          }}
+          onError={() => {
+            // 细节图加载失败（缓存被删/写坏）与预览图加载失败是两条路径：
+            // 前者可能根本没走过预览成功，不能靠 image.markBroken 的 latch。
+            if (usingDetail) detail.markBroken();
+            else image.markBroken();
+          }}
           style={{
             transform: zoom.transform,
             transition: zoom.isDragging ? 'none' : 'transform 0.08s ease-out',

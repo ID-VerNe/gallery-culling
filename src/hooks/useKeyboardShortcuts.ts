@@ -30,6 +30,14 @@ interface KeyboardShortcutsProps {
   onOpenMetadataModal?: () => void;
   onToggleBeforeAfter?: () => void;
   onToggleTonalPanel?: () => void;
+  /**
+   * 1:1 细节开关（FR-05），绑定 `Z`。
+   *
+   * 只做键位映射，真正的缩放状态在视口里（`oneToOneRef` 通道）。放在
+   * switch 里而不是前面的组合键分支 —— `Ctrl+Z` / `Ctrl+Shift+Z` 已经在
+   * 更早的位置 return，这里天然只收「无修饰键的 z」。
+   */
+  onToggleOneToOne?: () => void;
   onHoldOriginalStart?: () => void;
   onHoldOriginalEnd?: () => void;
   onFocusSearch?: () => void;
@@ -72,6 +80,7 @@ export function useKeyboardShortcuts({
   onOpenMetadataModal,
   onToggleBeforeAfter,
   onToggleTonalPanel,
+  onToggleOneToOne,
   onHoldOriginalStart,
   onHoldOriginalEnd,
   onFocusSearch,
@@ -327,6 +336,16 @@ export function useKeyboardShortcuts({
           onLabel?.('Blue');
           break;
 
+        // 1:1 细节开关 (Z)。与 Ctrl+Z 撤销只差一个修饰键 —— 那两条已在
+        // 更早的分支 return，这里到不了带修饰键的 z。
+        case 'z':
+        case 'Z':
+          if (onToggleOneToOne) {
+            e.preventDefault();
+            onToggleOneToOne();
+          }
+          break;
+
         // Open in Photoshop / External app
         case 'o':
         case 'O':
@@ -474,6 +493,7 @@ export function useKeyboardShortcuts({
     onOpenMetadataModal,
     onToggleBeforeAfter,
     onToggleTonalPanel,
+    onToggleOneToOne,
     onHoldOriginalStart,
     onHoldOriginalEnd,
     onFocusSearch,

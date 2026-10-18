@@ -10,6 +10,7 @@ import {
   clampToPane,
   dragGrab,
   dragTarget,
+  oneToOneScale,
   type Vec2,
 } from '../utils/viewportZoom';
 
@@ -26,6 +27,14 @@ export interface ZoomPan {
   imageRef: (el: HTMLImageElement | null) => void;
   zoomBy: (factor: number) => void;
   reset: () => void;
+  /**
+   * 切到真 1:1（一个图片像素 = 一个屏幕像素）。
+   *
+   * 比例是 `naturalWidth / offsetWidth` —— `scale` 的语义是「相对适应窗口
+   * 的倍数」，所以 1:1 取决于原图尺寸与窗口大小，不能写死。
+   * 元素未挂载 / 还没布局（宽度为 0）时返回 null，调用方保留原缩放。
+   */
+  oneToOne: () => number | null;
   /** 绑到视口容器的全套手势（滚轮 / 拖拽 / 双击）。 */
   bind: {
     onWheel: (e: React.WheelEvent) => void;
@@ -73,6 +82,16 @@ export function useZoomPan(
   const reset = useCallback(() => {
     setScale(1);
     setPos({ x: 0, y: 0 });
+  }, []);
+
+  const oneToOne = useCallback((): number | null => {
+    const img = imgRef.current;
+    if (!img) return null;
+    const s = oneToOneScale(img.naturalWidth, img.offsetWidth);
+    if (s === null) return null;
+    setScale(s);
+    setPos({ x: 0, y: 0 });
+    return s;
   }, []);
 
   const handleWheel = useCallback(
@@ -143,6 +162,7 @@ export function useZoomPan(
     imageRef,
     zoomBy,
     reset,
+    oneToOne,
     bind: {
       onWheel: handleWheel,
       onPointerDown: handlePointerDown,
