@@ -44,7 +44,7 @@ const toneState: ToneState = {
   lumenAvailable: false,
 };
 
-function mockStartup() {
+function mockStartup(groups: PhotoGroupInfo[] = [group]) {
   mockInvokeCommand('get_settings_cmd', {
     defaultJpgFolder: 'D:/shoot/JPG',
     defaultRawFolder: '',
@@ -58,14 +58,19 @@ function mockStartup() {
   });
   mockInvokeCommand('save_settings_cmd', true);
   mockInvokeCommand('save_session_cmd', true);
-  mockInvokeCommand('scan_folders_cmd', scanResult);
+  mockInvokeCommand('scan_folders_cmd', {
+    ...scanResult,
+    groups,
+    totalCount: groups.length,
+  });
   mockInvokeCommand('load_session_cmd', null);
   mockInvokeCommand('get_thumbnail_cmd', 'D:/cache/thumb.jpg');
   mockInvokeCommand('get_tone_state_cmd', toneState);
   mockInvokeCommand('update_rating_flag_cmd', true);
 }
 
-async function scanOne() {
+async function scanOne(groups: PhotoGroupInfo[] = [group]) {
+  mockStartup(groups);
   render(<App />);
   const scanBtn = await screen.findByRole('button', { name: /扫描照片目录/ });
   await waitFor(() => expect(scanBtn).toBeEnabled());
@@ -73,11 +78,28 @@ async function scanOne() {
   await screen.findByText(/扫描完成/);
 }
 
+/** 三张不同起点的照片：撤销时能凭写回的 rating 分辨回退到哪一层。 */
+const trio: PhotoGroupInfo[] = [1, 2, 3].map((rating, i) => {
+  const name = `IMG_000${i + 1}`;
+  return {
+    ...group,
+    id: `g${i + 1}`,
+    baseName: name,
+    rating,
+    jpg: {
+      name: `${name}.jpg`,
+      extension: 'jpg',
+      path: `D:/shoot/JPG/${name}.jpg`,
+      size: 1024,
+      mtime: 0,
+    },
+  };
+});
+
 const rateCalls = () => invokeCount('update_rating_flag_cmd');
 
 describe('L-11 —— 撤销：键盘', () => {
   it('打分后 Ctrl+Z 把 XMP 写回旧值', async () => {
-    mockStartup();
     await scanOne();
 
     fireEvent.keyDown(document.body, { key: '3' });
@@ -96,11 +118,10 @@ describe('L-11 —— 撤销：键盘', () => {
       rating: 0,
       coalesce: false,
     });
-    await waitFor(() => expect(screen.getByText(/已撤销上一处改动/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/已撤销「/)).toBeInTheDocument());
   });
 
   it('连按 1..5 后撤销回到这轮起点，而不是上一步', async () => {
-    mockStartup();
     await scanOne();
 
     fireEvent.keyDown(document.body, { key: '1' });
@@ -115,7 +136,6 @@ describe('L-11 —— 撤销：键盘', () => {
   });
 
   it('没有可撤销的操作时给出提示，且不发写盘请求', async () => {
-    mockStartup();
     await scanOne();
 
     fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true });
@@ -125,7 +145,6 @@ describe('L-11 —— 撤销：键盘', () => {
   });
 
   it('输入框内的 Ctrl+Z 仍是原生「撤销输入」，不触发照片撤销', async () => {
-    mockStartup();
     await scanOne();
 
     // 先制造一次可撤销的改动
@@ -146,10 +165,9 @@ describe('L-11 —— 撤销：键盘', () => {
 
 describe('L-11 —— 撤销：鼠标入口', () => {
   it('底栏「撤销」按钮在无可撤销时禁用，改动后可用并能撤销', async () => {
-    mockStartup();
     await scanOne();
 
-    const undoBtn = () => screen.getByRole('button', { name: '撤销上一处星级或标记改动' });
+    const undoBtn = () => screen.getByRole('button', { name: /^撤销/ });
     expect(undoBtn()).toBeDisabled();
 
     fireEvent.keyDown(document.body, { key: '2' });
@@ -164,7 +182,6 @@ describe('L-11 —— 撤销：鼠标入口', () => {
   });
 
   it('旗标改动（X 淘汰）同样可撤销', async () => {
-    mockStartup();
     await scanOne();
 
     fireEvent.keyDown(document.body, { key: 'x' });
@@ -175,5 +192,100 @@ describe('L-11 —— 撤销：鼠标入口', () => {
 
     await waitFor(() => expect(rateCalls()).toBe(2));
     expect(lastInvokeArgs('update_rating_flag_cmd')).toMatchObject({ flag: 'none' });
+  });
+});
+
+describe('FR-04 —— 多步撤销与重做', () => {
+  it('改三张不同照片后 Ctrl+Z 逐层回退（不是只退最近一步）', async () => {
+    await scanOne(trio);
+
+    // 三张的起点分别是 1 / 2 / 3 星，撤销时凭写回的 rating 分辨回了哪一层。
+    fireEvent.keyDown(document.body, { key: '4' });
+    await waitFor(() => expect(rateCalls()).toBe(1));
+
+    fireEvent.keyDown(document.body, { key: 'ArrowRight' });
+    fireEvent.keyDown(document.body, { key: '5' });
+    await waitFor(() => expect(rateCalls()).toBe(2));
+
+    fireEvent.keyDown(document.body, { key: 'ArrowRight' });
+    fireEvent.keyDown(document.body, { key: '4' });
+    await waitFor(() => expect(rateCalls()).toBe(3));
+
+    fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true });
+    await waitFor(() => expect(rateCalls()).toBe(4));
+    expect(lastInvokeArgs('update_rating_flag_cmd')).toMatchObject({ rating: 3 });
+
+    fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true });
+    await waitFor(() => expect(rateCalls()).toBe(5));
+    expect(lastInvokeArgs('update_rating_flag_cmd')).toMatchObject({ rating: 2 });
+
+    fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true });
+    await waitFor(() => expect(rateCalls()).toBe(6));
+    expect(lastInvokeArgs('update_rating_flag_cmd')).toMatchObject({ rating: 1 });
+
+    // 三层都退完了：按钮回到禁用态。
+    await waitFor(() => expect(screen.getByRole('button', { name: /^撤销/ })).toBeDisabled());
+  });
+
+  it('Ctrl+Shift+Z 重做：把新值再写一遍', async () => {
+    await scanOne(trio);
+
+    fireEvent.keyDown(document.body, { key: '5' }); // g1: 1 → 5
+    await waitFor(() => expect(rateCalls()).toBe(1));
+
+    fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true });
+    await waitFor(() => expect(rateCalls()).toBe(2));
+    expect(lastInvokeArgs('update_rating_flag_cmd')).toMatchObject({ rating: 1 });
+
+    fireEvent.keyDown(document.body, { key: 'Z', ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(rateCalls()).toBe(3));
+    expect(lastInvokeArgs('update_rating_flag_cmd')).toMatchObject({
+      rating: 5,
+      coalesce: false,
+    });
+  });
+
+  it('Ctrl+Y 同样触发重做（Windows 习惯）', async () => {
+    await scanOne(trio);
+
+    fireEvent.keyDown(document.body, { key: '4' });
+    await waitFor(() => expect(rateCalls()).toBe(1));
+    fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true });
+    await waitFor(() => expect(rateCalls()).toBe(2));
+
+    fireEvent.keyDown(document.body, { key: 'y', ctrlKey: true });
+    await waitFor(() => expect(rateCalls()).toBe(3));
+    expect(lastInvokeArgs('update_rating_flag_cmd')).toMatchObject({ rating: 4 });
+  });
+
+  it('撤销后做了新操作，重做栈清空（分支后不能重做旧路径）', async () => {
+    await scanOne(trio);
+
+    fireEvent.keyDown(document.body, { key: '5' });
+    await waitFor(() => expect(rateCalls()).toBe(1));
+    fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true });
+    await waitFor(() => expect(rateCalls()).toBe(2));
+
+    const redoBtn = () => screen.getByRole('button', { name: /^重做/ });
+    expect(redoBtn()).toBeEnabled();
+
+    fireEvent.keyDown(document.body, { key: '2' });
+    await waitFor(() => expect(rateCalls()).toBe(3));
+
+    await waitFor(() => expect(redoBtn()).toBeDisabled());
+  });
+
+  it('底栏把命令写成可读摘要，而不是只有「撤销」两个字', async () => {
+    await scanOne();
+
+    fireEvent.keyDown(document.body, { key: 'x' });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '撤销：标记为淘汰' })).toBeEnabled(),
+    );
+
+    fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '重做：标记为淘汰' })).toBeEnabled(),
+    );
   });
 });

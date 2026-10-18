@@ -3,20 +3,27 @@ import { api } from '../services/api';
 import { useToast } from '../components/Toast';
 import { groupPath } from '../utils/groupPath';
 import { LABEL_NAMES } from '../utils/labels';
+import { FLAG_NAMES, type CullCommand, type CullItem } from '../utils/cullCommand';
 import type { ColorLabel, CullFlag, PhotoGroupInfo } from '../types';
-
-/** 批量确认框里的旗标叫法，与宫格/底栏保持一致。 */
-const FLAG_LABELS: Record<CullFlag, string> = {
-  pick: '保留',
-  reject: '淘汰',
-  none: '未标记',
-};
 
 export type BatchAction =
   | { kind: 'rate'; value: number }
   | { kind: 'flag'; value: CullFlag }
   | { kind: 'label'; value: ColorLabel }
   | { kind: 'clear' };
+
+/**
+ * 批量命令的可读摘要（底栏「撤销：淘汰 3 张」与撤销 toast 共用）。
+ *
+ * 旗标读作「淘汰 3 张」而不是「标记为淘汰（3 张）」：底栏宽度有限，
+ * 且旗标动作本身就是动词。
+ */
+function summarizeBatch(action: BatchAction, count: number): string {
+  if (action.kind === 'rate') return `设为 ${action.value} 星（${count} 张）`;
+  if (action.kind === 'flag') return `${FLAG_NAMES[action.value]} ${count} 张`;
+  if (action.kind === 'label') return `色标设为${LABEL_NAMES[action.value]}（${count} 张）`;
+  return `清除 ${count} 张的星级与标记`;
+}
 
 /**
  * 批量评分/旗标写盘。
@@ -34,13 +41,11 @@ export function useBatchOps(opts: {
   onGroupPatched: (id: string, patch: Partial<PhotoGroupInfo>) => void;
   markSynced: (id: string) => void;
   markUnsynced: (id: string) => void;
-  rememberRating: (s: {
-    id: string;
-    path: string;
-    rating: number;
-    flag: CullFlag;
-    label: string;
-  }) => void;
+  /**
+   * FR-04：整批只压**一条**命令。旧实现逐张 `rememberRating`，200 张批量在
+   * 5 步上限里只留下最后 5 张 —— 撤销一次退一张，整批退不回去。
+   */
+  pushCommand: (command: CullCommand) => void;
   /** 待确认的批量操作。state 归 useRatingFlagSync 持有（它是唯一入口）。 */
   pendingBatch: BatchAction | null;
 }) {
@@ -50,7 +55,7 @@ export function useBatchOps(opts: {
     onGroupPatched,
     markSynced,
     markUnsynced,
-    rememberRating,
+    pushCommand,
     pendingBatch,
   } = opts;
   const toast = useToast();
@@ -77,6 +82,12 @@ export function useBatchOps(opts: {
 
       let ok = 0;
       let failed = 0;
+      /**
+       * 实际处理过的照片。**只有进入写盘流程的才记**：中途「跳过剩余」时，
+       * 没碰过的照片不该出现在撤销命令里 —— 否则撤销会把它们也"恢复"成
+       * 一个它们从未改变过的旧值。
+       */
+      const items: CullItem[] = [];
       for (let i = 0; i < targets.length; i++) {
         if (batchCancelRef.current) break;
         const g = targets[i];
@@ -98,12 +109,11 @@ export function useBatchOps(opts: {
         // 逐张切换会让结果取决于各自原值，用户无法预期。
         const nextLabel = action.kind === 'label' ? action.value : g.label;
 
-        rememberRating({
+        items.push({
           id: g.id,
           path: targetPath,
-          rating: g.rating,
-          flag: g.flag,
-          label: g.label,
+          before: { rating: g.rating, flag: g.flag, label: g.label },
+          after: { rating: nextRating, flag: nextFlag, label: nextLabel },
         });
         onGroupPatched(g.id, {
           rating: nextRating,
@@ -131,6 +141,11 @@ export function useBatchOps(opts: {
         setBatchProgress({ processed: i + 1, total: targets.length });
       }
 
+      // 整批一条命令：撤销一次回到批量之前，而不是退一张。
+      if (items.length > 0) {
+        pushCommand({ summary: summarizeBatch(action, items.length), items });
+      }
+
       const cancelled = batchCancelRef.current;
       setBatchProgress(null);
       setBatchCancelling(false);
@@ -144,7 +159,7 @@ export function useBatchOps(opts: {
         toast.success(`已批量写入 ${ok} 张的星级/标记/色标到 XMP 侧边栏。`);
       }
     },
-    [filteredGroups, selectedIds, onGroupPatched, markSynced, markUnsynced, rememberRating, toast],
+    [filteredGroups, selectedIds, onGroupPatched, markSynced, markUnsynced, pushCommand, toast],
   );
 
   const pendingBatchSummary = useMemo(() => {
@@ -154,7 +169,7 @@ export function useBatchOps(opts: {
       return `将 ${count} 张照片的星级设为 ${pendingBatch.value} 星`;
     }
     if (pendingBatch.kind === 'flag') {
-      return `将 ${count} 张照片标记为「${FLAG_LABELS[pendingBatch.value]}」`;
+      return `将 ${count} 张照片标记为「${FLAG_NAMES[pendingBatch.value]}」`;
     }
     if (pendingBatch.kind === 'label') {
       return `将 ${count} 张照片的色标设为「${LABEL_NAMES[pendingBatch.value]}」`;

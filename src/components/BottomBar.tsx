@@ -4,6 +4,7 @@ import {
   ExternalLink,
   HardDrive,
   Keyboard,
+  Redo2,
   Search,
   Sliders,
   Undo2,
@@ -25,12 +26,19 @@ interface BottomBarProps {
   /** 宫格搜索的命中数（用于「宫格筛选 X/Y」口径）。 */
   searchResultCount?: number;
   /**
-   * 单步撤销（L-11）。`1..5/p/x/0` 按下即写 `.xmp`，键盘有 `Ctrl/Cmd+Z`，
-   * 这里给鼠标用户同一个入口 —— 否则"能退一步"只对键盘用户成立。
+   * 多步撤销/重做（FR-04）。`1..5/p/x/6..9/0` 按下即写 `.xmp`，键盘有
+   * `Ctrl/Cmd+Z` 与 `Ctrl/Cmd+Shift+Z`，这里给鼠标用户同样的入口 —— 否则
+   * "能回退"只对键盘用户成立。
    */
   onUndo?: () => void;
   /** 是否有可撤销的改动（驱动按钮可用态）。 */
   canUndo?: boolean;
+  /** 下一条将被撤销的命令描述，如「淘汰 3 张」；空串表示栈空。 */
+  undoSummary?: string;
+  onRedo?: () => void;
+  canRedo?: boolean;
+  /** 下一条将被重做的命令描述。 */
+  redoSummary?: string;
 }
 
 export const BottomBar: React.FC<BottomBarProps> = ({
@@ -44,6 +52,10 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   searchResultCount = 0,
   onUndo,
   canUndo = false,
+  undoSummary = '',
+  onRedo,
+  canRedo = false,
+  redoSummary = '',
 }) => {
   const humanIndex = totalCount > 0 ? currentIndex + 1 : 0;
   const counterText = searchActive
@@ -156,11 +168,29 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           onClick={onUndo}
           disabled={!canUndo}
           className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white disabled:bg-background-surface-hover disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-colors"
-          title={canUndo ? '撤销上一处星级/标记改动 (Ctrl+Z)' : '没有可撤销的改动'}
-          aria-label="撤销上一处星级或标记改动"
+          title={canUndo ? `撤销：${undoSummary} (Ctrl+Z)` : '没有可撤销的改动'}
+          aria-label={canUndo ? `撤销：${undoSummary}` : '撤销（没有可撤销的改动）'}
         >
-          <Undo2 className="w-3 h-3" aria-hidden="true" />
-          <span className="pb-[1px]">撤销</span>
+          <Undo2 className="w-3 h-3 shrink-0" aria-hidden="true" />
+          <span className="pb-[1px] shrink-0">撤销</span>
+          {/* 摘要只在宽屏内联显示：底栏 36px 高、右侧还有计数与外部打开，
+              窄屏放不下就把完整文案留给 title / aria-label。 */}
+          {canUndo && undoSummary && (
+            <span className="pb-[1px] hidden xl:inline text-white/55 max-w-[13rem] truncate">
+              ：{undoSummary}
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={onRedo}
+          disabled={!canRedo}
+          className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white disabled:bg-background-surface-hover disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-colors"
+          title={canRedo ? `重做：${redoSummary} (Ctrl+Shift+Z)` : '没有可重做的改动'}
+          aria-label={canRedo ? `重做：${redoSummary}` : '重做（没有可重做的改动）'}
+        >
+          <Redo2 className="w-3 h-3 shrink-0" aria-hidden="true" />
+          <span className="pb-[1px] shrink-0">重做</span>
         </button>
 
         <button

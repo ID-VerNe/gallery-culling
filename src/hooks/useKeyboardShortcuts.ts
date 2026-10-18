@@ -42,12 +42,17 @@ interface KeyboardShortcutsProps {
    */
   onOpenExport?: () => void;
   /**
-   * 单步撤销（L-11），绑定 `Ctrl/Cmd+Z`。
+   * 多步撤销（FR-04），绑定 `Ctrl/Cmd+Z`。
    *
    * 位置很关键：本分支排在**通用守卫之后**，所以焦点在输入框/文本域内时
    * `Ctrl+Z` 仍是原生「撤销输入」，不会被照片撤销抢走。
    */
   onUndo?: () => void;
+  /**
+   * 重做（FR-04），绑定 `Ctrl/Cmd+Shift+Z`，并额外接受 Windows 习惯的
+   * `Ctrl+Y`（本项目只跑 Windows，`Ctrl+Y` 是那里更常见的肌肉记忆）。
+   */
+  onRedo?: () => void;
 }
 
 export function useKeyboardShortcuts({
@@ -73,6 +78,7 @@ export function useKeyboardShortcuts({
   onOpenShortcutHelp,
   onOpenExport,
   onUndo,
+  onRedo,
 }: KeyboardShortcutsProps) {
   /** `\` 是否处于按住态 —— 供 blur / visibilitychange 复位兜底判断，避免误复位。 */
   const holdActiveRef = useRef(false);
@@ -163,8 +169,24 @@ export function useKeyboardShortcuts({
       //   宫格 `[role="listbox"]` 不在 isActivatable 内，故其空格仍 = 设为基准。
       if (e.key === ' ' && isActivatable(el)) return;
 
-      // 5.5 单步撤销：Ctrl/Cmd+Z（L-11）。刻意放在通用守卫**之后**——焦点在
-      //     输入框/文本域里时，Ctrl+Z 必须留给原生「撤销输入」。
+      // 5.4 重做：Ctrl/Cmd+Shift+Z（Windows 习惯的 Ctrl+Y 同样接受）。
+      //     必须排在撤销分支**之前** —— 撤销只判 key，会连 Shift+Z 一起吞掉。
+      //     同理也排在通用守卫之后：输入框里的 Ctrl+Y 是原生重做输入。
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        !e.altKey &&
+        ((e.shiftKey && (e.key === 'z' || e.key === 'Z')) ||
+          (!e.shiftKey && (e.key === 'y' || e.key === 'Y')))
+      ) {
+        if (onRedo) {
+          e.preventDefault();
+          onRedo();
+        }
+        return;
+      }
+
+      // 5.5 撤销：Ctrl/Cmd+Z（L-11，FR-04 起为多步）。刻意放在通用守卫**之后**——
+      //     焦点在输入框/文本域里时，Ctrl+Z 必须留给原生「撤销输入」。
       //     也不与步骤 6 的组合键让路冲突：这里先返回，不会落到那句 return。
       if (
         (e.ctrlKey || e.metaKey) &&
@@ -458,5 +480,6 @@ export function useKeyboardShortcuts({
     onOpenShortcutHelp,
     onOpenExport,
     onUndo,
+    onRedo,
   ]);
 }

@@ -1,24 +1,24 @@
 import { useCallback, useState } from 'react';
 import { api } from '../services/api';
 import { useToast } from '../components/Toast';
-import { useRatingUndo } from './useRatingUndo';
+import { useCullUndo } from './useCullUndo';
 import { groupPath } from '../utils/groupPath';
-import { labelName } from '../utils/labels';
+import {
+  summarizeClear,
+  summarizeFlag,
+  summarizeLabel,
+  summarizeRating,
+  type CullCommand,
+  type MetaState,
+} from '../utils/cullCommand';
 import type { BatchAction } from './useBatchOps';
 import type { ColorLabel, CullFlag, PhotoGroupInfo } from '../types';
 
-/** L-11 撤销提示里的旗标文案（与宫格/底栏的叫法保持一致）。 */
-const FLAG_LABELS: Record<CullFlag, string> = {
-  pick: '保留',
-  reject: '淘汰',
-  none: '未标记',
-};
-
 /**
- * 评级与旗标的写盘：乐观更新 + 后台写 XMP + 失败留角标 + 单步撤销。
+ * 评级与旗标的写盘：乐观更新 + 后台写 XMP + 失败留角标 + 多步撤销/重做。
  *
  * 三条约定，任何一条都不能破：
- * - **乐观更新**：界面先变，磁盘后追。写盘失败不回滚 UI —— 星��在屏幕上
+ * - **乐观更新**：界面先变，磁盘后追。写盘失败不回滚 UI —— 星级在屏幕上
  *   是有效的，只是没同步到 Lightroom。回滚会让用户以为自己手滑了。
  * - **写盘失败要留痕**：toast 会消失，格子上的"未同步"角标不会。两者都给。
  * - **评分与淘汰互斥**：给「已淘汰」的照片打星 = 解除淘汰。否则后端按
@@ -47,15 +47,17 @@ export function useRatingFlagSync(opts: {
    */
   const [pendingBatch, setPendingBatch] = useState<BatchAction | null>(null);
 
-  // L-11：星级/旗标的单步撤销。`1..5/p/x/0` 按下即写 .xmp 且原先无路可退，
-  // 一次误触只能手改侧边栏或回 Lightroom。这里保留一步回退（Ctrl/Cmd+Z，
-  // 或底栏的「撤销」按钮）。
+  // FR-04：多步撤销。批量操作由 useBatchOps 自己压一整条命令，这里只管单张。
   const {
     canUndo,
-    remember: rememberRating,
-    take: takeRatingSnapshot,
-    clear: clearRatingUndo,
-  } = useRatingUndo();
+    canRedo,
+    undoSummary,
+    redoSummary,
+    push: pushCommand,
+    undo: takeUndoCommand,
+    redo: takeRedoCommand,
+    clear: clearCullUndo,
+  } = useCullUndo();
 
   /** B6：把某张照片标记为"已同步到 XMP"（写盘成功时调用）。 */
   const markSynced = useCallback((id: string) => {
@@ -89,22 +91,32 @@ export function useRatingFlagSync(opts: {
     [toast, markUnsynced],
   );
 
+  /**
+   * 单张改动压栈。必须在乐观更新**之前**调用 —— `before` 取的是改之前的值。
+   */
+  const pushSingle = useCallback(
+    (summary: string, group: PhotoGroupInfo, path: string, after: MetaState) => {
+      pushCommand({
+        summary,
+        items: [
+          {
+            id: group.id,
+            path,
+            before: { rating: group.rating, flag: group.flag, label: group.label },
+            after,
+          },
+        ],
+      });
+    },
+    [pushCommand],
+  );
+
   // Update Rating & Flag (syncs to XMP)
   const rate = useCallback(
     async (rating: number, targetGroup: PhotoGroupInfo = currentGroup!) => {
       if (!targetGroup) return;
       const targetPath = groupPath(targetGroup);
       if (!targetPath) return;
-
-      // L-11：快照必须在乐观更新**之前**取，否则拿到的已是新值。
-      // 同照片连续改动会被 hook 合并，撤销回到这轮操作的起点。
-      rememberRating({
-        id: targetGroup.id,
-        path: targetPath,
-        rating: targetGroup.rating,
-        flag: targetGroup.flag,
-        label: targetGroup.label,
-      });
 
       // 评分必须与淘汰态互斥：给「已淘汰」的照片打星 = 解除淘汰。
       //
@@ -113,6 +125,12 @@ export function useRatingFlagSync(opts: {
       // pick 语义与评分正交（打了星仍是 pick），故只有 reject 被清掉。
       const nextFlag: CullFlag =
         targetGroup.flag === 'reject' && rating > 0 ? 'none' : targetGroup.flag;
+
+      pushSingle(summarizeRating(rating), targetGroup, targetPath, {
+        rating,
+        flag: nextFlag,
+        label: targetGroup.label,
+      });
 
       onGroupPatched(targetGroup.id, { rating, flag: nextFlag });
 
@@ -132,7 +150,7 @@ export function useRatingFlagSync(opts: {
         reportRatingFlagError(err, targetGroup.id);
       }
     },
-    [currentGroup, reportRatingFlagError, rememberRating, markSynced, onGroupPatched],
+    [currentGroup, reportRatingFlagError, pushSingle, markSynced, onGroupPatched],
   );
 
   const setFlag = useCallback(
@@ -144,11 +162,9 @@ export function useRatingFlagSync(opts: {
       const targetPath = groupPath(targetGroup);
       if (!targetPath) return;
 
-      rememberRating({
-        id: targetGroup.id,
-        path: targetPath,
+      pushSingle(summarizeFlag(flag), targetGroup, targetPath, {
         rating: targetGroup.rating,
-        flag: targetGroup.flag,
+        flag,
         label: targetGroup.label,
       });
 
@@ -168,7 +184,7 @@ export function useRatingFlagSync(opts: {
         reportRatingFlagError(err, targetGroup.id);
       }
     },
-    [currentGroup, reportRatingFlagError, rememberRating, markSynced, onGroupPatched],
+    [currentGroup, reportRatingFlagError, pushSingle, markSynced, onGroupPatched],
   );
 
   /**
@@ -185,12 +201,10 @@ export function useRatingFlagSync(opts: {
 
       const label = targetGroup.label === next ? '' : next;
 
-      rememberRating({
-        id: targetGroup.id,
-        path: targetPath,
+      pushSingle(summarizeLabel(label), targetGroup, targetPath, {
         rating: targetGroup.rating,
         flag: targetGroup.flag,
-        label: targetGroup.label,
+        label,
       });
 
       onGroupPatched(targetGroup.id, { label });
@@ -209,7 +223,7 @@ export function useRatingFlagSync(opts: {
         reportRatingFlagError(err, targetGroup.id);
       }
     },
-    [currentGroup, reportRatingFlagError, rememberRating, markSynced, onGroupPatched],
+    [currentGroup, reportRatingFlagError, pushSingle, markSynced, onGroupPatched],
   );
 
   /**
@@ -285,16 +299,15 @@ export function useRatingFlagSync(opts: {
     const targetPath = groupPath(targetGroup);
     if (!targetPath) return;
 
-    rememberRating({
-      id: targetGroup.id,
-      path: targetPath,
-      rating: targetGroup.rating,
-      flag: targetGroup.flag,
+    pushSingle(summarizeClear(), targetGroup, targetPath, {
+      rating: 0,
+      flag: 'none',
+      // 色标不动：`0`/`U` 清的是星级与旗标，色标是另一个维度。
       label: targetGroup.label,
     });
+
     onGroupPatched(targetGroup.id, { rating: 0, flag: 'none' });
     try {
-      // 色标不动：`0`/`U` 清的是星级与旗标，色标是另一个维度。
       await api.updateRatingFlag(
         targetPath,
         0,
@@ -309,7 +322,7 @@ export function useRatingFlagSync(opts: {
     }
   }, [
     currentGroup,
-    rememberRating,
+    pushSingle,
     reportRatingFlagError,
     markSynced,
     onGroupPatched,
@@ -317,52 +330,93 @@ export function useRatingFlagSync(opts: {
   ]);
 
   /**
-   * L-11 撤销：回填本地状态 + 用**同一套错误语义**重写 XMP。
+   * 执行一条命令：逐条回填 UI + 写盘。`undo` 写 `before`，`redo` 写 `after`。
+   *
+   * 写盘必须 `coalesce=false`：撤销是一次确定的回填，用户不会再连按同一个键，
+   * 等 400ms 静默窗口只会在批量撤销时把 200 张的收尾拖长。
+   *
+   * 错误处理刻意**整条命令只弹一次**：批量撤销 200 张若逐张报错会刷屏。首条失败
+   * 仍走 `reportRatingFlagError`（保持"界面有效、未同步 XMP"的既有承诺），其余
+   * 只打角标，末尾补一句张数。
+   */
+  const applyCommand = useCallback(
+    async (command: CullCommand, direction: 'undo' | 'redo'): Promise<number> => {
+      const key = direction === 'undo' ? 'before' : 'after';
+      let failed = 0;
+      let firstError: unknown = null;
+      let firstErrorId: string | undefined;
+
+      for (const item of command.items) {
+        const state = item[key];
+        onGroupPatched(item.id, state);
+        try {
+          await api.updateRatingFlag(
+            item.path,
+            state.rating,
+            state.flag,
+            true,
+            false,
+            state.label,
+          );
+          markSynced(item.id);
+        } catch (err) {
+          console.error('XMP update error:', err);
+          markUnsynced(item.id);
+          failed++;
+          if (firstError === null) {
+            firstError = err;
+            firstErrorId = item.id;
+          }
+        }
+      }
+
+      if (failed > 0) {
+        reportRatingFlagError(firstError, firstErrorId);
+        if (failed > 1) {
+          toast.error(`另有 ${failed - 1} 张未能落盘（格子上有红色角标，可点击重试）。`);
+        }
+      }
+      return failed;
+    },
+    [markSynced, markUnsynced, onGroupPatched, reportRatingFlagError, toast],
+  );
+
+  /**
+   * FR-04 撤销：弹出最近一条命令，把每张照片的 `before` 写回去。
    *
    * 注意「上次写盘失败」的情形：此时 UI = 新值、磁盘 = 旧值。撤销把 UI 恢复成
    * 快照（= 当时的旧值）并照常发起写入 —— 内容与磁盘现值相同，收敛一致，
-   * 只是多一次无害写入。刻意**不**因上次失败而跳过，也刻意不引入第二种错误
-   * 文案（仍走 `reportRatingFlagError`，保持"界面有效、未同步 XMP"的既有承诺）。
+   * 只是多一次无害写入。刻意**不**因上次失败而跳过。
    */
   const undo = useCallback(async () => {
-    const snapshot = takeRatingSnapshot();
-    if (!snapshot) {
+    const command = takeUndoCommand();
+    if (!command) {
       toast.info('没有可撤销的操作。');
       return;
     }
+    const failed = await applyCommand(command, 'undo');
+    if (failed === 0) toast.success(`已撤销「${command.summary}」。`);
+  }, [takeUndoCommand, applyCommand, toast]);
 
-    onGroupPatched(snapshot.id, {
-      rating: snapshot.rating,
-      flag: snapshot.flag,
-      label: snapshot.label,
-    });
-
-    try {
-      // 撤销是一次确定的回填，不需要等后续按键：直接落盘。
-      await api.updateRatingFlag(
-        snapshot.path,
-        snapshot.rating,
-        snapshot.flag,
-        true,
-        false,
-        snapshot.label,
-      );
-      const colour = labelName(snapshot.label);
-      toast.success(
-        `已撤销上一处改动：星级恢复为 ${snapshot.rating} 星，标记恢复为 ${
-          FLAG_LABELS[snapshot.flag]
-        }${colour ? `，色标恢复为${colour}` : ''}。`,
-      );
-    } catch (err) {
-      reportRatingFlagError(err);
+  /** FR-04 重做：把命令的 `after` 再写一遍。 */
+  const redo = useCallback(async () => {
+    const command = takeRedoCommand();
+    if (!command) {
+      toast.info('没有可重做的操作。');
+      return;
     }
-  }, [takeRatingSnapshot, toast, reportRatingFlagError, onGroupPatched]);
+    const failed = await applyCommand(command, 'redo');
+    if (failed === 0) toast.success(`已重做「${command.summary}」。`);
+  }, [takeRedoCommand, applyCommand, toast]);
 
   return {
     unsyncedIds,
     pendingBatch,
     setPendingBatch,
     canUndo,
+    canRedo,
+    undoSummary,
+    redoSummary,
     markSynced,
     markUnsynced,
     reportRatingFlagError,
@@ -375,7 +429,8 @@ export function useRatingFlagSync(opts: {
     retrySync,
     clearRatingFlag,
     undo,
-    rememberRating,
-    clearRatingUndo,
+    redo,
+    pushCommand,
+    clearCullUndo,
   };
 }

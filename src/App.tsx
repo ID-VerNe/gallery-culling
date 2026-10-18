@@ -119,6 +119,9 @@ function AppShell() {
     pendingBatch,
     setPendingBatch,
     canUndo,
+    canRedo,
+    undoSummary,
+    redoSummary,
     markSynced,
     markUnsynced,
     rate: handleRate,
@@ -126,11 +129,12 @@ function AppShell() {
     applyRating,
     applyFlag,
     applyLabel,
-    rememberRating,
+    pushCommand,
     retrySync: handleRetrySync,
     clearRatingFlag: handleClearRatingFlag,
     undo: handleUndo,
-    clearRatingUndo,
+    redo: handleRedo,
+    clearCullUndo,
   } = rating;
 
   const batch = useBatchOps({
@@ -139,7 +143,7 @@ function AppShell() {
     onGroupPatched: patchGroup,
     markSynced,
     markUnsynced,
-    rememberRating,
+    pushCommand,
     pendingBatch,
   });
   const {
@@ -184,8 +188,8 @@ function AppShell() {
 
   const scan = useFolderScan({
     onScanned: handleScanned,
-    // 重新扫描后旧快照指向的照片可能已不在列表里，撤销会写到一个不该碰的文件上。
-    beforeScan: clearRatingUndo,
+    // 重新扫描后旧命令指向的照片可能已不在列表里，撤销会写到一个不该碰的文件上。
+    beforeScan: clearCullUndo,
     persistFolders,
     getSelectedIndex,
   });
@@ -415,6 +419,7 @@ function AppShell() {
     onOpenShortcutHelp: () => setIsShortcutHelpOpen(true),
     onOpenExport: () => setIsExportOpen(true),
     onUndo: () => void handleUndo(),
+    onRedo: () => void handleRedo(),
   });
 
   // Empty-state copy. "No folder loaded" and "filter matched nothing" are
@@ -628,6 +633,10 @@ function AppShell() {
         searchResultCount={visibleGroups.length}
         onUndo={() => void handleUndo()}
         canUndo={canUndo}
+        undoSummary={undoSummary}
+        onRedo={() => void handleRedo()}
+        canRedo={canRedo}
+        redoSummary={redoSummary}
       />
 
       {/* Batch Export Modal */}

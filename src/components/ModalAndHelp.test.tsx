@@ -64,7 +64,7 @@ describe('UX-18 —— 快捷键帮助可搜索', () => {
   it('输入「撤销」后只显示相关条目', () => {
     render(<ShortcutHelpModal isOpen onClose={() => {}} />);
     fireEvent.change(screen.getByLabelText('搜索快捷键'), { target: { value: '撤销' } });
-    expect(screen.getByText(/撤销上一处/)).toBeTruthy();
+    expect(screen.getByText(/撤销上一步/)).toBeTruthy();
     expect(screen.queryByText('在 Photoshop / 默认程序中打开')).toBeNull();
   });
 
