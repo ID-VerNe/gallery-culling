@@ -39,6 +39,8 @@ const arg = (k) => argv.find((a) => a.startsWith('--' + k + '='))?.split('=')[1]
 
 const scenario = arg('scenario') || 'render-export';
 const timeoutMs = Number(arg('timeout') || 20 * 60_000);
+/** 真实素材目录（含 `rawonly/`）：`detail-1to1` 必需。 */
+const rawDir = arg('raw-dir') || process.env.GALLERY_REAL_RAW_DIR || '';
 
 /** 极简断言收集器：每条 check 立即打印，最后汇总失败明细。 */
 function createReporter() {
@@ -152,6 +154,64 @@ function checkRenderOutput(log, R) {
   );
 }
 
+/**
+ * 读 JPEG 的像素尺寸（只认 SOF 段）。
+ *
+ * 不为一条断言引入 sharp 之类的原生依赖；JPEG 的 SOF 解析只有二十行。
+ * 读不出来返回 null（调用方当失败处理，别静默放过）。
+ */
+function jpegSize(file) {
+  const buf = fs.readFileSync(file);
+  if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8) return null;
+  let i = 2;
+  while (i + 9 < buf.length) {
+    if (buf[i] !== 0xff) {
+      i += 1;
+      continue;
+    }
+    const marker = buf[i + 1];
+    // SOF0/1/2/3、5/6/7、9/10/11、13/14/15（排除 DHT=C4、JPG=C8、DAC=CC）
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+      return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
+    }
+    if (i + 3 >= buf.length) return null;
+    const len = buf.readUInt16BE(i + 2);
+    if (len < 2) return null;
+    i += 2 + len;
+  }
+  return null;
+}
+
+/**
+ * FR-05 的落盘断言：细节缓存里必须是**原生尺寸**的 JPEG。
+ *
+ * 只认磁盘，不看日志：UI 说「已生成」和文件真的存在是两件事。
+ * 长边 ≥4000 是这条用例的核心 —— 1600 预览再怎么拉大也到不了这个数，
+ * 所以它能区分「真 1:1」和「把预览放大」。
+ */
+function checkDetailCache(R) {
+  const dir = path.join(PROJECT_ROOT, 'src-tauri', 'app_cache', 'gallery', 'lumen');
+  const all = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+  const details = all.filter((f) => f.endsWith('_detail_lumen.jpg'));
+  R.note(`细节缓存 ${details.length} 份：${details.slice(0, 4).join(', ') || '(空)'}`);
+  R.check('细节缓存产物存在', details.length >= 1, `目录 ${dir}`);
+
+  const bad = [];
+  for (const f of details) {
+    const p = path.join(dir, f);
+    const size = fs.statSync(p).size;
+    const dim = jpegSize(p);
+    if (!dim) bad.push(`${f}: 不是可解析的 JPEG`);
+    else if (Math.max(dim.width, dim.height) < 4000)
+      bad.push(`${f}: ${dim.width}x${dim.height}（像是预览放大）`);
+    if (size < 1_000_000) bad.push(`${f}: ${size}B`);
+  }
+  R.check('每份细节都是原生尺寸且 >1MB', bad.length === 0, bad.join(' | '));
+
+  const leftovers = all.filter((f) => f.includes('_detail_lumen.tmp.'));
+  R.check('没有残留的临时文件', leftovers.length === 0, leftovers.join(','));
+}
+
 async function main() {
   const t0 = Date.now();
   console.log(`=== 应用内 e2e：${scenario} ===`);
@@ -160,9 +220,48 @@ async function main() {
   const fx = generateFixtures();
   console.log('素材：' + fx.root);
 
+  // detail-1to1 要**真实 ARW**：夹具里的 RAW 是 JPEG 改后缀，photo.export
+  // 解不出图，1:1 永远走不到 —— 用夹具跑出来的「通过」毫无意义。
+  let detailRaw = '';
+  let detailNames = '';
+  if (scenario === 'detail-1to1') {
+    detailRaw = rawDir ? path.join(rawDir, 'rawonly') : '';
+    if (!detailRaw || !fs.existsSync(detailRaw)) {
+      console.error(
+        `缺少真实素材：需要 --raw-dir=<含 rawonly/ 的目录> 或 GALLERY_REAL_RAW_DIR（当前 "${rawDir}"）`,
+      );
+      return 2;
+    }
+    const arws = fs
+      .readdirSync(detailRaw)
+      .filter((f) => /\.(arw|nef|cr2|cr3|dng)$/i.test(f))
+      .sort();
+    if (arws.length < 2) {
+      console.error(`${detailRaw} 里真实 RAW 不足 2 张（${arws.length}），取消场景需要两张`);
+      return 2;
+    }
+    detailNames = arws
+      .slice(0, 2)
+      .map((f) => f.replace(/\.[^.]+$/, ''))
+      .join(',');
+    console.log(`真实 RAW：${detailRaw} → ${detailNames}`);
+  }
+
   // 先收上一轮（含 vite）再清空日志：否则旧 vite 会在清空后继续追加，
   // 上一轮的 `=== e2e done` 会让 waitForLog 立刻假命中。
   killApp();
+
+  // 细节缓存必须清空：留着上一轮产物，「首次 ≤10s」就变成在测缓存命中，
+  // D2「此时还是预览」也会直接红 —— 这条用例的全部意义就是**真渲染**那一次。
+  if (scenario === 'detail-1to1') {
+    const cacheDir = path.join(PROJECT_ROOT, 'src-tauri', 'app_cache', 'gallery', 'lumen');
+    const stale = fs.existsSync(cacheDir)
+      ? fs.readdirSync(cacheDir).filter((f) => f.includes('_detail_lumen'))
+      : [];
+    for (const f of stale) fs.rmSync(path.join(cacheDir, f), { force: true });
+    console.log(`清空细节缓存 ${stale.length} 份（首次必须走真渲染）`);
+  }
+
   fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
   fs.writeFileSync(LOG_FILE, '', 'utf8');
 
@@ -172,8 +271,9 @@ async function main() {
     extraEnv: {
       VITE_E2E_SCENARIO: scenario,
       VITE_E2E_JPG: JPG,
-      VITE_E2E_RAW: RAW,
+      VITE_E2E_RAW: scenario === 'detail-1to1' ? detailRaw : RAW,
       VITE_E2E_OUT: OUT,
+      VITE_E2E_NAMES: detailNames,
       // 刻意**不传** WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS：
       //   1. 应用内驱动不需要 CDP（本机 CDP 也只服务第一个请求，连不上）；
       //   2. main.rs 只在变量**未设置**时才写 `--in-process-gpu`，这里一旦传了
@@ -208,8 +308,16 @@ async function main() {
   R.check('无 FATAL', !/FATAL:/.test(log), (log.match(/FATAL:[^\n]*/g) || []).join(' | '));
 
   // 场景里每条 `>>> 断言X … = true|false` 都必须为真
-  const asserts = [...log.matchAll(/>>> (断言\S+)[^\n]*? = (true|false)/g)];
+  // 正则不要求 `=` 前有空格：首轮就因为两行写成 `」= true` / `）= true`
+  // 被静默漏掉（日志里有 14 条，只解析到 12 条，还显示"全部为真"）。
+  const asserts = [...log.matchAll(/>>> (断言\S+)[^\n]*?= (true|false)/g)];
   const falseAsserts = asserts.filter((m) => m[2] === 'false');
+  const assertLines = (log.match(/>>> 断言/g) || []).length;
+  R.check(
+    `断言行全部被解析（${asserts.length}/${assertLines}）`,
+    assertLines > 0 && asserts.length === assertLines,
+    '有断言行没被正则匹配 —— 等于静默跳过',
+  );
   R.check(
     `场景内断言全部为真（共 ${asserts.length} 条）`,
     asserts.length > 0 && falseAsserts.length === 0,
@@ -220,6 +328,9 @@ async function main() {
   if (scenario === 'render-export') {
     console.log('\n[B] 落盘与清单断言');
     checkRenderOutput(log, R);
+  } else if (scenario === 'detail-1to1') {
+    console.log('\n[B] 细节缓存落盘断言');
+    checkDetailCache(R);
   }
 
   const sum = R.summary();

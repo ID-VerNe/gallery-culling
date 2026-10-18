@@ -34,6 +34,7 @@ if (import.meta.env.DEV) {
         jpg?: string;
         raw?: string;
         out?: string;
+        names?: string;
       };
       // 启动诊断：无论是否要跑场景，都上报一次，便于外部脚本确认链路通了。
       void fetch('/__e2e_log', {
@@ -45,6 +46,7 @@ if (import.meta.env.DEV) {
       await mod.runE2E(cfg.scenario, cfg.jpg || '', {
         raw: cfg.raw || '',
         out: cfg.out || '',
+        names: cfg.names || '',
       });
     } catch {
       // dev-only 便利功能，不可用时静默跳过，不影响应用本身

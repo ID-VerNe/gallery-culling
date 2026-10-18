@@ -12,6 +12,8 @@
  * 场景（由 `VITE_E2E_SCENARIO` 选择）：
  *   - `lumen-preset`：LUMEN RAW 预设 + 自动调色（用 `VITE_E2E_JPG`）
  *   - `render-export`：调色成片导出（`VITE_E2E_JPG` + `VITE_E2E_RAW` + `VITE_E2E_OUT`）
+ *   - `detail-1to1`：RAW-only 1:1 细节（`VITE_E2E_RAW` 必须是**真实 ARW**，
+ *     `VITE_E2E_NAMES` 给两张的 baseName）
  *
  * 触发：`npm run e2e:render` / `npm run e2e:preset`（见 `e2e/run-inapp.mjs`），
  * 或手动 `VITE_E2E_SCENARIO=<场景> … npm run tauri dev`。
@@ -556,12 +558,222 @@ async function scenarioLumenPreset(jpgFolder: string, el: () => string) {
   raw(`[${el()}] 场景 B 结束`);
 }
 
+/** 视口主图：单图模式下 `alt` 就是 baseName（缩略图不带 alt）。 */
+function viewportImg(baseName: string): HTMLImageElement | null {
+  return document.querySelector<HTMLImageElement>(`img[alt="${baseName}"]`);
+}
+
+/** 从 inline transform 读当前缩放倍数（没有 transform 视为 1）。 */
+function scaleOf(img: HTMLImageElement): number {
+  const m = /scale\(([\d.]+)\)/.exec(img.style.transform || '');
+  return m ? Number(m[1]) : 1;
+}
+
+/**
+ * 场景：RAW-only 1:1 细节（FR-05）。
+ *
+ * 为什么必须用**真实 ARW**：夹具里的 RAW 是「JPEG 字节 + .ARW 后缀」，
+ * `photo.export` 解不出图，1:1 永远走不到 —— 那样测出来的「通过」毫无意义。
+ *
+ * 四段，每段都在验一件 jsdom 测不到的事：
+ *   A. 首次 1:1：真耗时（≤10s 的出口标准）、换的是全分辨率图、`scale` 真的是
+ *      `naturalWidth / offsetWidth`（jsdom 不布局，只能给这两个值打桩，
+ *      打桩等于假设结论成立）；
+ *   B. 再按 Z 回适应窗口；
+ *   C. 切走再切回 → 重新请求走**缓存命中**（≤2s，而不是再等 6–8s）；
+ *   D. 另一张上取消 → 提示消失、仍停在预览；再按 Z 能重新认领那次在飞的结果
+ *      （不能静默失效，否则「取消」等于把 Z 键弄坏）。
+ */
+async function scenarioDetailOneToOne(
+  jpgFolder: string,
+  rawFolder: string,
+  names: string,
+  el: () => string,
+) {
+  if (!rawFolder) {
+    raw(`[${el()}] FATAL: 未提供 VITE_E2E_RAW（需要含真实 ARW 的目录）`);
+    return;
+  }
+  const [nameA, nameB] = names
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!nameA || !nameB) {
+    raw(`[${el()}] FATAL: 未提供 VITE_E2E_NAMES（两张 RAW 的 baseName，逗号分隔）`);
+    return;
+  }
+
+  await ensureLumenEnabled(el);
+  // 12 张夹具 JPG + 3 张真实 RAW-only = 15 组；给下限，不绑死夹具数量
+  if (!(await scanFolders(jpgFolder, rawFolder, 13, el))) return;
+
+  // ── A. 首次 1:1 ───────────────────────────────────────
+  raw('===== 场景 A：首次 1:1（真实 ARW）=====');
+  if (!(await clickCell(nameA, el))) return;
+
+  const imgA = await waitFor(
+    () => {
+      const img = viewportImg(nameA);
+      return img && img.complete && img.naturalWidth > 0 ? img : null;
+    },
+    90_000,
+    500,
+  );
+  raw(`[${el()}] 预览就绪 = ${!!imgA}（naturalWidth=${imgA?.naturalWidth ?? 0}）`);
+  if (!imgA) {
+    raw(`[${el()}] body 快照: ${document.body.innerText.replace(/\s+/g, ' ').slice(0, 400)}`);
+    return;
+  }
+  const previewWidth = imgA.naturalWidth;
+  raw(`[${el()}] >>> 断言D1 预览被硬顶在 1600 = ${previewWidth <= 1600}（${previewWidth}）`);
+  raw(`[${el()}] >>> 断言D2 此时还是预览不是细节 = ${!/_detail_lumen/.test(imgA.src)}`);
+
+  const tFirst = Date.now();
+  pressKey('z');
+  const banner = await waitFor(
+    () => (document.body.innerText.includes('正在生成 1:1 细节') ? true : null),
+    5_000,
+    100,
+  );
+  raw(`[${el()}] >>> 断言D3 渲染中有明确提示 = ${!!banner}`);
+
+  const detailA = await waitFor(
+    () => {
+      const img = viewportImg(nameA);
+      return img && /_detail_lumen/.test(img.src) && img.complete && img.naturalWidth > 2000
+        ? img
+        : null;
+    },
+    90_000,
+    200,
+  );
+  const firstMs = Date.now() - tFirst;
+  raw(
+    `[${el()}] 首次细节 ${firstMs}ms，naturalWidth=${detailA?.naturalWidth ?? 0}，src=${(detailA?.src || '').split('/').pop()}`,
+  );
+  raw(`[${el()}] >>> 断言D4 首次 ≤10s = ${!!detailA && firstMs <= 10_000}（${firstMs}ms）`);
+  raw(
+    `[${el()}] >>> 断言D5 换成了全分辨率图 = ${!!detailA && detailA.naturalWidth > previewWidth}`,
+  );
+  if (!detailA) {
+    raw(`[${el()}] body 快照: ${document.body.innerText.replace(/\s+/g, ' ').slice(0, 400)}`);
+    return;
+  }
+
+  // onLoad → zoom.oneToOne 在下一帧；留一拍再读
+  await sleep(600);
+  const shown = viewportImg(nameA);
+  if (shown) {
+    const expected = shown.naturalWidth / shown.offsetWidth;
+    const actual = scaleOf(shown);
+    raw(
+      `[${el()}] 1:1 读数 scale=${actual.toFixed(3)} 期望=${expected.toFixed(3)}（natural=${shown.naturalWidth} offset=${shown.offsetWidth}）`,
+    );
+    raw(`[${el()}] >>> 断言D6 缩放就是真 1:1 = ${Math.abs(actual - expected) < 0.05}`);
+  }
+
+  // ── B. 再按 Z 回适应窗口 ──────────────────────────────
+  raw('===== 场景 B：再按 Z 回适应窗口 =====');
+  pressKey('z');
+  await sleep(600);
+  const backScale = shown ? scaleOf(shown) : -1;
+  raw(
+    `[${el()}] >>> 断言D7 回到适应窗口 = ${Math.abs(backScale - 1) < 0.01}（${backScale.toFixed(3)}）`,
+  );
+
+  // ── C. 切走再切回 → 缓存命中 ──────────────────────────
+  raw('===== 场景 C：切走再切回（缓存命中）=====');
+  pressKey('ArrowRight');
+  await sleep(1500);
+  pressKey('ArrowLeft');
+  await sleep(1500);
+  const backToA = viewportImg(nameA);
+  raw(`[${el()}] 切回后已回到预览 = ${!!backToA && !/_detail_lumen/.test(backToA.src)}`);
+
+  const tCache = Date.now();
+  pressKey('z');
+  const cachedA = await waitFor(
+    () => {
+      const img = viewportImg(nameA);
+      return img && /_detail_lumen/.test(img.src) && img.complete ? img : null;
+    },
+    20_000,
+    100,
+  );
+  const cacheMs = Date.now() - tCache;
+  raw(`[${el()}] 缓存命中 ${cacheMs}ms`);
+  raw(`[${el()}] >>> 断言D8 缓存命中 ≤2s = ${!!cachedA && cacheMs <= 2_000}（${cacheMs}ms）`);
+
+  // ── D. 另一张上取消 → 再按 Z 重新认领 ─────────────────
+  raw('===== 场景 D：取消与重新认领 =====');
+  if (!(await clickCell(nameB, el))) return;
+  const imgB = await waitFor(
+    () => {
+      const img = viewportImg(nameB);
+      return img && img.complete && img.naturalWidth > 0 ? img : null;
+    },
+    90_000,
+    500,
+  );
+  raw(`[${el()}] B 预览就绪 = ${!!imgB}（naturalWidth=${imgB?.naturalWidth ?? 0}）`);
+  if (!imgB) return;
+
+  const tB = Date.now();
+  pressKey('z');
+  const bannerB = await waitFor(
+    () => (document.body.innerText.includes('正在生成 1:1 细节') ? true : null),
+    5_000,
+    100,
+  );
+  raw(`[${el()}] >>> 断言D9 B 上出现渲染提示 = ${!!bannerB}`);
+
+  // 只在「正在生成」那条横幅里找按钮 —— 设置弹窗等别处也有「取消」
+  const bannerNode = Array.from(document.querySelectorAll<HTMLElement>('[role="status"]')).find(
+    (n) => (n.textContent || '').includes('正在生成 1:1 细节'),
+  );
+  const cancelBtn = bannerNode?.querySelector<HTMLButtonElement>('button') ?? null;
+  raw(`[${el()}] 横幅上的「取消」按钮 = ${!!cancelBtn}`);
+  cancelBtn?.click();
+
+  const bannerGone = await waitFor(
+    () => (document.body.innerText.includes('正在生成 1:1 细节') ? null : true),
+    3_000,
+    100,
+  );
+  raw(`[${el()}] >>> 断言D10 取消后提示消失 = ${!!bannerGone}`);
+  raw(
+    `[${el()}] >>> 断言D11 取消不弹「渲染失败」 = ${!document.body.innerText.includes('细节渲染失败')}`,
+  );
+  raw(`[${el()}] >>> 断言D12 取消后仍停在预览 = ${!!imgB && !/_detail_lumen/.test(imgB.src)}`);
+
+  // 反悔：同一张再按 Z。后端那次渲染还在飞，必须「重新认领」而不是静默无效。
+  pressKey('z');
+  const reclaimedB = await waitFor(
+    () => {
+      const img = viewportImg(nameB);
+      return img && /_detail_lumen/.test(img.src) && img.complete ? img : null;
+    },
+    60_000,
+    200,
+  );
+  const reclaimMs = Date.now() - tB;
+  raw(`[${el()}] 取消后重新认领 ${reclaimMs}ms（含被取消的那段渲染）`);
+  raw(`[${el()}] >>> 断言D13 取消后再按 Z 仍能出图 = ${!!reclaimedB}`);
+  raw(
+    `[${el()}] >>> 断言D14 没有从头重渲（总耗时 < 12s） = ${!!reclaimedB && reclaimMs < 12_000}（${reclaimMs}ms）`,
+  );
+
+  raw(`[${el()}] 场景 D 结束`);
+}
+
 /** 场景的附加素材/输出目录（缺省为空串，场景自行判断是否必需）。 */
 export interface E2EScenarioOptions {
   /** RAW 原片目录；不填则只扫 JPG。 */
   raw?: string;
   /** 成片导出的目标目录（`render-export` 场景必填）。 */
   out?: string;
+  /** 逗号分隔的 baseName 清单（`detail-1to1` 用它锁定两张真实 RAW）。 */
+  names?: string;
 }
 
 /** 入口：由 main.tsx 在 dev 下从 Vite 的 `/__e2e_scenario` 取到配置后调用。 */
@@ -611,6 +823,8 @@ export async function runE2E(
       await scenarioLumenPreset(jpgFolder, el);
     } else if (scenario === 'render-export') {
       await scenarioRenderExport(jpgFolder, opts.raw || '', opts.out || '', el);
+    } else if (scenario === 'detail-1to1') {
+      await scenarioDetailOneToOne(jpgFolder, opts.raw || '', opts.names || '', el);
     } else {
       raw(`[${el()}] 未知场景: ${scenario}`);
     }

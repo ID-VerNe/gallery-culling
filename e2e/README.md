@@ -18,6 +18,7 @@ npm run e2e:unit      # 前端单测（vitest）
 npm run e2e:rust      # Rust 单测（cargo test --lib）
 npm run e2e:render    # 真窗口：调色成片导出
 npm run e2e:preset    # 真窗口：LUMEN 预设 + 自动调色
+npm run e2e:detail    # 真窗口：RAW-only 1:1 细节（需要真实 ARW，见下）
 npm run e2e           # 三档串起来（unit + rust + render），全绿才算过
 ```
 
@@ -27,9 +28,19 @@ npm run e2e           # 三档串起来（unit + rust + render），全绿才算
 node e2e/run-inapp.mjs --scenario=render-export
 node e2e/run-inapp.mjs --scenario=lumen-preset
 node e2e/run-inapp.mjs --scenario=render-export --timeout=600000
+
+# detail-1to1 必须用**真实 ARW**：夹具里的 RAW 是 JPEG 改后缀，photo.export
+# 解不出图，1:1 永远走不到 —— 用夹具跑出来的「通过」毫无意义。
+GALLERY_REAL_RAW_DIR='C:/.../gallery-realraw-20261018' npm run e2e:detail
+node e2e/run-inapp.mjs --scenario=detail-1to1 --raw-dir='C:/.../gallery-realraw-20261018'
 ```
 
-退出码：`0` 全绿 / `1` 有用例失败 / `2` 启动或超时。
+`GALLERY_REAL_RAW_DIR` 指向的目录要含 `rawonly/`（≥2 张真实 RAW）：
+`run-inapp.mjs` 取前两张的 baseName，清空细节缓存后交给场景，
+断言首次 ≤10s、`scale` 真的是 `naturalWidth / offsetWidth`、命中 ≤2s、
+取消后仍停在预览且再按 Z 能重新认领。
+
+退出码：`0` 全绿 / `1` 有用例失败 / `2` 启动或超时或缺少真实素材。
 
 ## 它自己管生命周期
 
