@@ -35,9 +35,19 @@ RAW-only 分组在放大到 5× 之后看到的仍是 1600px 的预览拉伸 —
 `<cache_root>/lumen/<key>_detail_lumen.jpg`，键前缀 `lumen-detail-v1`，
 不含 width（细节永远是原生尺寸）。
 
-淘汰只认 `*_detail_lumen.jpg`。**不能混在一起淘汰**：预览是每一次切换都发生的
-高频路径（1.1s / 0.2MB），被 LRU 顺手删掉就会让翻图重新变慢 —— 用一个 6–8 秒的
-操作把 1.1 秒的操作也拖下水，是净亏损。
+淘汰只认 `*_detail_lumen.jpg` 与 `*_detail_lumen.tmp.jpg`。**不能混在一起淘汰**：
+预览是每一次切换都发生的高频路径（1.1s / 0.2MB），被 LRU 顺手删掉就会让翻图
+重新变慢 —— 用一个 6–8 秒的操作把 1.1 秒的操作也拖下水，是净亏损。
+
+临时文件也算进预算：进程被杀 / 断电会留下 4–6MB 的 `*.tmp.jpg`，不认它就永远
+在预算之外（预算只统计它认识的文件）。淘汰只在渲染成功后调用、而渲染是单飞的，
+所以不会删到正在写的那份。
+
+**临时文件名必须保留 `.jpg` 结尾**（`<key>_detail_lumen.tmp.jpg`，不是
+`<key>_detail_lumen.jpg.tmp`）：`photo.export` 校验 `output` 的扩展名，
+`output must end in .jpg, .png, .tif or .dng`，`.jpg.tmp` 直接被拒。这条是
+**真机冒烟抓到的**（见「真机验证」）—— 预览那条路侥幸没踩到，因为
+`render.preview` 不校验扩展名，所以「写固定字节」的假渲染器一路绿。
 
 ### 3. 并发上限 1，用 `AtomicBool` 单飞而**不是** taskgate
 
@@ -143,14 +153,46 @@ JPG 分组直接 `zoom.oneToOne()`：原图本身就是全分辨率，`request()
   更让人困惑）。两条各有一例专锁。
 - 取消**不等于失败**：不置 `failed`，不弹「渲染失败」。忙（`E_BUSY`）同理。
 
+## 真机验证（2026-10-19）
+
+jsdom 与假渲染器只能证明「逻辑分支对」，证明不了三件事：**真能出图**、
+**真的是原生尺寸**、**`scale` 真的是 1:1**（jsdom 不布局，`naturalWidth` /
+`offsetWidth` 都得打桩 —— 打桩等于假设结论成立）。所以补了两层真机用例：
+
+| 层 | 入口 | 验什么 |
+|---|---|---|
+| Rust（`--ignored`） | `GALLERY_REAL_RAW_DIR=... cargo test --lib real_arw_detail_smoke -- --ignored --nocapture` | 真实 24MP ARW 走 `detail_impl` 全链路：首次耗时、产物原生尺寸、命中零渲染 |
+| 真窗口 | `npm run e2e:detail`（`e2e/run-inapp.mjs --scenario=detail-1to1`） | 键盘 → IPC → Rust → lumen-cli 全链路 + 真实布局下的 1:1 读数 + 取消/重新认领 |
+
+实测（`DSC04339.ARW`，4024×6024）：
+
+- Rust 层：首次 **6110 ms**，产物 **5224 KB / 4024×6024**，命中 **0 ms**（闭包里
+  `panic!` 就是「命中时不许再渲染」的证据）。
+- 真窗口：预览 `naturalWidth=1069`（竖幅，1600 是长边硬顶）；按 `Z` 后
+  **6392 ms** 换成 `4024` 宽；`scale=7.621` 与 `4024 / 528 = 7.621` 完全一致
+  （视口宽 528px 时真 1:1 就是 7.6×，旧的 `ZOOM_MAX=10` 差点不够）；
+  切走再切回后按 `Z`，**101 ms** 命中（含 100ms 轮询粒度）；
+  另一张上取消后提示 <100ms 消失、仍停在预览、不报失败；再按 `Z`
+  **6224 ms** 出图 —— 从第一次按键算起，说明是**重新认领**而不是从头重渲。
+
+**这层测试抓到的真 bug**：临时文件原名 `<key>_detail_lumen.jpg.tmp`，
+`photo.export` 直接拒绝（`output must end in .jpg, .png, .tif or .dng`）——
+也就是**生产路径上一张都渲染不出来**，而 30 个单测 + 21 个前端用例全绿。
+修复见决策 2；同时给 `ensure_detail_success_writes_tmp_then_renames` 补了
+「`output` 必须以 `.jpg` 结尾」的断言，让假渲染器也能守住这条外部契约。
+
+顺带修掉 e2e 编排器的一个**静默跳过**：断言行正则要求 `=` 前有空格，两行写成
+`」= true` / `）= true` 就没被解析 —— 日志里 14 条断言只检查了 12 条，还报
+「全部为真」。现在正则放宽，并新增一条「断言行全部被解析（14/14）」的元断言。
+
 ## 测试
 
-新增 74 例：
+新增 75 例（含 1 例 `--ignored` 的真机冒烟；另有真窗口场景 `detail-1to1` 的 14 条断言）：
 
 | 层 | 文件 | 数量 | 覆盖要点 |
 |---|---|---|---|
-| 缓存模块 | `lumen/detail.rs` | 19 | 键域/recipe/mtime、路径形状、参数无 `long_edge`、命中零渲染、tmp 原子落盘、失败不留残file、`plan_eviction`（旧→新、tie-break、边界、空）、真删只动细节后缀 |
-| 命令层 | `commands/lumencmds.rs` | 6 | 首次渲染→二次命中、E_BUSY 不进渲染、成功/失败都解锁、源缺失报错并解锁、失败不留可命中文件 |
+| 缓存模块 | `lumen/detail.rs` | 19 | 键域/recipe/mtime、路径形状、参数无 `long_edge`、命中零渲染、tmp 原子落盘且**保留 .jpg 结尾**、失败不留残file、`plan_eviction`（旧→新、tie-break、边界、空）、真删只动细节后缀（含 tmp） |
+| 命令层 | `commands/lumencmds.rs` | 7 | 首次渲染→二次命中、E_BUSY 不进渲染、成功/失败都解锁、源缺失报错并解锁、失败不留可命中文件、**真 ARW 冒烟（ignored）** |
 | 加载器 | `hooks/useLumenDetail.test.tsx` | 27 | 不点不发、JPG/不可用/无 RAW 零请求、幂等、同 tick 去重、串行排队、换图清空、切走后丢弃、切回仍认领、失败不自动重试、再按可重试、E_BUSY 单独一档、坏缓存回退、取消五例（立即结束等待 / 结果不采用 / 清排队位 / 马上再按重认领 / 取消后不是永久锁） |
 | 视口 | `components/PreviewViewport.test.tsx` | 7 | JPG 直接 1:1、再按回适应、RAW-only 就绪后切、失败保留预览并说明、坏缓存回退、渲染中提示、点取消提示消失且不报失败 |
 | 几何 | `utils/viewportZoom.test.ts` | 9 | 比例计算、除零/NaN → null、夹量程、窄窗口容量 |
