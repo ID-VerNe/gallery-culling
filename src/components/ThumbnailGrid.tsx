@@ -14,6 +14,7 @@ import {
 import { PhotoGroupInfo } from '../types';
 import { api } from '../services/api';
 import { useGridKeyboard } from '../hooks/useGridKeyboard';
+import { LABEL_DOT_CLASS, LABEL_NAMES, isColorLabel } from '../utils/labels';
 
 /**
  * 宫格子格子的高度（px）。
@@ -647,6 +648,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
     group.baseName,
     group.rating > 0 ? `${group.rating} 星` : '未打分',
     group.flag === 'pick' ? '已保留' : group.flag === 'reject' ? '已淘汰' : null,
+    isColorLabel(group.label) ? `色标${LABEL_NAMES[group.label]}` : null,
     group.raw ? '含 RAW' : null,
     group.hasXmp ? '含 XMP' : null,
     group.tone ? '已调色' : null,
@@ -728,29 +730,41 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
           </button>
         )}
 
-        {/* Top-Left: Pinned / Pick / Reject badge */}
-        {isPinned ? (
-          <div className="absolute top-1 left-1 bg-white text-black rounded px-1 py-[2px] flex items-center gap-0.5 text-[9px] font-medium">
-            <Pin className="w-2.5 h-2.5 fill-black" aria-hidden="true" />
-            <span>基准</span>
-          </div>
-        ) : group.flag === 'pick' ? (
-          <div
-            className="absolute top-1 left-1 bg-emerald-500/15 border border-emerald-500/30 text-emerald-500 rounded p-0.5"
-            aria-label="已标记保留"
-            role="img"
-          >
-            <Check className="w-2.5 h-2.5 stroke-[3]" aria-hidden="true" />
-          </div>
-        ) : group.flag === 'reject' ? (
-          <div
-            className="absolute top-1 left-1 bg-rose-500/15 border border-rose-500/30 text-rose-500 rounded p-0.5"
-            aria-label="已标记淘汰"
-            role="img"
-          >
-            <X className="w-2.5 h-2.5 stroke-[3]" aria-hidden="true" />
-          </div>
-        ) : null}
+        {/* Top-Left: Pinned / Pick / Reject badge + 色标色点 */}
+        <div className="absolute top-1 left-1 flex items-center gap-1">
+          {isPinned ? (
+            <div className="bg-white text-black rounded px-1 py-[2px] flex items-center gap-0.5 text-[9px] font-medium">
+              <Pin className="w-2.5 h-2.5 fill-black" aria-hidden="true" />
+              <span>基准</span>
+            </div>
+          ) : group.flag === 'pick' ? (
+            <div
+              className="bg-emerald-500/15 border border-emerald-500/30 text-emerald-500 rounded p-0.5"
+              aria-label="已标记保留"
+              role="img"
+            >
+              <Check className="w-2.5 h-2.5 stroke-[3]" aria-hidden="true" />
+            </div>
+          ) : group.flag === 'reject' ? (
+            <div
+              className="bg-rose-500/15 border border-rose-500/30 text-rose-500 rounded p-0.5"
+              aria-label="已标记淘汰"
+              role="img"
+            >
+              <X className="w-2.5 h-2.5 stroke-[3]" aria-hidden="true" />
+            </div>
+          ) : null}
+
+          {/* 色标色点：与旗标角标并排，而不是替换它 —— 红标和淘汰是两回事 */}
+          {isColorLabel(group.label) && (
+            <span
+              className={`w-2.5 h-2.5 rounded-full ring-1 ring-black/50 shadow-sm ${LABEL_DOT_CLASS[group.label]}`}
+              role="img"
+              aria-label={`色标：${LABEL_NAMES[group.label]}`}
+              title={`色标：${LABEL_NAMES[group.label]}`}
+            />
+          )}
+        </div>
 
         {/* Bottom-Right Rating */}
         {group.rating > 0 && (

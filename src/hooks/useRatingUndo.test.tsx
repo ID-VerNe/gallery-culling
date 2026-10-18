@@ -13,6 +13,7 @@ const snap = (over: Partial<RatingSnapshot> = {}): RatingSnapshot => ({
   path: 'D:/shoot/IMG_0001.jpg',
   rating: 3,
   flag: 'pick',
+  label: '',
   ...over,
 });
 

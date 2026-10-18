@@ -10,13 +10,19 @@ import { describe, expect, it } from 'vitest';
 import { ALL_FILTER_MODES, countByFilter, matchesFilter } from './filterMatch';
 import type { CullFlag, FilterMode, PhotoGroupInfo } from '../types';
 
-function group(id: string, flag: CullFlag, rating: number): PhotoGroupInfo {
+function group(
+  id: string,
+  flag: CullFlag,
+  rating: number,
+  label = '',
+): PhotoGroupInfo {
   return {
     id,
     baseName: id,
     status: 'JPG_ONLY',
     rating,
     flag,
+    label,
     hasXmp: false,
   };
 }
@@ -42,6 +48,12 @@ const EXPECTED: Record<FilterMode, number> = {
   star3: 4, // a, d, f, g
   star4: 2, // d, g
   star5: 1, // d
+  // 色标档位：本 fixture 没有色标，全部为 0
+  'label-red': 0,
+  'label-yellow': 0,
+  'label-green': 0,
+  'label-blue': 0,
+  'label-purple': 0,
 };
 
 describe('matchesFilter —— 逐档口径', () => {
@@ -71,6 +83,37 @@ describe('matchesFilter —— 逐档口径', () => {
     // 3 星 / 4 星都不算 5 星精选
     expect(matchesFilter(group('y', 'none', 3), 'star5')).toBe(false);
     expect(matchesFilter(group('z', 'none', 4), 'star5')).toBe(false);
+  });
+
+  it('色标档位只认那一个色名，且与旗标/星级正交', () => {
+    // 红标 + 淘汰 + 5 星：三个维度互不影响
+    const red = group('r', 'reject', 5, 'Red');
+    expect(matchesFilter(red, 'label-red')).toBe(true);
+    expect(matchesFilter(red, 'label-blue')).toBe(false);
+    expect(matchesFilter(red, 'reject')).toBe(true);
+    expect(matchesFilter(red, 'star5')).toBe(true);
+    // 无色标不命中任何色标档
+    const plain = group('p', 'none', 0);
+    expect(matchesFilter(plain, 'label-red')).toBe(false);
+    // 大小写不匹配就是没命中（XMP 里是规范英文名，不做模糊匹配）
+    expect(matchesFilter(group('q', 'none', 0, 'red'), 'label-red')).toBe(false);
+  });
+});
+
+describe('countByFilter —— 色标计数', () => {
+  it('各色标计数与谓词一致', () => {
+    const groups = [
+      group('a', 'none', 0, 'Red'),
+      group('b', 'pick', 3, 'Red'),
+      group('c', 'none', 0, 'Blue'),
+      group('d', 'none', 0),
+    ];
+    const counts = countByFilter(groups);
+    expect(counts['label-red']).toBe(2);
+    expect(counts['label-blue']).toBe(1);
+    expect(counts['label-green']).toBe(0);
+    expect(counts['label-purple']).toBe(0);
+    expect(counts.all).toBe(4);
   });
 });
 

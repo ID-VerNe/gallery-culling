@@ -75,6 +75,9 @@ pub struct PhotoGroupInfo {
     pub status: PhotoGroupStatus,
     pub rating: u8,   // 0..5 stars
     pub flag: String, // "none", "pick", "reject"
+    /// 色标：`""` 表示无色标，其余为 Red / Yellow / Green / Blue / Purple。
+    /// 唯一真值是 XMP 的 `xmp:Label`（Lightroom 同一字段，双向可见）。
+    pub label: String,
     pub has_xmp: bool,
     pub exif: Option<ExifData>,
     pub thumbnail_path: Option<String>,

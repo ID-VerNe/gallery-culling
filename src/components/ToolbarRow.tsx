@@ -101,7 +101,7 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
           value={filterMode}
           onChange={(e) => onFilterChange(e.target.value as FilterMode)}
           aria-label="照片筛选过滤"
-          title="按保留 / 淘汰 / 星级筛选照片"
+          title="按保留 / 淘汰 / 星级 / 色标筛选照片"
           className="focus-ring bg-transparent border-none outline-none text-white cursor-pointer text-xs max-w-[12rem]"
         >
           {FILTER_OPTIONS.map(({ mode, label }) => {

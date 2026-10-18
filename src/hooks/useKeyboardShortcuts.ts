@@ -1,10 +1,16 @@
 import { useEffect, useRef } from 'react';
+import type { ColorLabel } from '../types';
 
 interface KeyboardShortcutsProps {
   onPrev: () => void;
   onNext: () => void;
   onRate: (rating: number) => void;
   onFlag: (flag: 'pick' | 'reject' | 'none') => void;
+  /**
+   * 五色色标：`6`/`7`/`8`/`9` = 红/黄/绿/蓝，`Shift+6` = 紫。
+   * 重复按同一个色标由宿主实现为"取消"。
+   */
+  onLabel?: (label: ColorLabel) => void;
   /**
    * B2：清除评级与旗标（绑定 `0` / `U`）。
    *
@@ -49,6 +55,7 @@ export function useKeyboardShortcuts({
   onNext,
   onRate,
   onFlag,
+  onLabel,
   onClear,
   onOpenExternal,
   onToggleCompare,
@@ -189,6 +196,19 @@ export function useKeyboardShortcuts({
       // 6 组合键让路（Ctrl+X/Ctrl+P 等不再误触评级/旗标并写盘）；Ctrl/Cmd+F 显式豁免。
       if ((e.ctrlKey || e.metaKey || e.altKey) && e.key !== 'f') return;
 
+      // 6.5 紫色色标：Shift+6。
+      //
+      // 必须按**物理键位**判断：`Shift+6` 在美式布局下 `e.key` 是 `^`，中文输入法
+      // 或其他布局还可能给出别的字符；只有 `e.code` 稳定是 `Digit6`。
+      // 位置在组合键让路之后：Ctrl/Alt+Shift+6 不抢。
+      if (e.shiftKey && e.code === 'Digit6') {
+        if (onLabel) {
+          e.preventDefault();
+          onLabel('Purple');
+        }
+        return;
+      }
+
       // Focus the grid search field. `/` is the convention; Ctrl/Cmd+F also
       // works because the OS find bar is useless inside a photo grid.
       if (
@@ -264,6 +284,25 @@ export function useKeyboardShortcuts({
         case 'X':
           e.preventDefault();
           onFlag('reject');
+          break;
+
+        // 五色色标：6/7/8/9 = 红/黄/绿/蓝（紫色走上面的 Shift+6）。
+        // 与 1..5 星级分开：数字键上半排是星级，6..9 是色标，语义不重叠。
+        case '6':
+          e.preventDefault();
+          onLabel?.('Red');
+          break;
+        case '7':
+          e.preventDefault();
+          onLabel?.('Yellow');
+          break;
+        case '8':
+          e.preventDefault();
+          onLabel?.('Green');
+          break;
+        case '9':
+          e.preventDefault();
+          onLabel?.('Blue');
           break;
 
         // Open in Photoshop / External app
@@ -401,6 +440,7 @@ export function useKeyboardShortcuts({
     onNext,
     onRate,
     onFlag,
+    onLabel,
     onClear,
     onOpenExternal,
     onToggleCompare,

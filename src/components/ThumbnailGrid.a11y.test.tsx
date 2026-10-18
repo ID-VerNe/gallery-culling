@@ -19,7 +19,7 @@ function group(id: string): PhotoGroupInfo {
     status: 'RAW_ONLY',
     rating: 0,
     flag: 'none',
-    hasXmp: false,
+    label: '', hasXmp: false,
   };
 }
 

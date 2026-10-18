@@ -2,7 +2,8 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { api } from '../services/api';
 import { useToast } from '../components/Toast';
 import { groupPath } from '../utils/groupPath';
-import type { CullFlag, PhotoGroupInfo } from '../types';
+import { LABEL_NAMES } from '../utils/labels';
+import type { ColorLabel, CullFlag, PhotoGroupInfo } from '../types';
 
 /** 批量确认框里的旗标叫法，与宫格/底栏保持一致。 */
 const FLAG_LABELS: Record<CullFlag, string> = {
@@ -14,6 +15,7 @@ const FLAG_LABELS: Record<CullFlag, string> = {
 export type BatchAction =
   | { kind: 'rate'; value: number }
   | { kind: 'flag'; value: CullFlag }
+  | { kind: 'label'; value: ColorLabel }
   | { kind: 'clear' };
 
 /**
@@ -37,6 +39,7 @@ export function useBatchOps(opts: {
     path: string;
     rating: number;
     flag: CullFlag;
+    label: string;
   }) => void;
   /** 待确认的批量操作。state 归 useRatingFlagSync 持有（它是唯一入口）。 */
   pendingBatch: BatchAction | null;
@@ -91,18 +94,33 @@ export function useBatchOps(opts: {
             : action.kind === 'clear'
               ? 'none'
               : g.flag;
+        // 批量色标是"设为"而不是"切换"：20 张里有 3 张已是红标时，
+        // 逐张切换会让结果取决于各自原值，用户无法预期。
+        const nextLabel = action.kind === 'label' ? action.value : g.label;
 
         rememberRating({
           id: g.id,
           path: targetPath,
           rating: g.rating,
           flag: g.flag,
+          label: g.label,
         });
-        onGroupPatched(g.id, { rating: nextRating, flag: nextFlag });
+        onGroupPatched(g.id, {
+          rating: nextRating,
+          flag: nextFlag,
+          label: nextLabel,
+        });
 
         try {
           // 每张只改一次，没有「后续改动」需要等：关掉合并，直接落盘。
-          await api.updateRatingFlag(targetPath, nextRating, nextFlag, true, false);
+          await api.updateRatingFlag(
+            targetPath,
+            nextRating,
+            nextFlag,
+            true,
+            false,
+            nextLabel,
+          );
           markSynced(g.id);
           ok++;
         } catch (err) {
@@ -123,7 +141,7 @@ export function useBatchOps(opts: {
       } else if (cancelled) {
         toast.info(`已停止：${ok} 张已写入 XMP。`);
       } else {
-        toast.success(`已批量写入 ${ok} 张的星级/标记到 XMP 侧边栏。`);
+        toast.success(`已批量写入 ${ok} 张的星级/标记/色标到 XMP 侧边栏。`);
       }
     },
     [filteredGroups, selectedIds, onGroupPatched, markSynced, markUnsynced, rememberRating, toast],
@@ -137,6 +155,9 @@ export function useBatchOps(opts: {
     }
     if (pendingBatch.kind === 'flag') {
       return `将 ${count} 张照片标记为「${FLAG_LABELS[pendingBatch.value]}」`;
+    }
+    if (pendingBatch.kind === 'label') {
+      return `将 ${count} 张照片的色标设为「${LABEL_NAMES[pendingBatch.value]}」`;
     }
     return `清除 ${count} 张照片的星级与旗标`;
   }, [pendingBatch, selectedIds]);

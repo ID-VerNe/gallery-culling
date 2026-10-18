@@ -198,8 +198,35 @@ const FOREIGN_NS_PREFIXES: [&str; 9] = [
     "xmlns:xmpMM=",
 ];
 
+/// Lightroom 约定的五色色标。大小写不敏感匹配，写出的永远是这里的大小写。
+pub const LABEL_VALUES: [&str; 5] = ["Red", "Yellow", "Green", "Blue", "Purple"];
+
+/// 校验色标取值，返回规范写法。空串表示"无/清除"。
+///
+/// 只认 Lightroom 的五个英文色名：写别的值 Lightroom 读不出来，等于把用户的
+/// 标记藏进一个没人认识的字符串里。前端快捷键与本函数共用这份清单。
+pub fn validate_label(label: &str) -> Result<&'static str, String> {
+    let trimmed = label.trim();
+    if trimmed.is_empty() {
+        return Ok("");
+    }
+    LABEL_VALUES
+        .iter()
+        .find(|v| v.eq_ignore_ascii_case(trimmed))
+        .copied()
+        .ok_or_else(|| {
+            format!(
+                "未知的色标值: {}（可选 Red / Yellow / Green / Blue / Purple，或空串清除）",
+                trimmed
+            )
+        })
+}
+
 /// 构造本方 `rdf:Description` 块文本（与历史写出的字节完全一致）。
-fn build_our_description(meta: &XmpMetadata) -> String {
+///
+/// `write_label = false` 用于「本方块之外已经有一份 `xmp:Label`」的情形：
+/// `xmp:Label` 是单值属性，两边各写一份等于同一属性两个值，读谁取决于实现细节。
+fn build_our_description(meta: &XmpMetadata, write_label: bool) -> String {
     // reject 用 -1（Lightroom 惯例）；LUMEN RAW 与 Lightroom 都按此读回
     let rating: i32 = if meta.rejected {
         -1
@@ -207,7 +234,7 @@ fn build_our_description(meta: &XmpMetadata) -> String {
         meta.rating.min(5) as i32
     };
 
-    let label_tag = if !meta.label.is_empty() {
+    let label_tag = if write_label && !meta.label.is_empty() {
         format!("      <xmp:Label>{}</xmp:Label>\n", meta.label)
     } else {
         String::new()
@@ -299,7 +326,7 @@ fn build_our_description(meta: &XmpMetadata) -> String {
 }
 
 /// 无旧文件/不可合并时的完整模板（与历史输出逐字节一致）。
-fn build_fresh_document(meta: &XmpMetadata) -> String {
+fn build_fresh_document(meta: &XmpMetadata, write_label: bool) -> String {
     format!(
         "<?xpacket begin=\"\u{feff}\" id=\"{}\"?>\n\
         <x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"GalleryCulling\">\n\
@@ -309,8 +336,130 @@ fn build_fresh_document(meta: &XmpMetadata) -> String {
         </x:xmpmeta>\n\
         <?xpacket end=\"w\"?>\n",
         XPACKET_UUID,
-        build_our_description(meta)
+        build_our_description(meta, write_label)
     )
+}
+
+/// 判断一个 `rdf:Description` 块是否本方写出（判定规则见 `splice_our_block`）。
+fn is_our_description(desc: &str) -> bool {
+    let ns_at = |i: usize| -> Option<usize> {
+        let (prefix, uri) = OURS_NAMESPACES[i];
+        desc.find(&format!("xmlns:{}=\"{}\"", prefix, uri))
+    };
+    let xmp = ns_at(0);
+    let aux = ns_at(1);
+    let exif = ns_at(2);
+    let crs = ns_at(3);
+
+    match (xmp, aux, exif, crs) {
+        // 当前模板：xmp → aux → exif → crs
+        (Some(a), Some(b), Some(c), Some(d)) => a < b && b < c && c < d,
+        // 旧模板（crs 尚未引入）：xmp → aux → exif，且不得夹带第三方命名空间
+        (Some(a), Some(b), Some(c), None) => {
+            a < b && b < c && !FOREIGN_NS_PREFIXES.iter().any(|p| desc.contains(p))
+        }
+        // 命名空间齐全但顺序不符，或缺少中间某个 → 一律当第三方，追加而非替换
+        _ => false,
+    }
+}
+
+/// 本方 `rdf:Description` 块的字节区间。找不到 → None。
+fn find_our_block_range(existing: &str) -> Option<(usize, usize)> {
+    let mut cursor = 0usize;
+    while let Some(rel) = existing[cursor..].find("<rdf:Description") {
+        let start = cursor + rel;
+        let close_rel = existing[start..].find("</rdf:Description>")?;
+        let end = start + close_rel + "</rdf:Description>".len();
+        if is_our_description(&existing[start..end]) {
+            return Some((start, end));
+        }
+        cursor = end;
+    }
+    None
+}
+
+/// `xmp:Label` 的一次出现。既支持元素形式，也支持属性形式。
+#[derive(Debug, Clone, Copy)]
+struct LabelOccurrence {
+    /// 整个元素/属性的区间（清除时删这一段）。
+    start: usize,
+    end: usize,
+    /// 值本身的区间（改值时只换这一段）。
+    value_start: usize,
+    value_end: usize,
+}
+
+/// 找出文档里所有的 `xmp:Label` 出现位置。
+///
+/// 刻意不做完整 XML 解析：本模块的读写都基于字符串拼接，引入解析器会让「写出的
+/// 字节与历史一致」这条不变量无法保证（见 `xmlns_declarations` 的注释）。
+fn find_label_occurrences(doc: &str) -> Vec<LabelOccurrence> {
+    let mut out = Vec::new();
+    const OPEN: &str = "<xmp:Label>";
+    const CLOSE: &str = "</xmp:Label>";
+    const ATTR: &str = "xmp:Label=\"";
+
+    // 元素形式
+    let mut cursor = 0usize;
+    while let Some(rel) = doc[cursor..].find(OPEN) {
+        let start = cursor + rel;
+        let value_start = start + OPEN.len();
+        let Some(close_rel) = doc[value_start..].find(CLOSE) else {
+            break;
+        };
+        let value_end = value_start + close_rel;
+        out.push(LabelOccurrence {
+            start,
+            end: value_end + CLOSE.len(),
+            value_start,
+            value_end,
+        });
+        cursor = value_end + CLOSE.len();
+    }
+
+    // 属性形式（`xmp:Label="Red"`）：`<xmp:Label>` 不含 `="`，两种形式不会互相误匹配
+    let mut cursor = 0usize;
+    while let Some(rel) = doc[cursor..].find(ATTR) {
+        let attr_start = cursor + rel;
+        let value_start = attr_start + ATTR.len();
+        let Some(close_rel) = doc[value_start..].find('"') else {
+            break;
+        };
+        let value_end = value_start + close_rel;
+        out.push(LabelOccurrence {
+            start: attr_start,
+            end: value_end + 1,
+            value_start,
+            value_end,
+        });
+        cursor = value_end + 1;
+    }
+
+    out.sort_by_key(|o| o.start);
+    out
+}
+
+/// 本方方块之外的第一处 `xmp:Label`。
+fn label_outside(doc: &str, our: Option<(usize, usize)>) -> Option<LabelOccurrence> {
+    find_label_occurrences(doc)
+        .into_iter()
+        .find(|o| match our {
+            Some((start, end)) => o.start < start || o.end > end,
+            None => true,
+        })
+}
+
+/// 把某一处色标改成 `value`；`value` 为空则整段删除。
+fn patch_label(doc: &str, occ: &LabelOccurrence, value: &str) -> String {
+    let mut out = String::with_capacity(doc.len() + value.len());
+    out.push_str(&doc[..occ.start]);
+    if !value.is_empty() {
+        out.push_str(&doc[occ.start..occ.value_start]);
+        out.push_str(value);
+        out.push_str(&doc[occ.value_end..occ.end]);
+    }
+    out.push_str(&doc[occ.end..]);
+    out
 }
 
 /// 在既有文档里原地替换本方 `rdf:Description` 块；找不到本方块则 None。
@@ -319,50 +468,13 @@ fn build_fresh_document(meta: &XmpMetadata) -> String {
 /// 那时必须**不动**它的块。
 fn splice_our_block(existing: &str, our_block: &str) -> Option<String> {
     // 文档里通常有多个 rdf:Description（Lightroom 会写好几个），
-    // 必须逐个判断归属，**只**替换本方那一个。
-    let mut cursor = 0usize;
-    while let Some(rel) = existing[cursor..].find("<rdf:Description") {
-        let start = cursor + rel;
-        let close_rel = existing[start..].find("</rdf:Description>")?;
-        let end = start + close_rel + "</rdf:Description>".len();
-        let desc = &existing[start..end];
-
-        // 归属判定基于 xmlns 声明（而非标签名）——第三方也可能写 `xmp:Rating`，
-        // 那时必须**不动**它的块。
-        //
-        // 本方模板固定按 xmp → aux → exif → crs 顺序声明。**只看集合是不够的**：
-        // Lightroom 的主块也常同时声明 xmp/exif/crs/aux，那样会把它的 develop 数据
-        // 一起吞掉。按顺序判定才安全；认不出来就 append（对第三方数据零风险）。
-        let ns_at = |i: usize| -> Option<usize> {
-            let (prefix, uri) = OURS_NAMESPACES[i];
-            desc.find(&format!("xmlns:{}=\"{}\"", prefix, uri))
-        };
-        let xmp = ns_at(0);
-        let aux = ns_at(1);
-        let exif = ns_at(2);
-        let crs = ns_at(3);
-
-        let is_ours = match (xmp, aux, exif, crs) {
-            // 当前模板：xmp → aux → exif → crs
-            (Some(a), Some(b), Some(c), Some(d)) => a < b && b < c && c < d,
-            // 旧模板（crs 尚未引入）：xmp → aux → exif，且不得夹带第三方命名空间
-            (Some(a), Some(b), Some(c), None) => {
-                a < b && b < c && !FOREIGN_NS_PREFIXES.iter().any(|p| desc.contains(p))
-            }
-            // 命名空间齐全但顺序不符，或缺少中间某个 → 一律当第三方，追加而非替换
-            _ => false,
-        };
-
-        if is_ours {
-            let mut out = String::with_capacity(existing.len() + our_block.len());
-            out.push_str(&existing[..start]);
-            out.push_str(our_block);
-            out.push_str(&existing[end..]);
-            return Some(out);
-        }
-        cursor = end;
-    }
-    None
+    // 必须逐个判断归属，**只**替换本方那一个。归属规则见 `is_our_description`。
+    let (start, end) = find_our_block_range(existing)?;
+    let mut out = String::with_capacity(existing.len() + our_block.len());
+    out.push_str(&existing[..start]);
+    out.push_str(our_block);
+    out.push_str(&existing[end..]);
+    Some(out)
 }
 
 
@@ -373,16 +485,34 @@ fn splice_our_block(existing: &str, our_block: &str) -> Option<String> {
 ///   原文档逐字节保留；
 /// - 旧文件含本方块 → 原地替换该块，其余字节不变。
 pub fn write_xmp_preserving(image_path: &Path, meta: &XmpMetadata) -> Result<PathBuf, String> {
-    let xmp_path = get_xmp_path(image_path);
-    let our_block = build_our_description(meta);
+    let existing = fs::read_to_string(get_xmp_path(image_path)).ok();
+    write_meta_with_existing(image_path, meta, existing.as_deref())
+}
 
-    let merged = match fs::read_to_string(&xmp_path) {
-        Ok(existing) => match splice_our_block(&existing, &our_block) {
+/// `write_xmp_preserving` 的实际实现：允许调用方传入**已读出的文档**。
+///
+/// 色标写入需要先就地改掉外部方块里的那唯一一份，再拼本方块 —— 拆成"先写盘、
+/// 再读回、再写盘"会多一次落盘，也会在中间态留下两个色标。
+fn write_meta_with_existing(
+    image_path: &Path,
+    meta: &XmpMetadata,
+    existing: Option<&str>,
+) -> Result<PathBuf, String> {
+    let xmp_path = get_xmp_path(image_path);
+    // `xmp:Label` 是单值属性：本方块之外已经有一份时，本方块不再写。
+    // 否则同一文件里出现两个色标，Lightroom / Bridge 取哪个取决于实现细节。
+    let write_label = existing
+        .map(|doc| label_outside(doc, find_our_block_range(doc)).is_none())
+        .unwrap_or(true);
+    let our_block = build_our_description(meta, write_label);
+
+    let merged = match existing {
+        Some(doc) => match splice_our_block(doc, &our_block) {
             Some(spliced) => spliced,
             // 畸形文档：拒写并把原因往上传，绝不降级成"重建空模板"。
-            None => append_our_block(&existing, &our_block)?,
+            None => append_our_block(doc, &our_block)?,
         },
-        Err(_) => build_fresh_document(meta),
+        None => build_fresh_document(meta, write_label),
     };
 
     // 原子写：写同目录临时文件 → rename 覆盖最终名。
@@ -432,32 +562,38 @@ fn append_our_block(existing: &str, our_block: &str) -> Result<String, String> {
 /// 中途提前返回另走分支），套进闭包只会把控制流藏起来。
 fn read_sidecar(image_path: &Path) -> (PathBuf, XmpMetadata) {
     let xmp_path = get_xmp_path(image_path);
-    let mut meta = read_xmp_full(&xmp_path).unwrap_or_default();
-    // 本方块只可能"拥有" `Green` —— 那是旧版本编码 pick 的标记。
+    let meta = read_xmp_full(&xmp_path).unwrap_or_default();
+    // 这里**不再**清空"非 Green"的色标。
     //
-    // 其它色标（Blue/Red/Purple/Yellow）一律来自 Lightroom 自己的方块：`read_xmp_full`
-    // 读的是整份文档，原样写进本方块就会在同一文件里造出**两个** `xmp:Label`
-    // （XMP 简单属性只允许一个值）。清掉不丢数据 —— 真正的色标还在对方方块里。
-    //
-    // `Green` 保留是必须的：旧文件里的 pick 只靠它存在，若在改调色/镜头时把它
-    // 抹掉，用户没动过旗标却丢了旗标。
-    if meta.label != "Green" {
-        meta.label = String::new();
-    }
+    // 旧实现清掉它们，是因为 `read_xmp_full` 读的是整份文档：把 Lightroom 方块里
+    // 的 `Blue` 原样写进本方块，会在同一文件里造出两个 `xmp:Label`（单值属性）。
+    // 现在去重落在写入层（`write_meta_with_existing`：本方块外已有色标时本方块
+    // 不写），所以读侧可以如实返回文档里那唯一一份色标，不必靠"猜归属"。
     (xmp_path, meta)
 }
 
-/// 写评级与淘汰状态到 XMP 侧边栏。
+/// 写评级、淘汰与色标到 XMP 侧边栏。
 ///
-/// **不碰 `xmp:Label`**：它是 Lightroom 的色标字段（红/黄/绿/蓝/紫）。旗标自
-/// 2026-10 起由 `cullstore`（每文件夹 `.gallerycull.json`）独立存储，理由见
-/// `.plan/adr-001-cull-flag-store.md`。`flag` 参数只用来判断淘汰。
+/// 旗标自 2026-10 起由 `cullstore`（每文件夹 `.gallerycull.json`）独立存储，
+/// 理由见 `.plan/adr-001-cull-flag-store.md`。`flag` 参数只用来判断淘汰。
 ///
-/// 旧版本把 pick 写成 `Label=Green`、把非 pick 写成空串 —— 前者让 Lightroom
-/// 里的绿标变成"留用"，后者直接删掉用户的色标。升级后文件里残留的 Green
-/// 必须**原样留着**：本函数无权替用户判断那是旧旗标还是真的绿标。
-pub fn write_xmp(image_path: &Path, rating: u8, flag: &str) -> Result<PathBuf, String> {
-    let (_xmp_path, mut meta) = read_sidecar(image_path);
+/// `label` 三态：
+/// - `None` —— 不动色标（评级/旗标写入走这条）；
+/// - `Some("")` —— 清除色标（两份都不留）；
+/// - `Some("Red")` —— 设为该色标（就地改那唯一一份）。
+pub fn write_xmp(
+    image_path: &Path,
+    rating: u8,
+    flag: &str,
+    label: Option<&str>,
+) -> Result<PathBuf, String> {
+    // 先验参再读盘：非法色标不该留下任何副作用（包括"读到一半"的临时文件）。
+    let label = match label {
+        Some(l) => Some(validate_label(l)?),
+        None => None,
+    };
+
+    let (xmp_path, mut meta) = read_sidecar(image_path);
     meta.rating = rating;
     if flag == "reject" {
         // 复用上面已读出的 meta，**不要**另造空壳：reject 只是把评级归零，
@@ -465,19 +601,33 @@ pub fn write_xmp(image_path: &Path, rating: u8, flag: &str) -> Result<PathBuf, S
         // write_xmp_rating_minus_one（XmpMetadata::default()），每次 reject
         // 都会静默清空用户已写好的镜头与调色参数，且不可恢复。
         meta.rating = 0;
-        // 不清 `label`：淘汰只该表达为 `Rating=-1`。删色标属于越权。
         meta.rejected = true;
-        return write_xmp_preserving(image_path, &meta);
+    } else {
+        // 非 reject 分支必须显式清掉 `rejected`。
+        //
+        // `read_xmp_full` 见到 Rating=-1 会把 `rejected` 置真，而
+        // `build_our_description` 只看 `rejected`、不看 `rating`：
+        // 不清就会把 -1 原样写回去，**淘汰状态一旦落盘就再也解除不掉**
+        // （界面显示 0 星，磁盘仍是 -1，Lightroom 里也仍是"已淘汰"）。
+        // 调用方已经用 `flag` 显式声明了旗标意图，这里以它为准。
+        meta.rejected = false;
     }
-    // 非 reject 分支必须显式清掉 `rejected`。
-    //
-    // `read_xmp_full` 见到 Rating=-1 会把 `rejected` 置真，而
-    // `build_our_description` 只看 `rejected`、不看 `rating`：
-    // 不清就会把 -1 原样写回去，**淘汰状态一旦落盘就再也解除不掉**
-    // （界面显示 0 星，磁盘仍是 -1，Lightroom 里也仍是"已淘汰"）。
-    // 调用方已经用 `flag` 显式声明了旗标意图，这里以它为准。
-    meta.rejected = false;
-    write_xmp_preserving(image_path, &meta)
+
+    let existing = fs::read_to_string(&xmp_path).ok();
+    let Some(value) = label else {
+        // 不动色标：写入层会自动去重（外部已有一份时本方块不再写）。
+        return write_meta_with_existing(image_path, &meta, existing.as_deref());
+    };
+
+    // 设值/清除：文档里若已有色标（通常在 Lightroom 自己的方块里），就地改那一份。
+    // 本方块稍后会被整体重建，它原来那份自然消失，不会留下第二份。
+    let patched = existing.as_ref().and_then(|doc| {
+        let our = find_our_block_range(doc);
+        label_outside(doc, our).map(|occ| patch_label(doc, &occ, value))
+    });
+    meta.label = value.to_string();
+    let doc = patched.or(existing);
+    write_meta_with_existing(image_path, &meta, doc.as_deref())
 }
 
 /// Update tone adjustments in XMP sidecar, preserving rating, label, and lens info
@@ -582,7 +732,7 @@ mod tests {
         write_xmp_preserving(&img, &seeded).expect("预置侧边栏应成功");
 
         // 对它执行 reject —— 修复前 lens/tone 会被清空
-        write_xmp(&img, 0, "reject").expect("reject 应成功");
+        write_xmp(&img, 0, "reject", None).expect("reject 应成功");
 
         let after = read_xmp_full(&xmp).expect("侧边栏应仍可读");
         assert!(after.rejected, "reject 状态未落盘");
@@ -736,7 +886,7 @@ mod tests {
         fs::write(&xmp, lightroom_sidecar()).unwrap();
 
         // 改星级
-        write_xmp(&img, 1, "none").expect("写应成功");
+        write_xmp(&img, 1, "none", None).expect("写应成功");
         let after = fs::read_to_string(&xmp).unwrap();
         assert!(after.contains("<xmp:Rating>1</xmp:Rating>"));
         assert!(
@@ -866,11 +1016,11 @@ mod tests {
         let xmp = get_xmp_path(&img);
         let _ = fs::remove_file(&xmp);
 
-        write_xmp(&img, 0, "reject").expect("写 reject 应成功");
+        write_xmp(&img, 0, "reject", None).expect("写 reject 应成功");
         assert!(fs::read_to_string(&xmp).unwrap().contains("<xmp:Rating>-1</xmp:Rating>"));
 
         // 按 0 / U 清除 → 必须是 0，不能还是 -1
-        write_xmp(&img, 0, "none").expect("清除应成功");
+        write_xmp(&img, 0, "none", None).expect("清除应成功");
         let after = fs::read_to_string(&xmp).unwrap();
         assert!(
             after.contains("<xmp:Rating>0</xmp:Rating>"),
@@ -879,7 +1029,7 @@ mod tests {
         );
 
         // 被淘汰的照片重新打分 → 必须能覆盖 -1
-        write_xmp(&img, 5, "none").expect("重打分应成功");
+        write_xmp(&img, 5, "none", None).expect("重打分应成功");
         let after = fs::read_to_string(&xmp).unwrap();
         assert!(
             after.contains("<xmp:Rating>5</xmp:Rating>"),
@@ -901,7 +1051,7 @@ mod tests {
         let xmp = get_xmp_path(&img);
         fs::write(&xmp, LEGACY_XMP).unwrap();
 
-        write_xmp(&img, 5, "pick").expect("写应成功");
+        write_xmp(&img, 5, "pick", None).expect("写应成功");
         let after = fs::read_to_string(&xmp).unwrap();
 
         assert_eq!(
@@ -957,7 +1107,7 @@ mod tests {
         let xmp = get_xmp_path(&img);
         fs::write(&xmp, third_party).unwrap();
 
-        write_xmp(&img, 4, "none").expect("写应成功");
+        write_xmp(&img, 4, "none", None).expect("写应成功");
         let after = fs::read_to_string(&xmp).unwrap();
 
         assert_eq!(
@@ -983,7 +1133,7 @@ mod tests {
         let xmp = get_xmp_path(&img);
         fs::write(&xmp, foreign_label_sidecar("Blue")).unwrap();
 
-        write_xmp(&img, 3, "reject").expect("写应成功");
+        write_xmp(&img, 3, "reject", None).expect("写应成功");
 
         let content = fs::read_to_string(&xmp).unwrap();
         assert!(
@@ -1012,7 +1162,7 @@ mod tests {
         let xmp = get_xmp_path(&img);
         fs::write(&xmp, foreign_label_sidecar("Red")).unwrap();
 
-        write_xmp(&img, 0, "none").expect("清除应成功");
+        write_xmp(&img, 0, "none", None).expect("清除应成功");
 
         let content = fs::read_to_string(&xmp).unwrap();
         assert!(
@@ -1245,7 +1395,7 @@ mod tests {
             ));
             let xmp = get_xmp_path(&img);
             let _ = fs::remove_file(&xmp);
-            write_xmp(&img, rating, "none").expect("写应成功");
+            write_xmp(&img, rating, "none", None).expect("写应成功");
             let back = read_xmp_full(&xmp).expect("读应成功");
             assert_eq!(back.rating, rating, "rating 闭环失败");
             assert_eq!(flag_from_xmp(&back), "none", "未淘汰不该读成旗标");
@@ -1258,7 +1408,7 @@ mod tests {
         let img = std::env::temp_dir().join(format!("xmp_rt_reject_{}.jpg", std::process::id()));
         let xmp = get_xmp_path(&img);
         let _ = fs::remove_file(&xmp);
-        write_xmp(&img, 0, "reject").expect("写应成功");
+        write_xmp(&img, 0, "reject", None).expect("写应成功");
         let back = read_xmp_full(&xmp).expect("读应成功");
         assert_eq!(flag_from_xmp(&back), "reject", "淘汰必须读回 reject");
         assert!(back.rejected, "Rating=-1 必须置 rejected");
@@ -1272,7 +1422,7 @@ mod tests {
         let img = std::env::temp_dir().join(format!("xmp_pick_nolabel_{}.jpg", std::process::id()));
         let xmp = get_xmp_path(&img);
         let _ = fs::remove_file(&xmp);
-        write_xmp(&img, 4, "pick").expect("写应成功");
+        write_xmp(&img, 4, "pick", None).expect("写应成功");
         let content = fs::read_to_string(&xmp).unwrap();
         assert!(
             !content.contains("<xmp:Label>"),
@@ -1366,7 +1516,7 @@ mod tests {
     fn test_xmp_write_and_read() {
         let temp_dir = std::env::temp_dir();
         let test_img = temp_dir.join("test_photo_sample.jpg");
-        let xmp_file = write_xmp(&test_img, 4, "pick").expect("Should write xmp");
+        let xmp_file = write_xmp(&test_img, 4, "pick", None).expect("Should write xmp");
         assert!(xmp_file.exists());
 
         let meta = read_xmp_full(&xmp_file).expect("Should read xmp");
@@ -1382,7 +1532,7 @@ mod tests {
     fn test_xmp_metadata_update() {
         let temp_dir = std::env::temp_dir();
         let test_img = temp_dir.join("test_lens_sample.jpg");
-        let _ = write_xmp(&test_img, 5, "pick");
+        let _ = write_xmp(&test_img, 5, "pick", None);
 
         let xmp_file = update_xmp_metadata(
             &test_img,
@@ -1409,7 +1559,7 @@ mod tests {
     fn test_xmp_tone_update() {
         let temp_dir = std::env::temp_dir();
         let test_img = temp_dir.join("test_tone_sample.jpg");
-        let _ = write_xmp(&test_img, 3, "pick");
+        let _ = write_xmp(&test_img, 3, "pick", None);
 
         // 契约修正：色温滑杆是 ±100 相对偏移，旧测试传 5350（绝对 Kelvin）并断言
         // 原样读回 —— 那正是把 30K 当 +30 写进 Lightroom 的历史 bug。现在写入夹紧
@@ -1454,13 +1604,13 @@ mod tests {
         let _ = fs::remove_file(&xmp);
 
         // 先写一份合法侧边栏，保证并发开始前文件存在
-        write_xmp(&img, 1, "none").expect("初始写应成功");
+        write_xmp(&img, 1, "none", None).expect("初始写应成功");
 
         let mut handles = Vec::new();
         for i in 0..8u8 {
             let img = img.clone();
             handles.push(std::thread::spawn(move || {
-                let _ = write_xmp(&img, (i % 5) + 1, "none");
+                let _ = write_xmp(&img, (i % 5) + 1, "none", None);
             }));
         }
         for h in handles {
@@ -1481,6 +1631,178 @@ mod tests {
             "侧边栏必须含本方块: {}",
             content
         );
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    // ---------------------------------------------------------------------
+    // FR-02 色标：`xmp:Label` 是**单值属性**，一个文件里只能有一份。
+    //
+    // Lightroom 会把色标写进它自己的 `rdf:Description`；本应用追加的方块也在
+    // 同一个 `rdf:RDF` 里。两边各写一份 = 同一属性两个值，读取方取谁全靠实现
+    // 细节。下列用例锁住三条：
+    // 1. 本方块外已有色标时，本方块**不再**写色标（否则立刻造出两份）；
+    // 2. 用户主动改色标时，就地改那唯一一份，不新增第二份；
+    // 3. 清除色标时，两份都不能留（否则清了个寂寞）。
+    // ---------------------------------------------------------------------
+
+    /// 带色标的 Lightroom 侧边栏：色标在它自己的方块里，另有需要原样保留的标签。
+    fn lightroom_sidecar_with_label(label: &str) -> String {
+        format!(
+            "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
+             <x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"Adobe XMP Core\">\n\
+             \x20 <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n\
+             \x20  <rdf:Description rdf:about=\"\"\n\
+             \x20    xmlns:lr=\"http://ns.adobe.com/lightroom/1.0/\"\n\
+             \x20    xmlns:dc=\"http://purl.org/dc/elements/1.1/\"\n\
+             \x20    xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\">\n\
+             \x20   <xmp:Label>{}</xmp:Label>\n\
+             \x20   <lr:hierarchicalSubject>\n\
+             \x20    <rdf:Bag><rdf:li>Trips|Alps</rdf:li></rdf:Bag>\n\
+             \x20   </lr:hierarchicalSubject>\n\
+             \x20   <dc:subject><rdf:Bag><rdf:li>landscape</rdf:li></rdf:Bag></dc:subject>\n\
+             \x20  </rdf:Description>\n\
+             \x20 </rdf:RDF>\n\
+             </x:xmpmeta>\n\
+             <?xpacket end=\"w\"?>\n",
+            label
+        )
+    }
+
+    #[test]
+    fn setting_label_writes_exactly_one_label() {
+        let img = std::env::temp_dir().join(format!("xmp_label_set_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        let _ = fs::remove_file(&xmp);
+
+        write_xmp(&img, 0, "none", Some("Red")).expect("设色标应成功");
+        let content = fs::read_to_string(&xmp).unwrap();
+
+        assert_eq!(
+            content.matches("<xmp:Label>").count(),
+            1,
+            "一个文件只能有一份 xmp:Label: {}",
+            content
+        );
+        assert!(content.contains("<xmp:Label>Red</xmp:Label>"), "{}", content);
+        assert_eq!(read_xmp_full(&xmp).unwrap().label, "Red");
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    #[test]
+    fn setting_label_replaces_foreign_label_in_place() {
+        let img = std::env::temp_dir().join(format!("xmp_label_foreign_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        fs::write(&xmp, lightroom_sidecar_with_label("Blue")).unwrap();
+
+        write_xmp(&img, 0, "none", Some("Red")).expect("改色标应成功");
+        let content = fs::read_to_string(&xmp).unwrap();
+
+        assert_eq!(
+            content.matches("<xmp:Label>").count(),
+            1,
+            "改色标不得造出第二份: {}",
+            content
+        );
+        assert!(content.contains("<xmp:Label>Red</xmp:Label>"), "{}", content);
+        assert!(!content.contains("Blue"), "旧色标必须被替换: {}", content);
+        // 第三方数据必须逐字保留
+        assert!(content.contains("Trips|Alps"), "关键词被摧毁: {}", content);
+        assert!(content.contains("landscape"), "dc:subject 被摧毁: {}", content);
+        assert_eq!(read_xmp_full(&xmp).unwrap().label, "Red");
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    #[test]
+    fn clearing_label_removes_every_occurrence() {
+        // 本方块里有一份，清除后必须彻底消失（否则 Lightroom 里还是红的）
+        let img = std::env::temp_dir().join(format!("xmp_label_clear_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        let _ = fs::remove_file(&xmp);
+
+        write_xmp(&img, 0, "none", Some("Red")).expect("设色标应成功");
+        write_xmp(&img, 0, "none", Some("")).expect("清色标应成功");
+        let content = fs::read_to_string(&xmp).unwrap();
+
+        assert!(
+            !content.contains("<xmp:Label>"),
+            "清除后不得残留色标: {}",
+            content
+        );
+        assert_eq!(read_xmp_full(&xmp).unwrap().label, "");
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    #[test]
+    fn clearing_foreign_label_keeps_third_party_data() {
+        let img = std::env::temp_dir().join(format!("xmp_label_clear_lr_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        fs::write(&xmp, lightroom_sidecar_with_label("Blue")).unwrap();
+
+        write_xmp(&img, 0, "none", Some("")).expect("清色标应成功");
+        let content = fs::read_to_string(&xmp).unwrap();
+
+        assert!(!content.contains("<xmp:Label>"), "{}", content);
+        assert!(content.contains("Trips|Alps"), "{}", content);
+        assert!(content.contains("landscape"), "{}", content);
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    #[test]
+    fn tone_update_does_not_duplicate_foreign_label() {
+        // 改调色时 `read_sidecar` 会把整份文档的色标读进 meta；若原样写进本方块，
+        // 就会在同一个文件里出现两个 xmp:Label。去重必须发生在写入层。
+        let img = std::env::temp_dir().join(format!("xmp_label_tone_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        fs::write(&xmp, lightroom_sidecar_with_label("Blue")).unwrap();
+
+        update_xmp_tone(&img, Some(0.5), Some(0.0), Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+            .expect("改调色应成功");
+        let content = fs::read_to_string(&xmp).unwrap();
+
+        assert_eq!(
+            content.matches("<xmp:Label>").count(),
+            1,
+            "改调色不得复制色标: {}",
+            content
+        );
+        assert!(content.contains("<xmp:Label>Blue</xmp:Label>"), "{}", content);
+        assert!(content.contains("<crs:Exposure2012>+0.50</crs:Exposure2012>"));
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    #[test]
+    fn rating_write_without_label_keeps_existing_label() {
+        let img = std::env::temp_dir().join(format!("xmp_label_keep_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        let _ = fs::remove_file(&xmp);
+
+        write_xmp(&img, 0, "none", Some("Purple")).expect("设色标应成功");
+        // label=None 表示"不动色标"
+        write_xmp(&img, 5, "pick", None).expect("改评级应成功");
+
+        let content = fs::read_to_string(&xmp).unwrap();
+        assert!(content.contains("<xmp:Label>Purple</xmp:Label>"), "{}", content);
+        assert!(content.contains("<xmp:Rating>5</xmp:Rating>"), "{}", content);
+        assert_eq!(content.matches("<xmp:Label>").count(), 1);
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    #[test]
+    fn invalid_label_is_rejected_and_writes_nothing() {
+        let img = std::env::temp_dir().join(format!("xmp_label_bad_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        let _ = fs::remove_file(&xmp);
+
+        let err = write_xmp(&img, 0, "none", Some("Pink")).expect_err("非法色标必须拒写");
+        assert!(err.contains("色标"), "错误信息应说明色标: {}", err);
+        assert!(!xmp.exists(), "拒写时不该留下侧边栏");
 
         let _ = fs::remove_file(&xmp);
     }

@@ -45,7 +45,10 @@ impl IntentSink for DiskSink {
         // 旗标先落：它是本地独占的数据，且与 XMP 无关。
         cullstore::upsert(folder, base_name, &intent.flag)?;
         if intent.sync_xmp {
-            write_xmp(path, intent.rating, &intent.flag)?;
+            // 色标是**整组状态**的一部分（与星级/旗标同进同退）：调用方每次都传
+            // 当前值，`""` 表示这张照片现在没有色标。只传增量会让折叠后的意图
+            // 丢掉被覆盖那次改动里的色标。
+            write_xmp(path, intent.rating, &intent.flag, Some(&intent.label))?;
         }
 
         // **只有全部写成功才删意图。** 失败时留着，下次启动回放。
@@ -60,6 +63,7 @@ pub async fn update_rating_flag_cmd(
     file_path: String,
     rating: u8,
     flag: String,
+    label: Option<String>,
     sync_xmp: bool,
     coalesce: Option<bool>,
 ) -> Result<bool, String> {
@@ -80,15 +84,19 @@ pub async fn update_rating_flag_cmd(
             return Err(format!("无法确定照片所在目录: {}", file_path));
         }
         cullstore::validate_flag(&flag)?;
+        // 色标先归一（小写/别名 → Lightroom 的规范色名），非法值直接拒。
+        // `None` 按"无色标"处理：命令契约是**整组状态**，不是增量补丁。
+        let label = xmp::validate_label(label.as_deref().unwrap_or(""))?.to_string();
 
         // 先记意图（同步、极快），再交给合并队列。进程在这里被杀也不丢。
-        db.enqueue_pending(&file_path, rating, &flag, crate::db::now_secs())?;
+        db.enqueue_pending(&file_path, rating, &flag, &label, crate::db::now_secs())?;
 
         let outcome = queue.submit(
             Intent {
                 photo_path: path.to_path_buf(),
                 rating,
                 flag,
+                label,
                 sync_xmp,
             },
             coalesce.unwrap_or(true),
@@ -189,7 +197,7 @@ mod tests {
         let xmp_path = crate::xmp::get_xmp_path(&photo);
         let db = Database::open(&dir.join("test.db")).expect("临时库");
 
-        db.enqueue_pending(&photo.to_string_lossy(), 4, "pick", now_secs())
+        db.enqueue_pending(&photo.to_string_lossy(), 4, "pick", "", now_secs())
             .expect("记意图");
 
         let written = replay_pending(&db, &queue_for(&db)).expect("回放");
@@ -211,6 +219,37 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// 色标必须完整穿过「pending → Intent → DiskSink → XMP」这条链。
+    ///
+    /// 只测 `write_xmp` 不够：命令层/意图层漏传 label 时那些单测仍然全绿，
+    /// 而用户按 6 什么也写不出去。
+    #[test]
+    fn replay_writes_colour_label_to_sidecar() {
+        let dir = temp_dir("label");
+        let photo = dir.join("DSC_0003.ARW");
+        let xmp_path = crate::xmp::get_xmp_path(&photo);
+        let db = Database::open(&dir.join("test.db")).expect("临时库");
+
+        db.enqueue_pending(&photo.to_string_lossy(), 4, "pick", "Red", now_secs())
+            .expect("记意图");
+
+        let written = replay_pending(&db, &queue_for(&db)).expect("回放");
+        assert_eq!(written, 1);
+
+        let meta = crate::xmp::read_xmp_full(&xmp_path).expect("侧边栏应存在");
+        assert_eq!(meta.label, "Red", "色标必须写进 XMP");
+        assert_eq!(meta.rating, 4, "评级同时落盘");
+        let content = fs::read_to_string(&xmp_path).unwrap();
+        assert_eq!(
+            content.matches("<xmp:Label>").count(),
+            1,
+            "只能有一份色标: {}",
+            content
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// 侧边栏在本次改动之后被外部改过 → 以外部为准，不覆盖，只清掉过期意图。
     #[test]
     fn replay_skips_intent_older_than_external_edit() {
@@ -222,7 +261,7 @@ mod tests {
 
         let db = Database::open(&dir.join("test.db")).expect("临时库");
         // updated_at = 1：远早于侧边栏 mtime，模拟「用户改完，Lightroom 又改过」
-        db.enqueue_pending(&photo.to_string_lossy(), 4, "pick", 1)
+        db.enqueue_pending(&photo.to_string_lossy(), 4, "pick", "", 1)
             .expect("记意图");
 
         let written = replay_pending(&db, &queue_for(&db)).expect("回放");

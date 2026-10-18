@@ -25,7 +25,7 @@ const mkGroup = (baseName: string): PhotoGroupInfo => ({
   status: 'JPG_ONLY',
   rating: 0,
   flag: 'none',
-  hasXmp: false,
+  label: '', hasXmp: false,
 });
 
 // `DSC_1` 命中前两张；`DSC_2001` 只被用来证明「候选已离开可见集」。

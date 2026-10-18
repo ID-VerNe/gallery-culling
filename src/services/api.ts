@@ -52,6 +52,10 @@ export const api = {
    * `coalesce` 让后端把同一张照片的连续改动折叠成一次落盘（FR-03）：
    * - 单张按键连击传 `true`（默认）—— 400ms 静默窗口内只写一次；
    * - 批量、重试、撤销传 `false` —— 每张只改一次，没必要等窗口。
+   *
+   * `label` 是**整组状态**的一部分：每次都传当前色标（`''` = 无色标）。
+   * 省略它等于告诉后端「这张照片没有色标」，会把 Lightroom 里的色标清掉 ——
+   * 只有明确要清色标时才传空串。
    */
   updateRatingFlag: async (
     filePath: string,
@@ -59,11 +63,13 @@ export const api = {
     flag: string,
     syncXmp: boolean = true,
     coalesce: boolean = true,
+    label?: string,
   ): Promise<boolean> => {
     return await invoke<boolean>('update_rating_flag_cmd', {
       filePath,
       rating,
       flag,
+      label,
       syncXmp,
       coalesce,
     });

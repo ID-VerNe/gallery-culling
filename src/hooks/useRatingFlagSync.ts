@@ -3,8 +3,9 @@ import { api } from '../services/api';
 import { useToast } from '../components/Toast';
 import { useRatingUndo } from './useRatingUndo';
 import { groupPath } from '../utils/groupPath';
+import { labelName } from '../utils/labels';
 import type { BatchAction } from './useBatchOps';
-import type { CullFlag, PhotoGroupInfo } from '../types';
+import type { ColorLabel, CullFlag, PhotoGroupInfo } from '../types';
 
 /** L-11 撤销提示里的旗标文案（与宫格/底栏的叫法保持一致）。 */
 const FLAG_LABELS: Record<CullFlag, string> = {
@@ -102,6 +103,7 @@ export function useRatingFlagSync(opts: {
         path: targetPath,
         rating: targetGroup.rating,
         flag: targetGroup.flag,
+        label: targetGroup.label,
       });
 
       // 评分必须与淘汰态互斥：给「已淘汰」的照片打星 = 解除淘汰。
@@ -116,7 +118,15 @@ export function useRatingFlagSync(opts: {
 
       // Sync to XMP in background
       try {
-        await api.updateRatingFlag(targetPath, rating, nextFlag, true);
+        // 色标整组透传：只改星级不能顺手把用户设的色标清掉。
+        await api.updateRatingFlag(
+          targetPath,
+          rating,
+          nextFlag,
+          true,
+          true,
+          targetGroup.label,
+        );
         markSynced(targetGroup.id);
       } catch (err) {
         reportRatingFlagError(err, targetGroup.id);
@@ -139,12 +149,61 @@ export function useRatingFlagSync(opts: {
         path: targetPath,
         rating: targetGroup.rating,
         flag: targetGroup.flag,
+        label: targetGroup.label,
       });
 
       onGroupPatched(targetGroup.id, { flag });
 
       try {
-        await api.updateRatingFlag(targetPath, targetGroup.rating, flag, true);
+        await api.updateRatingFlag(
+          targetPath,
+          targetGroup.rating,
+          flag,
+          true,
+          true,
+          targetGroup.label,
+        );
+        markSynced(targetGroup.id);
+      } catch (err) {
+        reportRatingFlagError(err, targetGroup.id);
+      }
+    },
+    [currentGroup, reportRatingFlagError, rememberRating, markSynced, onGroupPatched],
+  );
+
+  /**
+   * 设置色标。**重复按同一个色标 = 取消**（与 Lightroom 一致）。
+   *
+   * 色标是 `xmp:Label` 的唯一真值，与旗标（本地 store）互不影响：红标不代表
+   * 淘汰，绿标也不代表保留 —— 这正是 ADR-001 把两个语义拆开的收益。
+   */
+  const setLabel = useCallback(
+    async (next: ColorLabel, targetGroup: PhotoGroupInfo = currentGroup!) => {
+      if (!targetGroup) return;
+      const targetPath = groupPath(targetGroup);
+      if (!targetPath) return;
+
+      const label = targetGroup.label === next ? '' : next;
+
+      rememberRating({
+        id: targetGroup.id,
+        path: targetPath,
+        rating: targetGroup.rating,
+        flag: targetGroup.flag,
+        label: targetGroup.label,
+      });
+
+      onGroupPatched(targetGroup.id, { label });
+
+      try {
+        await api.updateRatingFlag(
+          targetPath,
+          targetGroup.rating,
+          targetGroup.flag,
+          true,
+          true,
+          label,
+        );
         markSynced(targetGroup.id);
       } catch (err) {
         reportRatingFlagError(err, targetGroup.id);
@@ -174,6 +233,17 @@ export function useRatingFlagSync(opts: {
     [selectedCount, setFlag],
   );
 
+  /**
+   * 色标入口：多选时弹批量确认（批量是"设为"而不是"切换"），否则单张切换。
+   */
+  const applyLabel = useCallback(
+    (label: ColorLabel) => {
+      if (selectedCount > 1) setPendingBatch({ kind: 'label', value: label });
+      else void setLabel(label);
+    },
+    [selectedCount, setLabel],
+  );
+
   /** B6：点击格子上"未同步"角标时，用该张当前值重写 XMP。 */
   const retrySync = useCallback(
     async (group: PhotoGroupInfo) => {
@@ -181,7 +251,14 @@ export function useRatingFlagSync(opts: {
       if (!targetPath) return;
       try {
         // 显式重试：用户点了一次就该立刻写，不必等防抖窗口。
-        await api.updateRatingFlag(targetPath, group.rating, group.flag, true, false);
+        await api.updateRatingFlag(
+          targetPath,
+          group.rating,
+          group.flag,
+          true,
+          false,
+          group.label,
+        );
         markSynced(group.id);
         toast.success('已重新同步到 XMP 侧边栏。');
       } catch (err) {
@@ -213,10 +290,19 @@ export function useRatingFlagSync(opts: {
       path: targetPath,
       rating: targetGroup.rating,
       flag: targetGroup.flag,
+      label: targetGroup.label,
     });
     onGroupPatched(targetGroup.id, { rating: 0, flag: 'none' });
     try {
-      await api.updateRatingFlag(targetPath, 0, 'none', true);
+      // 色标不动：`0`/`U` 清的是星级与旗标，色标是另一个维度。
+      await api.updateRatingFlag(
+        targetPath,
+        0,
+        'none',
+        true,
+        true,
+        targetGroup.label,
+      );
       markSynced(targetGroup.id);
     } catch (err) {
       reportRatingFlagError(err, targetGroup.id);
@@ -248,6 +334,7 @@ export function useRatingFlagSync(opts: {
     onGroupPatched(snapshot.id, {
       rating: snapshot.rating,
       flag: snapshot.flag,
+      label: snapshot.label,
     });
 
     try {
@@ -258,9 +345,13 @@ export function useRatingFlagSync(opts: {
         snapshot.flag,
         true,
         false,
+        snapshot.label,
       );
+      const colour = labelName(snapshot.label);
       toast.success(
-        `已撤销上一处改动：星级恢复为 ${snapshot.rating} 星，标记恢复为 ${FLAG_LABELS[snapshot.flag]}。`,
+        `已撤销上一处改动：星级恢复为 ${snapshot.rating} 星，标记恢复为 ${
+          FLAG_LABELS[snapshot.flag]
+        }${colour ? `，色标恢复为${colour}` : ''}。`,
       );
     } catch (err) {
       reportRatingFlagError(err);
@@ -277,8 +368,10 @@ export function useRatingFlagSync(opts: {
     reportRatingFlagError,
     rate,
     setFlag,
+    setLabel,
     applyRating,
     applyFlag,
+    applyLabel,
     retrySync,
     clearRatingFlag,
     undo,

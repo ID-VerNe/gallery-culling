@@ -12,10 +12,10 @@ import { countByFilter } from '../utils/filterMatch';
 import type { CullFlag, FilterMode, PhotoGroupInfo } from '../types';
 
 const GROUPS: PhotoGroupInfo[] = [
-  { id: 'a', baseName: 'a', status: 'JPG_ONLY', rating: 3, flag: 'pick', hasXmp: false },
-  { id: 'b', baseName: 'b', status: 'JPG_ONLY', rating: 0, flag: 'reject', hasXmp: false },
-  { id: 'c', baseName: 'c', status: 'JPG_ONLY', rating: 0, flag: 'none' as CullFlag, hasXmp: false },
-  { id: 'd', baseName: 'd', status: 'JPG_ONLY', rating: 5, flag: 'none' as CullFlag, hasXmp: false },
+  { id: 'a', baseName: 'a', status: 'JPG_ONLY', rating: 3, flag: 'pick', label: '', hasXmp: false },
+  { id: 'b', baseName: 'b', status: 'JPG_ONLY', rating: 0, flag: 'reject', label: '', hasXmp: false },
+  { id: 'c', baseName: 'c', status: 'JPG_ONLY', rating: 0, flag: 'none' as CullFlag, label: '', hasXmp: false },
+  { id: 'd', baseName: 'd', status: 'JPG_ONLY', rating: 5, flag: 'none' as CullFlag, label: '', hasXmp: false },
 ];
 
 function renderTopBar(filterCounts?: Record<FilterMode, number>) {

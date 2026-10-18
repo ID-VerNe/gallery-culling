@@ -21,7 +21,7 @@ const group: PhotoGroupInfo = {
   status: 'JPG_ONLY',
   rating: 0,
   flag: 'none',
-  hasXmp: false,
+  label: '', hasXmp: false,
 };
 
 function renderViewport() {
@@ -89,7 +89,7 @@ describe('PreviewViewport —— RAW-only 图片解析（C2）', () => {
     status: 'RAW_ONLY',
     rating: 0,
     flag: 'none',
-    hasXmp: false,
+    label: '', hasXmp: false,
   };
 
   function renderRaw(lumenStatus: LumenStatus) {

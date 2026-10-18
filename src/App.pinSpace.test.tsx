@@ -25,7 +25,7 @@ const photo = (i: number) => ({
   status: 'PAIRED',
   rating: 0,
   flag: 'none',
-  hasXmp: false,
+  label: '', hasXmp: false,
 });
 
 function mockStartup() {

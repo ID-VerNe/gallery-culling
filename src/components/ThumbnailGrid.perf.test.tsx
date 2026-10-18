@@ -36,7 +36,7 @@ function group(id: string, overrides: Partial<PhotoGroupInfo> = {}): PhotoGroupI
     status: 'RAW_ONLY',
     rating: 0,
     flag: 'none',
-    hasXmp: false,
+    label: '', hasXmp: false,
     ...overrides,
   };
 }

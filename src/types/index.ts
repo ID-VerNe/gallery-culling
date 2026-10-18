@@ -19,9 +19,31 @@ export interface ExifData {
 }
 
 export type CullFlag = 'none' | 'pick' | 'reject';
+
+/**
+ * 五色色标（Lightroom 的 `xmp:Label` 约定）。
+ *
+ * 只认这五个英文色名：它们是 Lightroom / Bridge / Capture One 互认的取值，
+ * 写别的字符串等于把标记藏进没人认识的角落。空串表示无色标。
+ */
+export type ColorLabel = 'Red' | 'Yellow' | 'Green' | 'Blue' | 'Purple';
 export type ViewMode = 'single' | 'split' | 'before_after';
 export type SortOrder = 'time_filename' | 'filename' | 'rating';
-export type FilterMode = 'all' | 'pick' | 'reject' | 'unmarked' | 'star1' | 'star2' | 'star3' | 'star4' | 'star5';
+export type FilterMode =
+  | 'all'
+  | 'pick'
+  | 'reject'
+  | 'unmarked'
+  | 'star1'
+  | 'star2'
+  | 'star3'
+  | 'star4'
+  | 'star5'
+  | 'label-red'
+  | 'label-yellow'
+  | 'label-green'
+  | 'label-blue'
+  | 'label-purple';
 
 export interface ToneAdjustments {
   exposure: number;     // 曝光补偿 -5.00 .. +5.00 EV
@@ -42,6 +64,8 @@ export interface PhotoGroupInfo {
   status: 'COMPLETE' | 'JPG_ONLY' | 'RAW_ONLY';
   rating: number; // 0..5
   flag: CullFlag;
+  /** 色标：`''` 表示无色标。唯一真值是 XMP 的 `xmp:Label`。 */
+  label: string;
   hasXmp: boolean;
   exif?: ExifData;
   thumbnailPath?: string;

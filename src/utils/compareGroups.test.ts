@@ -15,7 +15,7 @@ const g = (id: string, baseName: string): PhotoGroupInfo => ({
   status: 'JPG_ONLY',
   rating: 0,
   flag: 'none',
-  hasXmp: false,
+  label: '', hasXmp: false,
 });
 
 const three = [g('a', 'IMG_0001'), g('b', 'IMG_0002'), g('c', 'IMG_0003')];

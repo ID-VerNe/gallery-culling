@@ -7,6 +7,8 @@ export interface RatingSnapshot {
   path: string;
   rating: number;
   flag: CullFlag;
+  /** 色标（`''` = 无色标）。撤销必须连它一起回填，否则「按 6 再撤销」会留下红标。 */
+  label: string;
 }
 
 export interface UseRatingUndoResult {

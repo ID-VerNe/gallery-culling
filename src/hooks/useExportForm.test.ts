@@ -37,7 +37,7 @@ const mk = (
     status: hasRaw ? 'COMPLETE' : 'JPG_ONLY',
     rating: opts.rating ?? 0,
     flag: opts.flag ?? 'none',
-    hasXmp: opts.xmp ?? false,
+    label: '', hasXmp: opts.xmp ?? false,
   };
 };
 

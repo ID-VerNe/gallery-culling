@@ -32,7 +32,7 @@ const group: PhotoGroupInfo = {
   rating: 0,
   // 默认导出范围是「已保留或已打星」，pick 保证这张在候选里
   flag: 'pick',
-  hasXmp: false,
+  label: '', hasXmp: false,
 };
 
 function setup() {

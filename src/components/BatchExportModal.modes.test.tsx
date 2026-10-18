@@ -34,7 +34,7 @@ const group: PhotoGroupInfo = {
   status: 'JPG_ONLY',
   rating: 0,
   flag: 'pick',
-  hasXmp: false,
+  label: '', hasXmp: false,
 };
 
 /** 带 RAW 的组（COMPLETE），用于验证「含 RAW」档与「无画质提示」。 */

@@ -29,7 +29,7 @@ const mkGroup = (baseName: string): PhotoGroupInfo => ({
   status: 'JPG_ONLY',
   rating: 0,
   flag: 'none',
-  hasXmp: false,
+  label: '', hasXmp: false,
 });
 
 const allGroups = ['DSC_1001', 'DSC_1002', 'DSC_2001'].map(mkGroup);

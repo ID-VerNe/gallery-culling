@@ -32,12 +32,17 @@ pub const DEBOUNCE: Duration = Duration::from_millis(400);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 一次待落盘的意图。同一照片后到的覆盖先到的。
+///
+/// 三个标记字段（rating / flag / label）总是整组提交 —— 合并时后到覆盖先到，
+/// 只带其中一项会让被覆盖的那次改动把另两项带回旧值。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Intent {
     /// 照片路径（JPG 或 RAW 分组里实际有侧边栏的那个）。
     pub photo_path: PathBuf,
     pub rating: u8,
     pub flag: String,
+    /// 色标：`""` = 无色标，其余为 Red / Yellow / Green / Blue / Purple。
+    pub label: String,
     /// 是否写 XMP。`false` 时只落本地旗标存储。
     pub sync_xmp: bool,
 }
@@ -253,6 +258,7 @@ pub fn replay_pending(db: &Database, coalescer: &Coalescer) -> Result<usize, Str
             photo_path: path,
             rating: row.rating,
             flag: row.flag,
+            label: row.label,
             sync_xmp: true,
         };
         // 回放逐条立即写：没有「后续改动」需要等，别在启动时白等防抖窗口。
@@ -320,6 +326,7 @@ mod tests {
             photo_path: PathBuf::from(format!("C:/photos/{}.JPG", name)),
             rating,
             flag: "none".to_string(),
+            label: String::new(),
             sync_xmp: true,
         }
     }
@@ -357,6 +364,44 @@ mod tests {
             5,
             "折叠后落盘的必须是最新值，不能是窗口里最早的那个"
         );
+    }
+
+    /// 色标必须与评级/旗标一起折叠：后到的意图整组覆盖，不能只更新评级
+    /// 而把色标留在旧值上（那会让「按 4 再按 6」落盘成「4 星、无红标」）。
+    #[test]
+    fn label_is_coalesced_with_the_latest_intent() {
+        let sink = Arc::new(CountingSink::ok());
+        let queue = Arc::new(Coalescer::with_debounce(
+            sink.clone(),
+            Duration::from_millis(200),
+        ));
+        let barrier = Arc::new(Barrier::new(2));
+
+        let mut handles = Vec::new();
+        for (rating, label, delay) in [(3u8, "Red", 0u64), (4u8, "Blue", 40u64)] {
+            let queue = Arc::clone(&queue);
+            let barrier = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                if delay > 0 {
+                    thread::sleep(Duration::from_millis(delay));
+                }
+                let mut it = intent("a", rating);
+                it.label = label.to_string();
+                queue.submit(it, true)
+            }));
+        }
+        let mut outcomes = Vec::new();
+        for handle in handles {
+            outcomes.push(handle.join().unwrap().expect("提交应成功"));
+        }
+
+        assert_eq!(sink.count(), 1, "窗口内只落盘一次");
+        let last = sink.last().expect("有落盘");
+        assert_eq!(last.rating, 4, "评级取最新");
+        assert_eq!(last.label, "Blue", "色标必须跟着最新意图走");
+        // 两个等待者都该看到落盘值（不是各自提交的那份）
+        assert!(outcomes.iter().all(|o| o.intent.label == "Blue"));
     }
 
     /// 折叠的 N 个调用方都要拿到成功，不能只有落盘者拿到。

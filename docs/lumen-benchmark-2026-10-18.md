@@ -18,7 +18,7 @@
 
 1. **定位互补，不是替代。** LUMEN 是「打开一张照片、把它调好、导出」的显影编辑器，图集是附属；本项目是「扫一个目录、把几千张过一遍、交付」的选片器，渲染外包给 LUMEN。两者已经在 `.lumen` 工程 + XMP + `lumen-cli` 处形成正确的集成缝（`src-tauri/src/lumen.rs:56` 钉 1.6.0，`lumen/mcp.rs` 走 legacy 握手，`runtime.rs:486` 调 `photo.export`）。
 2. **最大差距不在图像处理，在图库语义。** 色标、查询式筛选、选片集、Lightroom 目录迁移、多步撤销——这五项是选片器的「操作系统」，恰好是本项目最薄的地方；而 LUMEN 的图像管线（LibRaw/ONNX/DirectML）对本项目既不可移植，也不该移植。注意：多步撤销 LUMEN 自己也没做（评级直接写 catalog，不进撤销栈），这一项是要**超过**它，不是对齐它。
-3. **最大隐患是已经存在的数据破坏，不是未来风险。** 本项目把 `xmp:Label` 当作旗标用：`pick` 写 `Label=Green`，非 pick 清空 Label（`src-tauri/src/xmp.rs:443-448`），读回时把 Green/Red 当 pick/reject（`xmp.rs:515-524`）。这意味着用户在 Lightroom 里设的绿/红色标，会被本应用误读为留用/淘汰；而按 `P`/`U`/`0` 会**覆盖或清空** Lightroom 的色标。引入色标之前必须先解耦，否则是在坏数据上加功能。
+3. **最大隐患是已经存在的数据破坏，不是未来风险。** 本项目把 `xmp:Label` 当作旗标用：`pick` 写 `Label=Green`，非 pick 清空 Label（`src-tauri/src/xmp.rs:443-448`），读回时把 Green/Red 当 pick/reject（`xmp.rs:515-524`）。这意味着用户在 Lightroom 里设的绿/红色标，会被本应用误读为留用/淘汰；而按 `P`/`U`/`0` 会**覆盖或清空** Lightroom 的色标。引入色标之前必须先解耦，否则是在坏数据上加功能。**（已于 2026-10-18 修复：ADR-001 解耦 + ADR-003 归还 `xmp:Label`；保留原文作为风险判断的存档。）**
 4. **最值得学的三个机制**：追加日志 + 写盘合并（`catalog.py:181-209`）、字段查询语法（`catalog.py:269-336`）、显式工作状态机（`scheduler.py:41-53`）。三者都是纯逻辑，移植成本低、收益直接。
 5. **明确不做**：自建 RAW 解码/显影、镜头校正、HDR/景深/全景合成、400MP 内存映射、全量 i18n。这些是 LUMEN 的主场，重复投入会把「极速选片」做成「半成品编辑器」。
 
@@ -106,14 +106,14 @@
 | 5 | 双图并排对比 | ✗ 只有前后对比 | ★ 并排 + 像素级联动平移 + 基准锁定/互换 | 领先 |
 | 6 | 100% 细节检查 | ✅ 分块渲染，61MP 约 40ms | ✗ RAW-only 硬顶 1600（实测 `size=2048` 无效）；JPG 全分辨率 | **明显落后** |
 | 7 | 星级 / 旗标 | ✅ 0-5 / P X U | ✅ 0-5 / P X U | 对等 |
-| 8 | 色标 | ✅ 5 色（red/yellow/green/blue/purple） | ✗ | **落后** |
+| 8 | 色标 | ✅ 5 色（red/yellow/green/blue/purple） | ✅ 5 色 + 6/7/8/9、`Shift+6`、重复取消、角标、筛选五档（2026-10-18 补齐） | 对等 |
 | 9 | 评级撤销 | ✗ 评级/旗标直接写 catalog，不进撤销栈 | ◐ 仅单步撤销 | 本项目略优，但都需补多步 |
 | 10 | 批量评级 | ✅ 多选 + 快捷键 | ✅ 多选 + 确认 + 进度 + 失败角标 | 领先（事务性） |
 | 11 | 固定筛选 | ✅ 快速筛选 | ✅ 6 档 + 每档计数 | 对等 |
 | 12 | 查询式筛选 | ✅ 字段语法 + 取反 + 通配 | ✗ 仅文件名子串搜索 | **落后** |
 | 13 | 组织 | ✅ 图集 + `.lumenalbum` | ◐ 仅目录会话 | 落后 |
 | 14 | Lightroom 迁移 | ✅ `.lrcat` 只读导入 | ✗ | 落后 |
-| 15 | XMP 互操作 | ✅ ExifTool 批量读写 | ◐ 原生读写，但 `Label` 语义冲突（见 5.1） | 待修 |
+| 15 | XMP 互操作 | ✅ ExifTool 批量读写 | ✅ 原生读写；`Label` 单值去重（ADR-003），LR 色标不再被覆盖 | 对等 |
 | 16 | 调色 | ✅ 曲线/HSL/分级/蒙版/修复/预设 | ◐ 6 参数 + 委托 LUMEN | 不追 |
 | 17 | 套用调色到多张 | ✅ `edit.copy` | ✗ 只能逐张 | 落后 |
 | 18 | AI 蒙版 | ✅ 天空/人物/主体/背景/近景 | ◐ 通过 LUMEN 调天空等 | 对等（借力） |
@@ -202,6 +202,8 @@ LUMEN：PyInstaller + Inno Setup / DMG，随包 Python、ExifTool、9 个模型�
 每条给出：LUMEN 的做法（证据）→ 对本项目的价值 → 落地方式 → 成本/风险。
 
 ### 5.1 三轴元数据 + 色标（P0，先修 bug 再加功能）
+
+> **✅ 已完成（2026-10-18）**：解耦见 `adr-001-flag-storage.md`（pick 落 `.gallerycull.json`，读兼容 `Label=Green/Red`），色标见 `adr-003-colour-labels.md`（`xmp:Label` 归还用户，写入层按 `rdf:Description` 位置去重，单值不变式有测试锁定）。下面保留当时的诊断原文与四步方案，作为决策依据存档。
 
 **LUMEN 做法**
 - `catalog.py:33-45`：`flag`（pick/reject）与 `label`（red/yellow/green/blue/purple）是两个独立字段。
@@ -689,6 +691,8 @@ Reach 1-5（受影响用户比例）、Impact 1-5、Confidence 0-1、Effort 人�
 | S6 | 交付与平台 | FR-12 水印、CR3、AI、MCP、i18n | 按需 | 按商业优先级单独排 |
 
 合计约 47 人日 ≈ 9.5 周（单人串行）。S4 与 S2/S3 无代码依赖，可并行，压缩到约 8 周。
+
+> **S1 已全部落地（2026-10-18）**：FR-01 → `adr-001-flag-storage.md`，FR-03 → `adr-002-write-coalescing.md`，FR-02 → `adr-003-colour-labels.md`。出口标准逐条达成：XMP 往返测试全绿（Rust 184 单测，含 Lightroom 风格侧边栏的单值不变式用例）；LR 色标不再被覆盖（写入层按 `rdf:Description` 位置去重，就地改外部那份而非新增）；合并生效（400ms 静默窗口，`syncqueue::Coalescer`）。
 
 依赖关系：S1 是所有后续的前提（色标与写盘队列）；S2 的查询依赖色标字段；S4 独立，可与 S2/S3 并行（不同人）；S5 依赖 S1 的元数据模型。
 

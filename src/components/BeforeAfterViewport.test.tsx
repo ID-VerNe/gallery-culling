@@ -29,7 +29,7 @@ function withJpg(id: string): PhotoGroupInfo {
     status: 'JPG_ONLY',
     rating: 0,
     flag: 'none',
-    hasXmp: false,
+    label: '', hasXmp: false,
   };
 }
 

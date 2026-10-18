@@ -25,7 +25,7 @@ function group(id: string, overrides: Partial<PhotoGroupInfo> = {}): PhotoGroupI
     status: 'RAW_ONLY',
     rating: 0,
     flag: 'none',
-    hasXmp: false,
+    label: '', hasXmp: false,
     ...overrides,
   };
 }
@@ -218,7 +218,7 @@ describe('ThumbnailGrid —— 无障碍与选择', () => {
         group('a', {
           rating: 3,
           flag: 'pick',
-          hasXmp: true,
+          label: '', hasXmp: true,
           tone: { exposure: 1, highlights: 0, shadows: 0, temperature: 0, tint: 0, contrast: 0 },
         }),
       ],
@@ -291,5 +291,33 @@ describe('ThumbnailGrid —— 无障碍与选择', () => {
     // 点击仍触发选中
     fireEvent.click(cells[1]);
     expect(onSelect).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('ThumbnailGrid —— 色标色点（FR-02）', () => {
+  it('有色标的格子渲染色点，并把色名写进无障碍标签', async () => {
+    mockInvokeCommand('get_thumbnail_cmd', 'thumb.jpg');
+    renderGrid([group('a', { label: 'Red' })], false);
+
+    const cell = await screen.findByRole('option', { name: /色标红/ });
+    const dot = within(cell).getByRole('img', { name: '色标：红' });
+    expect(dot.className).toContain('bg-rose-500');
+  });
+
+  it('无色标的格子不渲染色点', async () => {
+    mockInvokeCommand('get_thumbnail_cmd', 'thumb.jpg');
+    renderGrid([group('b', { label: '' })], false);
+
+    const cell = await screen.findByRole('option', { name: /b/ });
+    expect(within(cell).queryByRole('img', { name: /^色标：/ })).toBeNull();
+  });
+
+  it('色点与旗标角标并存（红标 + 淘汰是两个维度）', async () => {
+    mockInvokeCommand('get_thumbnail_cmd', 'thumb.jpg');
+    renderGrid([group('c', { label: 'Red', flag: 'reject' })], false);
+
+    const cell = await screen.findByRole('option', { name: /已淘汰/ });
+    expect(within(cell).getByRole('img', { name: '已标记淘汰' })).toBeTruthy();
+    expect(within(cell).getByRole('img', { name: '色标：红' })).toBeTruthy();
   });
 });

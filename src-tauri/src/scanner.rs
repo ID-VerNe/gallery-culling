@@ -317,6 +317,8 @@ pub fn scan_folders(
                 status: PhotoGroupStatus::JpgOnly,
                 rating,
                 flag,
+                // 色标与评级同源（XMP），无色标就是空串
+                label: xmp_meta.as_ref().map(|m| m.label.clone()).unwrap_or_default(),
                 has_xmp,
                 exif,
                 thumbnail_path: None,
@@ -443,6 +445,9 @@ pub fn scan_folders(
                 status,
                 rating,
                 flag,
+                // RAW 侧边栏优先、JPG 兜底 —— 与评级/旗标同一条读取路径，
+                // 不会出现「星级读 RAW、色标读 JPG」这种自相矛盾的组合。
+                label: xmp_meta.as_ref().map(|m| m.label.clone()).unwrap_or_default(),
                 has_xmp,
                 exif,
                 thumbnail_path: None,
@@ -716,6 +721,34 @@ mod tests {
             "扫描不得改写/删除用户的色标: {}",
             sidecar
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 色标必须随扫描带出：它读的就是 `xmp:Label`，与 Lightroom 双向可见。
+    #[test]
+    fn scan_reads_colour_label_from_sidecar() {
+        let dir = unique_dir("label_read");
+        fs::write(dir.join("E0001.jpg"), b"jpeg").unwrap();
+        write_legacy_sidecar(&dir, "E0001", "2", "Blue");
+
+        let g = scan_one(&dir);
+        assert_eq!(g.label, "Blue", "色标应随扫描带出");
+        assert_eq!(g.rating, 2, "评级不受影响");
+        assert_eq!(g.flag, "none", "Blue 不属于旧 pick/reject 约定");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 没有侧边栏 = 无色标。必须是空串，不能是 `"None"`/`"null"` 之类的字符串，
+    /// 否则前端色点会把"没有色标"渲染成一个灰点。
+    #[test]
+    fn scan_without_sidecar_has_empty_label() {
+        let dir = unique_dir("label_empty");
+        fs::write(dir.join("F0001.jpg"), b"jpeg").unwrap();
+
+        let g = scan_one(&dir);
+        assert_eq!(g.label, "", "无色标必须是空串");
 
         let _ = fs::remove_dir_all(&dir);
     }

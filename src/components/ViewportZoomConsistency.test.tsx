@@ -53,7 +53,7 @@ function group(id: string): PhotoGroupInfo {
     status: 'PAIRED',
     rating: 0,
     flag: 'none',
-    hasXmp: false,
+    label: '', hasXmp: false,
     exif: {
       cameraModel: 'Canon EOS R5',
       lensModel: 'RF 24-70',

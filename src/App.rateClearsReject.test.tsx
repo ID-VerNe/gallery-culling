@@ -18,7 +18,7 @@ const photo = (i: number, over: Record<string, unknown> = {}) => ({
   status: 'PAIRED',
   rating: 0,
   flag: 'none',
-  hasXmp: false,
+  label: '', hasXmp: false,
   ...over,
 });
 

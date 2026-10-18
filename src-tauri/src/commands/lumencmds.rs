@@ -299,8 +299,10 @@ pub async fn lumen_sync_ratings_cmd(
             match decision {
                 lumen::SyncDecision::InSync => {}
                 lumen::SyncDecision::PullFromLumen => {
-                    // lumen 的 reject → 宿主的 reject（Rating=-1 语义已统一）
-                    write_xmp(&p, lumen_rating, &lumen_flag)?;
+                    // lumen 的 reject → 宿主的 reject（Rating=-1 语义已统一）。
+                    // 色标传 None：LUMEN 的色标体系与本应用的五色不是同一套
+                    // （它有 11 种语言色名），此处不动用户的 `xmp:Label`。
+                    write_xmp(&p, lumen_rating, &lumen_flag, None)?;
                     // 旗标同时落到本地 store：pick 已不再写 `xmp:Label`，
                     // 只写 XMP 会让拉取来的 pick 在下次扫描时消失。
                     // 写失败不中断整轮同步（评级已落盘），只记账。

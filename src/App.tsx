@@ -125,6 +125,7 @@ function AppShell() {
     setFlag: handleFlag,
     applyRating,
     applyFlag,
+    applyLabel,
     rememberRating,
     retrySync: handleRetrySync,
     clearRatingFlag: handleClearRatingFlag,
@@ -394,6 +395,8 @@ function AppShell() {
     // B1：打分/旗标入口分流 —— 多选 ≥2 时弹批量确认，否则单张即时写入。
     onRate: applyRating,
     onFlag: applyFlag,
+    // 6/7/8/9 设红/黄/绿/蓝，Shift+6 设紫；重复按同一个色标 = 取消。
+    onLabel: applyLabel,
     // B2：`0`/`U` 走合并后的单次写盘（清除评级 + 旗标）。
     onClear: () => void handleClearRatingFlag(),
     onOpenExternal: external.openExternal,

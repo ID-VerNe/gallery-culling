@@ -35,7 +35,7 @@ const group: PhotoGroupInfo = {
   status: 'JPG_ONLY',
   rating: 0,
   flag: 'none',
-  hasXmp: false,
+  label: '', hasXmp: false,
 };
 
 const scanResult: FolderScanResult = {

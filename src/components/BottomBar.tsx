@@ -98,6 +98,9 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         <Separator />
         <KeyHint keys="X" label="淘汰" tone="rose" />
         <Separator />
+        {/* 色标：6~9 四色，紫色在帮助弹窗里标注 Shift+6 */}
+        <KeyHint keys="6~9" label="色标" />
+        <Separator />
         {/* A2：与帮助弹窗统一叫法 —— "切片"含义不明，实为上一张/下一张。 */}
         <KeyHint keys="A / D" label="上一张 / 下一张" />
         <Separator />

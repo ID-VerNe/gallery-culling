@@ -1,4 +1,5 @@
 import type { FilterMode, PhotoGroupInfo } from '../types';
+import { LABEL_NAMES } from './labels';
 
 /**
  * 筛选谓词唯一真值（M-14）。
@@ -30,6 +31,16 @@ export function matchesFilter(group: PhotoGroupInfo, mode: FilterMode): boolean 
       return group.rating >= 4;
     case 'star5':
       return group.rating === 5;
+    case 'label-red':
+      return group.label === 'Red';
+    case 'label-yellow':
+      return group.label === 'Yellow';
+    case 'label-green':
+      return group.label === 'Green';
+    case 'label-blue':
+      return group.label === 'Blue';
+    case 'label-purple':
+      return group.label === 'Purple';
     case 'all':
     default:
       return true;
@@ -47,6 +58,11 @@ export const ALL_FILTER_MODES: readonly FilterMode[] = [
   'star3',
   'star4',
   'star5',
+  'label-red',
+  'label-yellow',
+  'label-green',
+  'label-blue',
+  'label-purple',
 ];
 
 /**
@@ -60,6 +76,11 @@ export const FILTER_OPTIONS: ReadonlyArray<{ mode: FilterMode; label: string }> 
   { mode: 'unmarked', label: '未标记' },
   { mode: 'star3', label: '★3 星以上' },
   { mode: 'star5', label: '★5 星精选' },
+  { mode: 'label-red', label: `色标：${LABEL_NAMES.Red}` },
+  { mode: 'label-yellow', label: `色标：${LABEL_NAMES.Yellow}` },
+  { mode: 'label-green', label: `色标：${LABEL_NAMES.Green}` },
+  { mode: 'label-blue', label: `色标：${LABEL_NAMES.Blue}` },
+  { mode: 'label-purple', label: `色标：${LABEL_NAMES.Purple}` },
 ];
 
 /**

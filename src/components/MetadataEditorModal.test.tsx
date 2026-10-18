@@ -23,7 +23,7 @@ function makeGroup(id: string): PhotoGroupInfo {
     status: 'COMPLETE',
     rating: 0,
     flag: 'none',
-    hasXmp: false,
+    label: '', hasXmp: false,
     raw: {
       name: `${id}.RW2`,
       extension: 'RW2',

@@ -30,7 +30,7 @@ const mkGroup = (
   status: 'JPG_ONLY',
   rating,
   flag,
-  hasXmp: false,
+  label: '', hasXmp: false,
 });
 
 // all=5 · pick=1 · reject=1 · unmarked=1 · star3=2 · star5=1

@@ -22,7 +22,7 @@ function group(id: string, over: Partial<PhotoGroupInfo> = {}): PhotoGroupInfo {
     status: 'RAW_ONLY',
     rating: 0,
     flag: 'none',
-    hasXmp: false,
+    label: '', hasXmp: false,
     ...over,
   } as PhotoGroupInfo;
 }

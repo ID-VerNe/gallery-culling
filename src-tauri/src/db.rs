@@ -55,6 +55,8 @@ pub struct PendingWrite {
     pub photo_path: String,
     pub rating: u8,
     pub flag: String,
+    /// 色标（`""` = 无色标）。与 rating/flag 一起整组回放。
+    pub label: String,
     /// 用户做这次改动的时间（Unix 秒）。回放时据此判断侧边栏是否被外部改过。
     pub updated_at: i64,
 }
@@ -123,11 +125,16 @@ impl Database {
                 photo_path TEXT PRIMARY KEY,
                 rating     INTEGER NOT NULL,
                 flag       TEXT NOT NULL,
+                label      TEXT NOT NULL DEFAULT '',
                 updated_at INTEGER NOT NULL
             )",
             [],
         )
         .map_err(|e| format!("创建 pending_xmp 表失败: {}", e))?;
+
+        // 旧库补列：`CREATE TABLE IF NOT EXISTS` 对已存在的表是空操作，不会补列。
+        // 色标是后加的字段，升级用户的库里没有它 —— 显式检查后再 ALTER。
+        ensure_column(&conn, "pending_xmp", "label", "TEXT NOT NULL DEFAULT ''")?;
 
         Ok(Self {
             conn: std::sync::Arc::new(Mutex::new(conn)),
@@ -235,15 +242,16 @@ impl Database {
         photo_path: &str,
         rating: u8,
         flag: &str,
+        label: &str,
         updated_at: i64,
     ) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT INTO pending_xmp (photo_path, rating, flag, updated_at)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO pending_xmp (photo_path, rating, flag, label, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(photo_path) DO UPDATE SET
-                rating = ?2, flag = ?3, updated_at = ?4",
-            params![photo_path, rating as i64, flag, updated_at],
+                rating = ?2, flag = ?3, label = ?4, updated_at = ?5",
+            params![photo_path, rating as i64, flag, label, updated_at],
         )
         .map_err(|e| format!("记录待写盘标记失败: {}", e))?;
         Ok(())
@@ -253,7 +261,7 @@ impl Database {
     pub fn list_pending(&self) -> Result<Vec<PendingWrite>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn
-            .prepare("SELECT photo_path, rating, flag, updated_at FROM pending_xmp")
+            .prepare("SELECT photo_path, rating, flag, label, updated_at FROM pending_xmp")
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |row| {
@@ -261,7 +269,8 @@ impl Database {
                     photo_path: row.get::<_, String>(0)?,
                     rating: row.get::<_, i64>(1)?.max(0) as u8,
                     flag: row.get::<_, String>(2)?,
-                    updated_at: row.get::<_, i64>(3)?,
+                    label: row.get::<_, String>(3)?,
+                    updated_at: row.get::<_, i64>(4)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -340,6 +349,29 @@ impl Database {
     }
 }
 
+/// 给已存在的表补一列（幂等）。
+///
+/// 只用于本模块内的**字面量**表名/列名 —— 不做任何转义，也不接受外部输入。
+fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({})", table))
+        .map_err(|e| format!("读取表结构失败（{}）: {}", table, e))?;
+    let exists = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| format!("读取表结构失败（{}）: {}", table, e))?
+        .flatten()
+        .any(|name| name.eq_ignore_ascii_case(column));
+    if exists {
+        return Ok(());
+    }
+    conn.execute(
+        &format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, decl),
+        [],
+    )
+    .map_err(|e| format!("为 {}.{} 补列失败: {}", table, column, e))?;
+    Ok(())
+}
+
 fn get_db_path() -> PathBuf {
     let local = PathBuf::from("gallery_culling.db");
     // create(true) 配 write(true) 但**没有** truncate(true)：刻意如此 ——
@@ -388,9 +420,12 @@ mod tests {
     #[test]
     fn pending_upsert_keeps_latest_intent() {
         let (db, path) = temp_db("pending_upsert");
-        db.enqueue_pending("C:/p/a.JPG", 3, "none", 100).unwrap();
-        // 同一张照片再改一次：只保留最新一条，不能堆成两行
-        db.enqueue_pending("C:/p/a.JPG", 5, "pick", 200).unwrap();
+        db.enqueue_pending("C:/p/a.JPG", 3, "none", "Red", 100)
+            .unwrap();
+        // 同一张照片再改一次：只保留最新一条，不能堆成两行。
+        // 色标也必须跟着覆盖 —— 否则回放会把红标写回一张已经改过标的照片。
+        db.enqueue_pending("C:/p/a.JPG", 5, "pick", "Blue", 200)
+            .unwrap();
 
         let rows = db.list_pending().unwrap();
         assert_eq!(rows.len(), 1);
@@ -400,6 +435,7 @@ mod tests {
                 photo_path: "C:/p/a.JPG".to_string(),
                 rating: 5,
                 flag: "pick".to_string(),
+                label: "Blue".to_string(),
                 updated_at: 200,
             }
         );
@@ -407,11 +443,50 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// 升级路径：色标之前创建的 `pending_xmp` 没有 label 列。
+    /// `CREATE TABLE IF NOT EXISTS` 不会补列，必须靠 `ensure_column`。
+    #[test]
+    fn old_pending_table_gets_label_column() {
+        let path = std::env::temp_dir().join(format!("gc_db_migrate_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            // 造一个"旧版本"的库：表结构与色标落地前一致
+            let conn = Connection::open(&path).expect("建旧库");
+            conn.execute(
+                "CREATE TABLE pending_xmp (
+                    photo_path TEXT PRIMARY KEY,
+                    rating     INTEGER NOT NULL,
+                    flag       TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )",
+                [],
+            )
+            .expect("旧表");
+            conn.execute(
+                "INSERT INTO pending_xmp VALUES ('C:/p/old.JPG', 4, 'pick', 7)",
+                [],
+            )
+            .expect("旧行");
+        }
+
+        let db = Database::open(&path).expect("打开旧库应自动补列");
+        let rows = db.list_pending().expect("旧行仍可读");
+        assert_eq!(rows.len(), 1, "补列不得丢行");
+        assert_eq!(rows[0].label, "", "旧行的色标按空处理");
+        // 补列之后能正常写新值
+        db.enqueue_pending("C:/p/new.JPG", 1, "none", "Green", 8)
+            .expect("写新行");
+        assert_eq!(db.count_pending().unwrap(), 2);
+
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn pending_roundtrip_and_delete() {
         let (db, path) = temp_db("pending_roundtrip");
-        db.enqueue_pending("C:/p/a.JPG", 1, "reject", 10).unwrap();
-        db.enqueue_pending("C:/p/b.JPG", 4, "pick", 20).unwrap();
+        db.enqueue_pending("C:/p/a.JPG", 1, "reject", "", 10).unwrap();
+        db.enqueue_pending("C:/p/b.JPG", 4, "pick", "", 20).unwrap();
         assert_eq!(db.count_pending().unwrap(), 2);
 
         db.delete_pending("C:/p/a.JPG").unwrap();
@@ -429,7 +504,7 @@ mod tests {
     #[test]
     fn pending_survives_reopen() {
         let (db, path) = temp_db("pending_reopen");
-        db.enqueue_pending("C:/p/a.JPG", 2, "pick", 42).unwrap();
+        db.enqueue_pending("C:/p/a.JPG", 2, "pick", "", 42).unwrap();
         drop(db);
 
         let reopened = Database::open(&path).expect("重开");

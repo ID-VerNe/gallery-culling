@@ -23,7 +23,7 @@ const group = (id: string): PhotoGroupInfo => ({
   status: 'RAW_ONLY',
   rating: 0,
   flag: 'none',
-  hasXmp: false,
+  label: '', hasXmp: false,
 });
 
 const setup = (ids: string[]) => {
@@ -68,6 +68,25 @@ describe('useBatchOps —— 写盘合并', () => {
     expect(calls).toHaveLength(3);
     for (const call of calls) {
       expect(call.args).toMatchObject({ rating: 0, flag: 'none', coalesce: false });
+    }
+  });
+
+  it('批量色标是"设为"：逐张写同一个色标，星级/旗标原样保留', async () => {
+    const { result } = setup(['A', 'B']);
+
+    await act(async () => {
+      await result.current.runBatch({ kind: 'label', value: 'Purple' });
+    });
+
+    const calls = invokeCalls('update_rating_flag_cmd');
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.args).toMatchObject({
+        rating: 0,
+        flag: 'none',
+        label: 'Purple',
+        coalesce: false,
+      });
     }
   });
 });
