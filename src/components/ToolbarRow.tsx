@@ -6,6 +6,7 @@ import {
   Maximize2,
   Split,
   Sparkles,
+  RefreshCw,
 } from 'lucide-react';
 import type { FilterMode, SortOrder, ViewMode } from '../types';
 import { FILTER_OPTIONS } from '../utils/filterMatch';
@@ -71,6 +72,17 @@ export interface ToolbarRowProps {
   tonalToggleDisabled?: boolean;
   onOpenLuminar?: () => void;
   isLuminarRunning?: boolean;
+  /**
+   * FR-08 手动入口：从 XMP 重新读取外部改动。
+   *
+   * 刻意**不**因互斥而置灰：被扫描/导出挡住时点击会当场弹一句原因。disabled
+   * 按钮不可聚焦，原因只能画在屏幕上（FR-09 的规矩），而这一行没有位置常驻
+   * 一整句「正在扫描照片，暂时不能读取 XMP」。留一个可点的按钮 + 即时解释，
+   * 比留一个灰按钮 + 无处安放的原因更诚实。
+   */
+  onRefreshXmp?: () => void;
+  /** 正在读盘：只防重复点击（互斥另有说明）。 */
+  isRefreshingXmp?: boolean;
 }
 
 export const ToolbarRow: React.FC<ToolbarRowProps> = ({
@@ -87,6 +99,8 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
   tonalToggleDisabled,
   onOpenLuminar,
   isLuminarRunning,
+  onRefreshXmp,
+  isRefreshingXmp,
 }) => {
   // M-10：按下态由宿主传入的派生真值决定（用户意图 && 当前有可调对象）。
   const tonalVisible = tonalPanelVisible;
@@ -207,6 +221,23 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
         )}
 
         {/* A6：镜头元数据入口唯一收敛到底栏，撤掉顶栏这处第三入口。 */}
+
+        {/* FR-08：从 XMP 重新读取（切回窗口时会自动读，这里给手动入口） */}
+        {onRefreshXmp && (
+          <button
+            onClick={onRefreshXmp}
+            disabled={isRefreshingXmp}
+            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap"
+            title="从 XMP 重新读取外部改动（切回窗口时会自动读取）"
+            aria-label="从 XMP 重新读取"
+          >
+            <RefreshCw
+              className={`w-3.5 h-3.5 ${isRefreshingXmp ? 'animate-spin' : ''}`}
+              aria-hidden="true"
+            />
+            <span className="pb-[1px]">{isRefreshingXmp ? '读取中…' : '读 XMP'}</span>
+          </button>
+        )}
 
         {/* Batch Export */}
         <button

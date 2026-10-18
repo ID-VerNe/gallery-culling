@@ -17,6 +17,9 @@ import {
   ToneAdjustments,
   ToneState,
   ToneWriteReport,
+  XmpConflictChoice,
+  XmpRefreshReport,
+  XmpResolveReport,
 } from '../types';
 
 export const api = {
@@ -90,6 +93,31 @@ export const api = {
     return await invoke<{ path: string; detail: string }[]>('check_cull_state_cmd', {
       items,
     });
+  },
+
+  /**
+   * FR-08：从 XMP 增量读取。
+   *
+   * 后端先 stat 所有 sidecar 的 mtime，只解析变了的那些 —— 所以这个调用在
+   * 10k 张、零变化的常态下也是廉价的。目标顺序与 `groupPath()` 一致（RAW 优先），
+   * `jpgPath` 只用于旗标存储的兜底查找。
+   */
+  refreshFromXmp: async (
+    targets: { path: string; jpgPath: string | null }[],
+  ): Promise<XmpRefreshReport> => {
+    return await invoke<XmpRefreshReport>('refresh_from_xmp_cmd', { targets });
+  },
+
+  /**
+   * FR-08：裁决冲突（可一次提交多张，「逐张选择」也走这条）。
+   *
+   * `use-external` 时把弹窗里显示的外部值一并带回：后端据此推进游标，
+   * 不重读磁盘 —— 用户裁决的是他**看到的**那个值。
+   */
+  resolveXmpConflicts: async (
+    choices: XmpConflictChoice[],
+  ): Promise<XmpResolveReport> => {
+    return await invoke<XmpResolveReport>('resolve_xmp_conflicts_cmd', { choices });
   },
 
   /**

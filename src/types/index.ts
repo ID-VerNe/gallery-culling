@@ -272,3 +272,75 @@ export interface FolderScanResult {
   rawFolder: string;
   isViewerMode: boolean;
 }
+
+/* -------------------------------------------------------------------------- */
+/* FR-08：XMP 增量导入与冲突裁决                                                */
+/* -------------------------------------------------------------------------- */
+
+/** 一张照片的三项标记状态（与 Rust `CullState` 逐字对齐）。 */
+export interface CullStateSnapshot {
+  rating: number;
+  /** `pick` | `reject` | `none` */
+  flag: string;
+  /** `''` 表示无色标 */
+  label: string;
+}
+
+/** 刷新结果里「已采用外部值」的一张。 */
+export interface XmpRefreshItem {
+  path: string;
+  state: CullStateSnapshot;
+  /** 侧边栏在磁盘上已不存在（外部删除）—— 界面值被清空，值得单独提示一句。 */
+  sidecarRemoved: boolean;
+}
+
+/**
+ * 待裁决的一张：本地有未落盘的意图，外部也改了。
+ *
+ * `local` 是那个还没写进磁盘的意图，`external` 是磁盘现值。两者都要摆给用户看，
+ * 绝不替用户选。
+ */
+export interface XmpRefreshConflict {
+  path: string;
+  local: CullStateSnapshot;
+  external: CullStateSnapshot;
+}
+
+/** 一次增量刷新的汇总。 */
+export interface XmpRefreshReport {
+  /** 参与检查的目标数（去重后） */
+  checked: number;
+  /** 无事发生：mtime 一致 / 内容一致 / 从未见过且文件不存在 */
+  unchanged: number;
+  /** 首次见到并建立基线（不产生更新） */
+  baselined: number;
+  adopted: XmpRefreshItem[];
+  conflicts: XmpRefreshConflict[];
+  /** 读失败的路径 */
+  failed: string[];
+}
+
+/** 冲突裁决动作。字符串值即后端 `ConflictAction` 的 serde 表示。 */
+export type XmpConflictAction = 'keep-local' | 'use-external';
+
+export interface XmpConflictChoice {
+  path: string;
+  action: XmpConflictAction;
+  /** `use-external` 时回传弹窗里显示的外部值（后端据此推进游标，不重读磁盘）。 */
+  external?: CullStateSnapshot;
+}
+
+/**
+ * 一张裁决失败。`path` 单独给出（不是拼进文案）：弹窗要按路径把失败的那几条
+ * **留在列表里**让用户再选一次。拼成 `"path: msg"` 后 Windows 路径里的 `:`
+ * 会让解析变成猜。
+ */
+export interface XmpResolveFailure {
+  path: string;
+  message: string;
+}
+
+export interface XmpResolveReport {
+  applied: XmpRefreshItem[];
+  failed: XmpResolveFailure[];
+}

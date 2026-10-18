@@ -20,6 +20,7 @@ export const ACTIVITIES = [
   'ai',
   'batch-write',
   'apply-tone',
+  'refresh',
   'thumbnail',
 ] as const;
 
@@ -33,27 +34,33 @@ export const ACTIVITY_LABELS: Record<TaskActivity, string> = {
   ai: 'AI 蒙版',
   'batch-write': '批量写盘',
   'apply-tone': '套用调色',
+  refresh: '读取 XMP',
   thumbnail: '生成缩略图',
 };
 
 /**
  * 互斥表：`BLOCKED_BY[a]` 里的每一项都表示「a 运行时，那一项不能开始」。
  *
- * 六种长任务彼此互斥，理由分三类：
+ * 七种长任务彼此互斥，理由分四类：
  * - scan / export 共享取消标志（后端 `scan_cancel` / `export_cancel` 是全局的）；
  * - render / ai / apply-tone 共享 LUMEN 常驻进程的编辑态（session 是单份的）；
- * - batch-write / apply-tone 改写同一批 XMP 文件（同时跑会互相覆盖）。
+ * - batch-write / apply-tone / refresh 改写或读取同一批 XMP 文件
+ *   （同时跑会互相覆盖，或读到写了一半的值）；
+ * - refresh 还可能与扫描争同一批 sidecar 的 mtime 快照。
  *
  * `thumbnail` 只被 export / render 阻塞：它读的是内嵌预览，与扫描不冲突，
  * 但与导出争磁盘 IO。
  */
 export const BLOCKED_BY: Record<TaskActivity, readonly TaskActivity[]> = {
-  scan: ['export', 'render', 'ai', 'batch-write', 'apply-tone'],
-  export: ['scan', 'render', 'ai', 'batch-write', 'apply-tone', 'thumbnail'],
-  render: ['scan', 'export', 'ai', 'batch-write', 'apply-tone', 'thumbnail'],
-  ai: ['scan', 'export', 'render', 'batch-write', 'apply-tone'],
-  'batch-write': ['scan', 'export', 'render', 'ai', 'apply-tone'],
-  'apply-tone': ['scan', 'export', 'render', 'ai', 'batch-write'],
+  scan: ['export', 'render', 'ai', 'batch-write', 'apply-tone', 'refresh'],
+  export: ['scan', 'render', 'ai', 'batch-write', 'apply-tone', 'refresh', 'thumbnail'],
+  render: ['scan', 'export', 'ai', 'batch-write', 'apply-tone', 'refresh', 'thumbnail'],
+  ai: ['scan', 'export', 'render', 'batch-write', 'apply-tone', 'refresh'],
+  'batch-write': ['scan', 'export', 'render', 'ai', 'apply-tone', 'refresh'],
+  'apply-tone': ['scan', 'export', 'render', 'ai', 'batch-write', 'refresh'],
+  // 刷新会读、裁决还会写同一批 sidecar：与所有长任务互斥，但与缩略图无冲突
+  // （缩略图读的是内嵌预览，两边不碰同一个文件）。
+  refresh: ['scan', 'export', 'render', 'ai', 'batch-write', 'apply-tone'],
   thumbnail: ['export', 'render'],
 };
 

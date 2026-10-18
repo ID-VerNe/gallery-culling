@@ -11,6 +11,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { MetadataEditorModal } from './components/MetadataEditorModal';
 import { ShortcutHelpModal } from './components/ShortcutHelpModal';
 import { ConfirmDialog } from './components/ConfirmDialog';
+import { XmpConflictDialog } from './components/XmpConflictDialog';
 import { ToastProvider, useToast } from './components/Toast';
 import { TaskProgressBar } from './components/TaskProgressBar';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
@@ -21,6 +22,7 @@ import { useComparePin } from './hooks/useComparePin';
 import { useFolderScan } from './hooks/useFolderScan';
 import { useBatchOps } from './hooks/useBatchOps';
 import { useRatingFlagSync, type UndoConflict } from './hooks/useRatingFlagSync';
+import { useXmpRefresh } from './hooks/useXmpRefresh';
 import { useToneEditing } from './hooks/useToneEditing';
 import { useToneBatch } from './hooks/useToneBatch';
 import { useTaskMutex, useActivity, TaskMutexProvider } from './hooks/useTaskMutex';
@@ -144,6 +146,21 @@ function AppShell() {
     dismissConflict,
     clearCullUndo,
   } = rating;
+
+  /**
+   * FR-08：切回窗口时从 XMP 增量读取外部改动。
+   *
+   * 放在 `rating` 之后：采用外部值要把「未同步」角标一起撤掉（`markSynced`），
+   * 否则磁盘已是真值、格子还挂着红角标。
+   */
+  const xmpRefresh = useXmpRefresh({
+    groups,
+    onGroupPatched: patchGroup,
+    onSynced: markSynced,
+  });
+  const handleRefreshXmp = useCallback(() => {
+    void xmpRefresh.refreshNow();
+  }, [xmpRefresh.refreshNow]);
 
   const batch = useBatchOps({
     filteredGroups,
@@ -511,6 +528,8 @@ function AppShell() {
         tonalToggleDisabled={!currentGroup}
         onOpenLuminar={external.openLuminar}
         isLuminarRunning={external.isLuminarRunning}
+        onRefreshXmp={handleRefreshXmp}
+        isRefreshingXmp={xmpRefresh.refreshing}
         scanBlockedReason={mutex.blockReason('scan')}
       />
 
@@ -773,6 +792,15 @@ function AppShell() {
         confirmLabel={pendingConflict?.direction === 'redo' ? '仍要重做' : '仍要撤销'}
         cancelLabel="取消"
         destructive
+      />
+
+      {/* FR-08：外部改了、本地也有未落盘的意图 —— 三选一，不自动覆盖 */}
+      <XmpConflictDialog
+        isOpen={xmpRefresh.conflicts !== null}
+        conflicts={xmpRefresh.conflicts ?? []}
+        busy={xmpRefresh.resolving}
+        onCancel={xmpRefresh.dismissConflicts}
+        onApply={(choices) => void xmpRefresh.resolveConflicts(choices)}
       />
     </div>
   );

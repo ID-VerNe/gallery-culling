@@ -44,6 +44,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   tonalToggleDisabled,
   onOpenLuminar,
   isLuminarRunning,
+  onRefreshXmp,
+  isRefreshingXmp,
 }) => (
   <header
     aria-label="Gallery Culling 应用工具栏"
@@ -90,6 +92,8 @@ export const TopBar: React.FC<TopBarProps> = ({
       tonalToggleDisabled={tonalToggleDisabled}
       onOpenLuminar={onOpenLuminar}
       isLuminarRunning={isLuminarRunning}
+      onRefreshXmp={onRefreshXmp}
+      isRefreshingXmp={isRefreshingXmp}
     />
   </header>
 );

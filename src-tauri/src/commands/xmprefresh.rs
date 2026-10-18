@@ -42,12 +42,21 @@ pub struct ConflictChoice {
     pub external: Option<CullState>,
 }
 
+/// 一张裁决失败。`path` 单独给出（而不是拼进错误文案）：前端要按路径把
+/// 失败的那几条**留在弹窗里**，让用户再选一次。拼成 `"path: msg"` 后
+/// Windows 路径里的 `:` 会让解析变成猜。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ResolveFailure {
+    pub path: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ResolveReport {
     /// 裁决后的最终状态（前端据此更新界面）
     pub applied: Vec<RefreshItem>,
-    /// 逐张失败原因
-    pub failed: Vec<String>,
+    /// 逐张失败
+    pub failed: Vec<ResolveFailure>,
 }
 
 /// 从 XMP 增量读取。前端在窗口重新聚焦（防抖后）或手动点「重新读取」时调用。
@@ -101,7 +110,9 @@ pub fn resolve_conflicts(
             // 幂等跳过比报错好 —— 用户不该为重复点击看到一条红字。
             Ok(None) => continue,
             Err(e) => {
-                report.failed.push(format!("{}: {}", choice.path, e));
+                report
+                    .failed
+                    .push(ResolveFailure { path: choice.path.clone(), message: e });
                 continue;
             }
         };
@@ -111,7 +122,9 @@ pub fn resolve_conflicts(
                 let state = CullState::new(pending.rating, &pending.flag, &pending.label);
                 // 记录可能来自旧版本：非法旗标不能进合并队列。
                 if let Err(e) = cullstore::validate_flag(&state.flag) {
-                    report.failed.push(format!("{}: {}", choice.path, e));
+                    report
+                        .failed
+                        .push(ResolveFailure { path: choice.path.clone(), message: e });
                     continue;
                 }
                 let intent = Intent {
@@ -131,14 +144,22 @@ pub fn resolve_conflicts(
                             sidecar_removed: false,
                         }),
                         // 写盘失败：DiskSink 不删意图，用户下次刷新还能再裁决一次。
-                        Err(e) => report.failed.push(format!("{}: {}", choice.path, e)),
+                        Err(e) => report.failed.push(ResolveFailure {
+                            path: choice.path.clone(),
+                            message: e,
+                        }),
                     },
-                    Err(e) => report.failed.push(format!("{}: {}", choice.path, e)),
+                    Err(e) => report.failed.push(ResolveFailure {
+                        path: choice.path.clone(),
+                        message: e,
+                    }),
                 }
             }
             ConflictAction::UseExternal => {
                 if let Err(e) = db.delete_pending(&choice.path) {
-                    report.failed.push(format!("{}: {}", choice.path, e));
+                    report
+                        .failed
+                        .push(ResolveFailure { path: choice.path.clone(), message: e });
                     continue;
                 }
                 let sidecar = xmp::get_xmp_path(Path::new(&choice.path));
@@ -372,7 +393,7 @@ mod tests {
 
         assert_eq!(report.failed.len(), 1);
         assert!(
-            report.failed[0].contains("未知的旗标值"),
+            report.failed[0].message.contains("未知的旗标值"),
             "错误信息要说明原因: {:?}",
             report.failed
         );
