@@ -45,6 +45,7 @@ pub use lumencmds::{
     __cmd__lumen_status_cmd, __tauri_command_name_lumen_status_cmd,
     __cmd__probe_lumen_cmd, __tauri_command_name_probe_lumen_cmd,
     __cmd__lumen_preview_cmd, __tauri_command_name_lumen_preview_cmd,
+    __cmd__lumen_detail_cmd, __tauri_command_name_lumen_detail_cmd,
     __cmd__lumen_sync_ratings_cmd, __tauri_command_name_lumen_sync_ratings_cmd,
     __cmd__lumen_get_recipe_cmd, __tauri_command_name_lumen_get_recipe_cmd,
     __cmd__lumen_apply_recipe_cmd, __tauri_command_name_lumen_apply_recipe_cmd,
@@ -55,6 +56,7 @@ pub use lumencmds::{
     lumen_status_cmd,
     probe_lumen_cmd,
     lumen_preview_cmd,
+    lumen_detail_cmd,
     lumen_sync_ratings_cmd,
     lumen_get_recipe_cmd,
     lumen_apply_recipe_cmd,
@@ -119,6 +121,12 @@ pub struct AppState {
     pub sync: Arc<syncqueue::Coalescer>,
     /// 任务槽（FR-09）：扫描/导出/渲染/AI 互斥，重入返回 E_BUSY。
     pub tasks: crate::taskgate::TaskGate,
+    /// 1:1 细节渲染的单飞标记（FR-05）：761MB/张，并行 3 张就是 2.3GB。
+    ///
+    /// 刻意**不**并进 `tasks`：那是「互斥表 + 禁用原因」的用户可见语义，
+    /// 而这里是「同一时刻只渲一张」的资源上限 —— 第二个请求应当立刻
+    /// `E_BUSY` 让前端队列自己排队，不该让导出按钮变灰。
+    pub detail_busy: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -133,6 +141,7 @@ impl AppState {
             export_cancel: Arc::new(AtomicBool::new(false)),
             sync: Arc::new(syncqueue::Coalescer::new(sink)),
             tasks: crate::taskgate::TaskGate::new(),
+            detail_busy: Arc::new(AtomicBool::new(false)),
         }
     }
 }

@@ -71,6 +71,7 @@ pub fn run() {
             commands::lumen_status_cmd,
             commands::probe_lumen_cmd,
             commands::lumen_preview_cmd,
+            commands::lumen_detail_cmd,
             commands::lumen_sync_ratings_cmd,
             commands::lumen_get_recipe_cmd,
             commands::lumen_apply_recipe_cmd,

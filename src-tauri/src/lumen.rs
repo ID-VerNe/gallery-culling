@@ -20,6 +20,7 @@
 
 mod cache;
 mod capabilities;
+mod detail;
 mod cli;
 mod discovery;
 mod error;
@@ -35,6 +36,7 @@ mod transport;
 
 pub use cache::*;
 pub use capabilities::*;
+pub use detail::*;
 pub use cli::*;
 pub use discovery::*;
 pub use error::LumenError;

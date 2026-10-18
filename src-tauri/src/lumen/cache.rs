@@ -15,7 +15,9 @@ use super::PINNED_LUMEN_VERSION;
 use super::recipe_hash;
 
 /// 把可选时间戳编码进缓存键：None 与 Some(UNIX_EPOCH) 也必须可区分。
-fn mtime_tag(mtime: Option<SystemTime>) -> u128 {
+///
+/// `pub(super)` 而非 `pub`：`detail` 模块复用它，但这不是对外 API。
+pub(super) fn mtime_tag(mtime: Option<SystemTime>) -> u128 {
     match mtime {
         Some(t) => t
             .duration_since(UNIX_EPOCH)

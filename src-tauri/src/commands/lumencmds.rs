@@ -7,8 +7,10 @@
 //! 两者的差别是外部事实（引擎公开方法的返回类型），不是调用点口味。
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use serde_json::Value;
 use tauri::State;
 
 use crate::cullstore;
@@ -20,7 +22,6 @@ use crate::models::{
     LumenMaskResult, LumenPreviewResult, LumenRatingConflict, LumenRatingSync, LumenRecipe, MaskAdjustments,
     ToneAdjustments,
 };
-
 use super::{blocking, blocking_value, lumen_exe, require_lumen, AppState};
 
 /// LUMEN RAW 集成握手状态（供前端徽标/降级判断）。
@@ -496,10 +497,305 @@ pub async fn lumen_list_masks_cmd(
     .await
 }
 
+/// `lumen_detail_cmd` 的返回。
+///
+/// `detail_path: None` = 引擎不可用（前端静默退回 1600 预览，不弹错）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LumenDetailResult {
+    /// 全分辨率 JPEG 的本地路径。
+    pub detail_path: Option<String>,
+    /// 本次是否命中磁盘缓存（true = 没花那 6–8 秒）。
+    pub cached: bool,
+    /// 本次耗时（毫秒）；命中缓存时接近 0。
+    pub elapsed_ms: u64,
+}
+
+/// 渲染 RAW 的**全分辨率**细节图（RAW-only 分组的 1:1 检查）。
+///
+/// 与 `lumen_preview_cmd` 的分工：
+/// - 预览走 `render.preview`，被 `engine.load_image(preview_limit=1600)` 硬顶，
+///   只服务「看得清构图」；
+/// - 细节走 `photo.export`（省略 `long_edge` = 原生尺寸），服务「看得清对焦」。
+///
+/// 代价是**每张 6–8 秒、峰值 761MB**（24MP 实测，报告 §5.4），所以：
+/// 1. 只在用户明确按 `Z` / 双击时触发，不做「放大超过 2.5× 自动触发」；
+/// 2. 全局并发上限 1，第二个请求立刻 `E_BUSY`；
+/// 3. 产物落 2GB LRU 缓存，命中直接返回。
+#[tauri::command]
+pub async fn lumen_detail_cmd(
+    file_path: String,
+    // recipe: 调色参数 JSON 文本；参与缓存键，且在导出前先 `edit.apply`。
+    recipe: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<LumenDetailResult, String> {
+    let settings = state.db.load_settings()?;
+    let unavailable = || LumenDetailResult {
+        detail_path: None,
+        cached: false,
+        elapsed_ms: 0,
+    };
+    let Some(exe) = lumen_exe(&settings) else {
+        return Ok(unavailable());
+    };
+
+    // 坏 JSON 不能让细节整体失败：按「无 recipe」处理（与预览同口径）。
+    let recipe: Option<serde_json::Value> = recipe.and_then(|r| match serde_json::from_str(&r) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            eprintln!("lumen_detail_cmd: recipe JSON 解析失败，已忽略: {}", e);
+            None
+        }
+    });
+
+    let src = PathBuf::from(&file_path);
+    let cache_root = get_cache_dir().join("gallery");
+    let runtime = state.lumen.clone();
+    let busy = state.detail_busy.clone();
+
+    blocking("LUMEN 细节渲染任务异常", move || {
+        let recipe_for_render = recipe.clone();
+        detail_impl(&src, &cache_root, recipe, &busy, |_tmp, args| {
+            // `_tmp` 不用：生产路径由 `run_lumen` 按 `args["output"]` 自己写盘，
+            // 只有测试需要往那个路径塞固定字节（用来模拟产物）。
+            // 与预览同一条约束：`photo.export` 不接受 recipe 参数，必须先把
+            // 调色写进 .lumen 工程再导出，否则细节是「没调过色」的那一版。
+            if let Some(recipe) = &recipe_for_render {
+                runtime
+                    .apply_recipe(&exe, &src.to_string_lossy(), recipe)
+                    .map_err(|e| LumenError::Protocol(format!("应用调色参数失败: {}", e)))?;
+            }
+            lumen::run_lumen(&exe, "photo.export", args).map(|_| ())
+        })
+    })
+    .await
+}
+
+/// 细节渲染的实现体（与 `#[tauri::command]` 解耦，便于单测直接注入渲染边界）。
+///
+/// `render` 拿到的是 `(tmp 路径, photo.export 参数)`：生产实现是
+/// `run_lumen(exe, "photo.export", args)`，测试是写固定字节。
+pub(crate) fn detail_impl<F>(
+    src: &Path,
+    cache_root: &Path,
+    recipe: Option<serde_json::Value>,
+    busy: &AtomicBool,
+    render: F,
+) -> Result<LumenDetailResult, String>
+where
+    F: FnOnce(&Path, &Value) -> Result<(), LumenError>,
+{
+    if !src.is_file() {
+        return Err(format!("原图片文件不存在: {}", src.display()));
+    }
+
+    // 并发上限 1：761MB/张，并行 3 张就是 2.3GB（报告 §5.4 实测）。
+    // 用 compare_exchange 而非 load+store —— 同一 tick 到达的两个请求里
+    // 只有一个能赢，另一个立刻 E_BUSY，不会一起冲进渲染。
+    if busy
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err(format!(
+            "{}: 正在生成另一张的 1:1 细节，请稍候。",
+            crate::taskgate::E_BUSY
+        ));
+    }
+    let _guard = DetailBusyGuard(busy);
+
+    let src_mtime = fs::metadata(src).and_then(|m| m.modified()).ok();
+    // 兄弟 .lumen 工程：存在则把 mtime 纳入缓存键（与预览同口径）。
+    let project = src.with_extension("lumen");
+    let project_mtime = project
+        .exists()
+        .then(|| fs::metadata(&project).and_then(|m| m.modified()).ok())
+        .flatten();
+
+    let inputs = lumen::DetailCacheInputs {
+        lumen_version: PINNED_LUMEN_VERSION,
+        src_mtime,
+        project_mtime,
+        recipe,
+    };
+    let key = inputs.key(src);
+    // 必须在 ensure_detail **之前**判定：它返回后文件一定存在，就永远是 true。
+    let cached = inputs.cache_path(cache_root, &key).is_file();
+
+    let t0 = std::time::Instant::now();
+    let out = lumen::ensure_detail(src, cache_root, inputs, render).map_err(|e| e.to_string())?;
+    let elapsed_ms = t0.elapsed().as_millis() as u64;
+
+    if !cached {
+        // 只有真写了新文件才可能超预算；命中缓存不扫目录。
+        let _ = lumen::evict_detail_cache(cache_root, lumen::DETAIL_CACHE_LIMIT_BYTES);
+    }
+
+    Ok(LumenDetailResult {
+        detail_path: Some(out.to_string_lossy().to_string()),
+        cached,
+        elapsed_ms,
+    })
+}
+
+/// 细节渲染的独占标记：`Drop` 复位。
+///
+/// 与 `taskgate` 同一条理由 —— 渲染失败 / panic / 提前 return 都必须解锁，
+/// 否则一次失败就让 1:1 永久不可用（比没有这个功能更糟）。
+struct DetailBusyGuard<'a>(&'a AtomicBool);
+
+impl Drop for DetailBusyGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
 /// `probe_lumen_impl` 的单测（FE-07 从 commands.rs 的 `mod tests` 归位到此）。
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn scratch(tag: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "gallery_detail_{}_{}_{}",
+            tag,
+            std::process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 造一个「源 RAW」：内容随意，存在即可（mtime 参与缓存键）。
+    fn fake_raw(dir: &Path, name: &str) -> PathBuf {
+        let p = dir.join(name);
+        std::fs::write(&p, b"raw").unwrap();
+        p
+    }
+
+    #[test]
+    fn first_render_then_cache_hit() {
+        let root = scratch("hit");
+        let src = fake_raw(&root, "A.ARW");
+        let cache = root.join("cache");
+        let busy = AtomicBool::new(false);
+        let mut renders = 0;
+
+        let r1 = detail_impl(&src, &cache, None, &busy, |tmp, _args| {
+            renders += 1;
+            std::fs::write(tmp, b"jpg").unwrap();
+            Ok(())
+        })
+        .expect("首次应成功");
+        assert!(!r1.cached, "首次必须是真渲染");
+        assert_eq!(renders, 1);
+        assert!(Path::new(r1.detail_path.as_deref().unwrap()).is_file());
+
+        let r2 = detail_impl(&src, &cache, None, &busy, |_tmp, _args| {
+            renders += 1;
+            Ok(())
+        })
+        .expect("第二次应命中");
+        assert!(r2.cached, "第二次必须命中缓存");
+        assert_eq!(renders, 1, "命中缓存不得调用渲染边界");
+        assert_eq!(
+            r1.detail_path, r2.detail_path,
+            "同一张图两次必须是同一个缓存文件"
+        );
+    }
+
+    #[test]
+    fn busy_returns_e_busy_without_rendering() {
+        let root = scratch("busy");
+        let src = fake_raw(&root, "A.ARW");
+        let cache = root.join("cache");
+        let busy = AtomicBool::new(true); // 另一张正在渲染
+
+        let err = detail_impl(&src, &cache, None, &busy, |_tmp, _args| {
+            panic!("忙的时候不得进入渲染边界");
+        })
+        .expect_err("应返回 E_BUSY");
+        assert!(
+            err.starts_with(crate::taskgate::E_BUSY),
+            "必须是 E_BUSY 前缀（前端据此区分排队与真失败），实际: {}",
+            err
+        );
+        assert!(
+            busy.load(Ordering::Acquire),
+            "标记属于别人，失败路径不得把它复位"
+        );
+    }
+
+    #[test]
+    fn busy_released_after_success() {
+        let root = scratch("release_ok");
+        let src = fake_raw(&root, "A.ARW");
+        let busy = AtomicBool::new(false);
+        detail_impl(&src, &root.join("cache"), None, &busy, |tmp, _a| {
+            std::fs::write(tmp, b"jpg").unwrap();
+            Ok(())
+        })
+        .expect("应成功");
+        assert!(!busy.load(Ordering::Acquire), "成功后必须解锁");
+    }
+
+    #[test]
+    fn busy_released_after_failure() {
+        let root = scratch("release_err");
+        let src = fake_raw(&root, "A.ARW");
+        let busy = AtomicBool::new(false);
+        let err = detail_impl(&src, &root.join("cache"), None, &busy, |_tmp, _a| {
+            Err(LumenError::Command("渲染炸了".into()))
+        })
+        .expect_err("应失败");
+        assert!(err.contains("渲染炸了"), "错误应透传，实际: {}", err);
+        assert!(
+            !busy.load(Ordering::Acquire),
+            "渲染失败也必须解锁 —— 否则一次失败让 1:1 永久不可用"
+        );
+    }
+
+    #[test]
+    fn missing_source_is_error_and_releases_busy() {
+        let root = scratch("missing");
+        let busy = AtomicBool::new(false);
+        let err = detail_impl(
+            &root.join("nope.ARW"),
+            &root.join("cache"),
+            None,
+            &busy,
+            |_tmp, _a| panic!("源不存在不该进入渲染边界"),
+        )
+        .expect_err("应报源不存在");
+        assert!(err.contains("不存在"), "实际: {}", err);
+        assert!(!busy.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn failure_leaves_no_cache_file() {
+        // 失败后重试必须重新渲染 —— 命中一个 0 字节坏图比重新渲更糟。
+        let root = scratch("failcache");
+        let src = fake_raw(&root, "A.ARW");
+        let cache = root.join("cache");
+        let busy = AtomicBool::new(false);
+
+        let _ = detail_impl(&src, &cache, None, &busy, |_tmp, _a| {
+            Err(LumenError::Command("炸".into()))
+        });
+
+        let mut rendered = false;
+        detail_impl(&src, &cache, None, &busy, |tmp, _a| {
+            rendered = true;
+            std::fs::write(tmp, b"jpg").unwrap();
+            Ok(())
+        })
+        .expect("重试应成功");
+        assert!(rendered, "上一次失败不得留下可命中的缓存文件");
+    }
 
     /// `probe_lumen_cmd` 对不存在的路径：`available=false` 且带 `error`。
     /// 直接调用实现体（async），无需 tauri 运行时。
