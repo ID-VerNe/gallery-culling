@@ -16,7 +16,7 @@ pub struct PhotoFileInfo {
     pub mtime: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ExifData {
     pub shutter_speed: Option<String>,

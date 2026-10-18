@@ -352,3 +352,61 @@ export interface XmpResolveReport {
   applied: XmpRefreshItem[];
   failed: XmpResolveFailure[];
 }
+
+/* -------------------------------------------------------------------------- */
+/* FR-10：选片集（`.galleryalbum`）                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 打开选片集后的一条（与 Rust `album::ResolvedDoc` 逐字对齐）。
+ *
+ * `exists=false` 的条目**也在列表里**：选片集的验收标准是「缺失文件列出」，
+ * 从结果里删掉就等于什么都没说。
+ */
+export interface AlbumResolvedDoc {
+  /** 文件里记的原始值（相对或绝对）—— 缺失时只有它能给用户线索。 */
+  source: string;
+  /** 解析后的绝对路径（不保证存在）。 */
+  path: string;
+  exists: boolean;
+  /** 主路径是不是 RAW。判错会让视口拿 `.ARW` 去当 `<img src>`（C2 破图）。 */
+  isRaw: boolean;
+  size: number;
+  /** 秒级 mtime（与扫描结果同口径）。 */
+  mtime: number;
+  /** 配对 JPG 的绝对路径；`null` = 保存时就没有，或文件已不在。 */
+  jpgPath: string | null;
+  jpgExists: boolean;
+  /** 配对 JPG 的体积 / 秒级 mtime（不在时为 0）。 */
+  jpgSize: number;
+  jpgMtime: number;
+  hasXmp: boolean;
+  /** XMP 里的调色基线（调色面板靠它，缺了会把真实调色覆盖成 0）。 */
+  tone?: ToneAdjustments | null;
+  rating: number;
+  flag: string;
+  label: string;
+}
+
+export interface AlbumOpenResult {
+  path: string;
+  entries: AlbumResolvedDoc[];
+  /** 主文件找不到的条目数（`entries` 里仍然保留）。 */
+  missing: number;
+}
+
+export interface AlbumSaveResult {
+  path: string;
+  saved: number;
+}
+
+/** 保存时的一条：绝对路径 + 当前状态。 */
+export interface AlbumItemInput {
+  /** 主路径（RAW 优先，与 `groupPath` 同序）。 */
+  path: string;
+  /** 配对 JPG；主路径本身就是 JPG 时为 `null`。 */
+  jpgPath?: string | null;
+  rating: number;
+  flag: string;
+  label: string;
+}

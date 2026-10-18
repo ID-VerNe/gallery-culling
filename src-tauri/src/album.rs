@@ -41,7 +41,17 @@ pub const ALBUM_MAX_BYTES: u64 = 128 * 1024 * 1024;
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumDoc {
+    /// 主路径：与 `utils/groupPath` 同序（**RAW 优先**），写 XMP 与打开原片都走它。
     pub source: String,
+    /// 配对 JPG（可不在同一目录 —— 本应用本来就支持 JPG / RAW 分目录）。
+    ///
+    /// 为什么必须记：只存 RAW 的话，重新打开时这一组会退化成 `RAW_ONLY`，
+    /// 而 C2 规则规定「无 JPG 的 RAW 组不许回落 `.NEF` 资产 URL」—— LUMEN 没开
+    /// 时整屏黑框。用户在文件夹视图里明明是彩色的，打开选片集变黑，是纯粹的回退。
+    ///
+    /// 缺省（`None`）= 保存时这一组就没有 JPG，不是「忘了记」。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jpg: Option<String>,
     #[serde(default)]
     pub rating: u8,
     #[serde(default)]
@@ -64,7 +74,8 @@ pub struct AlbumFile {
 /// 命令层随后用**磁盘状态**覆盖存在的那些（XMP 是本应用的唯一真值，见
 /// ADR-001/003）；缺失的文件没有磁盘状态可读，保留快照即可 —— 报告里说
 /// 「它原来是 3 星 / 已标」比什么都不说有用。
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+// 不派生 `Eq`：`tone` 里是 f32（调色参数），浮点没有全序。
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedDoc {
     /// 文件里记的原始值（相对或绝对），保留给 UI 显示「它原来记的是哪个」。
@@ -72,10 +83,34 @@ pub struct ResolvedDoc {
     /// 解析后的绝对路径（不保证存在）。
     pub path: String,
     pub exists: bool,
+    /// 主路径是不是 RAW（由扩展名判定，扩展名表只在 `scanner` 里有一份）。
+    ///
+    /// 前端据此把这一条放进 `PhotoGroupInfo.raw` 还是 `.jpg` —— 浏览器解不了
+    /// RAW，判错会让视口拿 `.ARW` 去当 `<img src>`（C2 的破图老问题）。
+    pub is_raw: bool,
     /// 存在的文件才填真实值；缺失时是 0。
     pub size: u64,
     /// 秒级 mtime（与扫描结果同口径）。
     pub mtime: u64,
+    /// 配对 JPG 的绝对路径（`None` = 保存时就没有）。
+    pub jpg_path: Option<String>,
+    /// 配对 JPG 是否真的在磁盘上（`false` 时前端只当它不存在）。
+    pub jpg_exists: bool,
+    /// 配对 JPG 的体积 / 秒级 mtime（不在时为 0）。前端要据此填 `PhotoFileInfo`。
+    pub jpg_size: u64,
+    pub jpg_mtime: u64,
+    /// 主路径旁有没有 XMP 侧边栏。
+    ///
+    /// 由**命令层**填（`resolve_documents` 一律给 `false`）：本模块只管格式，
+    /// 不该知道 XMP 的命名规则。
+    pub has_xmp: bool,
+    /// XMP 里记的调色（命令层填，`None` = 没读过 / 没记过）。
+    ///
+    /// **不能省**：调色面板的基线来自它。给 `None` 会让面板显示全 0，用户
+    /// 以为没调过、点一下保存就把真实调色覆盖成 0 —— 与扫描路径
+    /// （`extract_tone_from_xmp` → `toneSeed`）必须同源。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tone: Option<crate::models::ToneAdjustments>,
     pub rating: u8,
     pub flag: String,
     pub label: String,
@@ -101,6 +136,14 @@ pub fn resolve_source(album_dir: &Path, source: &str) -> PathBuf {
     } else {
         album_dir.join(p)
     }
+}
+
+/// 主路径是不是 RAW。扩展名表只在 `scanner` 里有一份 —— 选片集不该再抄一遍。
+fn is_raw_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(crate::scanner::is_raw_extension)
+        .unwrap_or(false)
 }
 
 /// 校验文档数量（写之前与读之后都要过，前端不该是唯一的守门人）。
@@ -180,14 +223,19 @@ pub fn read_album(path: &Path) -> Result<Vec<AlbumDoc>, String> {
 
 /// 逐条 stat：缺失只标 `exists=false`，绝不中断。
 pub fn resolve_documents(album_path: &Path, docs: &[AlbumDoc]) -> Vec<ResolvedDoc> {
-    let dir = album_path.parent().unwrap_or_else(|| Path::new("."));
+    let dir = album_dir(album_path);
     docs.iter()
         .map(|d| {
             let resolved = resolve_source(dir, &d.source);
             let meta = fs::metadata(&resolved).ok().filter(|m| m.is_file());
+            let jpg = d.jpg.as_deref().map(|s| resolve_source(dir, s));
+            let jpg_meta = jpg
+                .as_ref()
+                .and_then(|p| fs::metadata(p).ok().filter(|m| m.is_file()));
             ResolvedDoc {
                 source: d.source.clone(),
                 exists: meta.is_some(),
+                is_raw: is_raw_path(&resolved),
                 size: meta.as_ref().map(|m| m.len()).unwrap_or(0),
                 mtime: meta
                     .as_ref()
@@ -196,6 +244,22 @@ pub fn resolve_documents(album_path: &Path, docs: &[AlbumDoc]) -> Vec<ResolvedDo
                     .map(|d| d.as_secs())
                     .unwrap_or(0),
                 path: resolved.to_string_lossy().to_string(),
+                // 配对 JPG 只有**真的在磁盘上**才算数：记着路径但文件已被删，
+                // 前端拿到一个不存在的 jpg 会渲染成破图，比没有更糟。
+                jpg_path: jpg
+                    .filter(|_| jpg_meta.is_some())
+                    .map(|p| p.to_string_lossy().to_string()),
+                jpg_exists: jpg_meta.is_some(),
+                jpg_size: jpg_meta.as_ref().map(|m| m.len()).unwrap_or(0),
+                jpg_mtime: jpg_meta
+                    .as_ref()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+                // 命令层读完 XMP 再填（本模块不碰 XMP）。
+                has_xmp: false,
+                tone: None,
                 rating: d.rating,
                 flag: d.flag.clone(),
                 label: d.label.clone(),
@@ -204,18 +268,35 @@ pub fn resolve_documents(album_path: &Path, docs: &[AlbumDoc]) -> Vec<ResolvedDo
         .collect()
 }
 
+/// 保存时的一条输入：主路径 + 可选配对 JPG + 三项状态。
+pub struct AlbumEntryInput {
+    /// 主路径（RAW 优先，与 `groupPath` 同序）。
+    pub path: PathBuf,
+    /// 配对 JPG；主路径本身就是 JPG 时为 `None`。
+    pub jpg: Option<PathBuf>,
+    pub rating: u8,
+    pub flag: String,
+    pub label: String,
+}
+
 /// 把「当前这批照片」转成文档：路径相对化 + 状态原样带上。
-pub fn to_documents(album_path: &Path, items: &[(PathBuf, u8, String, String)]) -> Vec<AlbumDoc> {
-    let dir = album_path.parent().unwrap_or_else(|| Path::new("."));
+pub fn to_documents(album_path: &Path, items: &[AlbumEntryInput]) -> Vec<AlbumDoc> {
+    let dir = album_dir(album_path);
     items
         .iter()
-        .map(|(p, rating, flag, label)| AlbumDoc {
-            source: album_source(dir, p),
-            rating: *rating,
-            flag: flag.clone(),
-            label: label.clone(),
+        .map(|it| AlbumDoc {
+            source: album_source(dir, &it.path),
+            jpg: it.jpg.as_ref().map(|p| album_source(dir, p)),
+            rating: it.rating,
+            flag: it.flag.clone(),
+            label: it.label.clone(),
         })
         .collect()
+}
+
+/// album 文件所在目录（相对路径的基准）。取不到父目录时用 `.`。
+fn album_dir(album_path: &Path) -> &Path {
+    album_path.parent().unwrap_or_else(|| Path::new("."))
 }
 
 #[cfg(test)]
@@ -241,6 +322,18 @@ mod tests {
     fn doc(src: &str, rating: u8, flag: &str, label: &str) -> AlbumDoc {
         AlbumDoc {
             source: src.to_string(),
+            jpg: None,
+            rating,
+            flag: flag.to_string(),
+            label: label.to_string(),
+        }
+    }
+
+    /// 一条输入：主路径 + 无配对 JPG。
+    fn entry(path: PathBuf, rating: u8, flag: &str, label: &str) -> AlbumEntryInput {
+        AlbumEntryInput {
+            path,
+            jpg: None,
             rating,
             flag: flag.to_string(),
             label: label.to_string(),
@@ -281,7 +374,6 @@ mod tests {
     #[test]
     fn source_is_relative_when_photo_is_under_album_dir() {
         let dir = scratch("rel");
-        let album = dir.join("shoot.galleryalbum");
         let photo = dir.join("wedding").join("DSC1.ARW");
         // 期望值用 Path 拼，别写死分隔符
         let want = Path::new("wedding").join("DSC1.ARW");
@@ -294,7 +386,6 @@ mod tests {
     fn source_is_absolute_when_not_under_album_dir() {
         let dir = scratch("abs");
         let elsewhere = scratch("abs_other");
-        let album = dir.join("a.galleryalbum");
         let photo = elsewhere.join("DSC2.ARW");
         let source = album_source(&dir, &photo);
         assert!(Path::new(&source).is_absolute(), "跨子树必须退回绝对路径");
@@ -406,18 +497,8 @@ mod tests {
         let dir = scratch("todocs");
         let album = dir.join("a.galleryalbum");
         let items = vec![
-            (
-                dir.join("sub").join("a.ARW"),
-                3u8,
-                "pick".to_string(),
-                "Red".to_string(),
-            ),
-            (
-                dir.join("b.JPG"),
-                0u8,
-                "none".to_string(),
-                String::new(),
-            ),
+            entry(dir.join("sub").join("a.ARW"), 3, "pick", "Red"),
+            entry(dir.join("b.JPG"), 0, "none", ""),
         ];
         let docs = to_documents(&album, &items);
         assert_eq!(docs[0].source, Path::new("sub").join("a.ARW").to_string_lossy());
@@ -425,6 +506,85 @@ mod tests {
         assert_eq!(docs[0].flag, "pick");
         assert_eq!(docs[0].label, "Red");
         assert_eq!(docs[1].source, "b.JPG");
+        assert_eq!(docs[0].jpg, None, "没有配对 JPG 时字段必须缺席");
+    }
+
+    #[test]
+    fn paired_jpg_survives_round_trip_even_across_directories() {
+        let dir = scratch("pair");
+        let album = dir.join("pick.galleryalbum");
+        // JPG / RAW 分目录是本应用的常规摆放，配对必须能跨目录
+        let raw = dir.join("raw").join("DSC1.ARW");
+        let jpg = dir.join("jpg").join("DSC1.JPG");
+        fs::create_dir_all(raw.parent().unwrap()).unwrap();
+        fs::create_dir_all(jpg.parent().unwrap()).unwrap();
+        fs::write(&raw, b"r").unwrap();
+        fs::write(&jpg, b"j").unwrap();
+
+        let docs = to_documents(
+            &album,
+            &[AlbumEntryInput {
+                path: raw.clone(),
+                jpg: Some(jpg.clone()),
+                rating: 2,
+                flag: "pick".to_string(),
+                label: String::new(),
+            }],
+        );
+        write_album(&album, &docs).unwrap();
+        let out = resolve_documents(&album, &read_album(&album).unwrap());
+
+        assert_eq!(out[0].path, raw.to_string_lossy());
+        assert_eq!(out[0].jpg_path.as_deref(), Some(jpg.to_string_lossy().as_ref()));
+        assert!(out[0].jpg_exists, "文件在就必须标成存在");
+        assert!(out[0].is_raw, ".ARW 必须判成 RAW");
+    }
+
+    #[test]
+    fn missing_paired_jpg_is_reported_as_absent() {
+        let dir = scratch("pairgone");
+        let album = dir.join("a.galleryalbum");
+        let raw = dir.join("DSC2.ARW");
+        fs::write(&raw, b"r").unwrap();
+        let docs = vec![AlbumDoc {
+            source: "DSC2.ARW".to_string(),
+            jpg: Some("DSC2.JPG".to_string()), // 记着，但磁盘上没有
+            rating: 0,
+            flag: "none".to_string(),
+            label: String::new(),
+        }];
+        write_album(&album, &docs).unwrap();
+        let out = resolve_documents(&album, &read_album(&album).unwrap());
+        assert!(!out[0].jpg_exists);
+        assert_eq!(out[0].jpg_path, None, "不存在的 JPG 不能交给前端（会渲染成破图）");
+    }
+
+    #[test]
+    fn is_raw_follows_the_scanner_extension_table() {
+        let dir = scratch("israw");
+        let album = dir.join("a.galleryalbum");
+        let mut docs = Vec::new();
+        for name in ["a.ARW", "b.cr3", "c.NEF", "d.DNG", "e.JPG", "f.jpeg", "g.png"] {
+            fs::write(dir.join(name), b"x").unwrap();
+            docs.push(doc(name, 0, "none", ""));
+        }
+        let out = resolve_documents(&album, &docs);
+        let flags: Vec<bool> = out.iter().map(|d| d.is_raw).collect();
+        assert_eq!(
+            flags,
+            vec![true, true, true, true, false, false, false],
+            "RAW 判定必须与 scanner 的扩展名表一致（大小写不敏感）"
+        );
+    }
+
+    #[test]
+    fn has_xmp_is_left_to_the_command_layer() {
+        let dir = scratch("hasxmp");
+        let album = dir.join("a.galleryalbum");
+        let raw = dir.join("a.ARW");
+        fs::write(&raw, b"x").unwrap();
+        let out = resolve_documents(&album, &[doc("a.ARW", 0, "none", "")]);
+        assert!(!out[0].has_xmp, "格式模块不读 XMP，一律 false");
     }
 
     #[test]

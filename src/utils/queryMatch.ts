@@ -37,6 +37,27 @@ export type QueryField =
 
 export type QueryOp = '=' | '>=' | '<=' | '>' | '<' | 'contains' | 'glob';
 
+/**
+ * 依赖 EXIF 的字段。
+ *
+ * 存在的原因只有一个：选片集打开时**不读 EXIF**（实测 `exif` crate 对 ARW 是
+ * 整文件读取，9.4ms/张，2000 张要 19 秒 —— 见 ADR-010）。这些字段在选片集
+ * 视图里不会命中，界面必须说出来，否则用户会以为「我真的没拍过 ISO 800」。
+ */
+export const EXIF_FIELDS: ReadonlySet<QueryField> = new Set<QueryField>([
+  'iso',
+  'camera',
+  'lens',
+  'aperture',
+  'shutter',
+  'focal',
+]);
+
+/** 查询里是否用到了需要 EXIF 的条件。 */
+export function usesExifField(parse: QueryParseResult | undefined): boolean {
+  return (parse?.terms ?? []).some((t) => EXIF_FIELDS.has(t.field));
+}
+
 export interface QueryTerm {
   field: QueryField;
   op: QueryOp;

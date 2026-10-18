@@ -73,6 +73,13 @@ interface ThumbnailGridProps {
    * 而漂移的表现是「提示说 2 个条件，实际筛出的是另 2 个条件的结果」。
    */
   queryParse?: QueryParseResult;
+  /**
+   * 查询用到了 EXIF 条件，但当前集合**一条相机参数都没有**（选片集视图）。
+   *
+   * 不提示的话，`iso:800` 会安静地返回 0 张 —— 用户会以为自己没拍过 ISO 800，
+   * 而不是「这批照片没读 EXIF」。
+   */
+  queryExifUnavailable?: boolean;
   /** Total photos loaded, before the grid's own search is applied. */
   totalLoaded?: number;
   /**
@@ -106,6 +113,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   onFilterReset,
   onSearchOpenChange,
   queryParse,
+  queryExifUnavailable,
   totalLoaded,
   lumenThumbnails = false,
   selectedIds,
@@ -339,6 +347,10 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
               </span>
             ) : queryPending > 0 ? (
               <span className="text-white/40">输入中…</span>
+            ) : queryExifUnavailable ? (
+              <span className="text-amber-400/80">
+                相机参数未加载（选片集不读 EXIF），iso / 快门等条件不会命中
+              </span>
             ) : queryTermCount > 0 ? (
               <span className="text-white/45">
                 {queryTermCount} 个条件 · 匹配 {groups.length} 张

@@ -7,6 +7,8 @@ import {
   Split,
   Sparkles,
   RefreshCw,
+  Library,
+  BookMarked,
 } from 'lucide-react';
 import type { FilterMode, SortOrder, ViewMode } from '../types';
 import { FILTER_OPTIONS } from '../utils/filterMatch';
@@ -83,6 +85,22 @@ export interface ToolbarRowProps {
   onRefreshXmp?: () => void;
   /** 正在读盘：只防重复点击（互斥另有说明）。 */
   isRefreshingXmp?: boolean;
+  /**
+   * FR-10 选片集入口。点击打开弹窗（存为 / 打开 / 缺失报告都在里面）。
+   *
+   * 为什么不是两个顶栏按钮：打开结果的缺失清单需要一块能停住的地方，
+   * toast 会自己消失；而两个按钮换两次点击却没多一点信息。
+   */
+  onOpenAlbum?: () => void;
+  /**
+   * 当前照片列表来自哪个选片集（`null` = 不是从选片集打开的）。
+   *
+   * 必须常驻显示：选片集是跨目录的，顶栏那两个目录框在选片集视图里
+   * **不再描述这批照片**，不标出来用户会以为照片还是那个目录里的。
+   */
+  albumName?: string | null;
+  /** 选片集里实际载入的张数（缺失的没算进来）。 */
+  albumCount?: number;
 }
 
 export const ToolbarRow: React.FC<ToolbarRowProps> = ({
@@ -101,6 +119,9 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
   isLuminarRunning,
   onRefreshXmp,
   isRefreshingXmp,
+  onOpenAlbum,
+  albumName,
+  albumCount,
 }) => {
   // M-10：按下态由宿主传入的派生真值决定（用户意图 && 当前有可调对象）。
   const tonalVisible = tonalPanelVisible;
@@ -150,6 +171,21 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
           </option>
         </select>
       </div>
+
+      {/* FR-10：当前列表来自选片集时常驻标出来 —— 它跨目录，上面两个目录框
+          已经不能描述这批照片了。不标出来用户会以为照片还是那个目录里的。 */}
+      {albumName && (
+        <div
+          className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-400/10 border border-amber-400/30 text-[11px] text-amber-100 min-w-0"
+          title={`当前照片列表来自选片集：${albumName}`}
+        >
+          <BookMarked className="w-3 h-3 shrink-0" aria-hidden="true" />
+          <span className="truncate max-w-[12rem]">选片集 {albumName}</span>
+          {typeof albumCount === 'number' && (
+            <span className="text-amber-200/70 shrink-0">{albumCount} 张</span>
+          )}
+        </div>
+      )}
 
       {/* A3：搜索只作用于宫格，入口唯一收敛到宫格表头（+ `/` 快捷键），
           不再在全局顶栏再放一个同名按钮导致"两处同名、作用域错位"。 */}
@@ -236,6 +272,19 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
               aria-hidden="true"
             />
             <span className="pb-[1px]">{isRefreshingXmp ? '读取中…' : '读 XMP'}</span>
+          </button>
+        )}
+
+        {/* FR-10：选片集（存为 / 打开 / 缺失报告） */}
+        {onOpenAlbum && (
+          <button
+            onClick={onOpenAlbum}
+            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 text-white rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap"
+            title="选片集：把这批照片存成清单，或打开已有的清单"
+            aria-label="选片集"
+          >
+            <Library className="w-3.5 h-3.5" aria-hidden="true" />
+            <span className="pb-[1px]">选片集</span>
           </button>
         )}
 

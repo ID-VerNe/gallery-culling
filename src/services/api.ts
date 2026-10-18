@@ -1,6 +1,9 @@
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import {
+  AlbumItemInput,
+  AlbumOpenResult,
+  AlbumSaveResult,
   AppSettings,
   ExportItem,
   ExportOutcome,
@@ -293,6 +296,49 @@ export const api = {
       multiple: false,
       defaultPath: defaultPath || undefined,
       title: '选择照片文件夹',
+    });
+    return typeof selected === 'string' ? selected : null;
+  },
+
+  /**
+   * FR-10：把「当前这批照片」存成选片集。
+   *
+   * `items` 的路径必须是绝对路径（后端直接拒绝相对路径 —— 相对「谁」是歧义的）。
+   * 配对 JPG 单独给一条：JPG / RAW 分目录是本应用的常规摆放。
+   */
+  saveAlbum: async (path: string, items: AlbumItemInput[]): Promise<AlbumSaveResult> => {
+    return await invoke<AlbumSaveResult>('save_album_cmd', { path, items });
+  },
+
+  /**
+   * FR-10：打开选片集。
+   *
+   * 返回的 `entries` **包含缺失项**（`exists=false`）——「缺失文件列出」是
+   * 验收标准，从结果里删掉就等于什么都没说。评级/旗标/色标以磁盘为准
+   * （XMP + `.gallerycull.json` 是唯一真值，见 ADR-001/003）。
+   */
+  openAlbum: async (path: string): Promise<AlbumOpenResult> => {
+    return await invoke<AlbumOpenResult>('open_album_cmd', { path });
+  },
+
+  /** 「存为选片集」的文件对话框。取消返回 null（不是空串 —— 空串是合法输入）。 */
+  selectAlbumSavePath: async (defaultPath?: string): Promise<string | null> => {
+    const selected = await save({
+      defaultPath: defaultPath || undefined,
+      title: '存为选片集',
+      filters: [{ name: '选片集', extensions: ['galleryalbum'] }],
+    });
+    return typeof selected === 'string' ? selected : null;
+  },
+
+  /** 「打开选片集」的文件对话框。 */
+  selectAlbumOpenPath: async (defaultPath?: string): Promise<string | null> => {
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      defaultPath: defaultPath || undefined,
+      title: '打开选片集',
+      filters: [{ name: '选片集', extensions: ['galleryalbum'] }],
     });
     return typeof selected === 'string' ? selected : null;
   },

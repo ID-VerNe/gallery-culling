@@ -38,6 +38,14 @@ const RAW_EXTENSIONS: &[&str] = &[
 ];
 const JPG_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
 
+/// 扩展名是不是 RAW。**唯一一份**扩展名表就在上面 —— 选片集（`album.rs`）等
+/// 别处要判「这张是原片还是成品」时调这里，不要再抄一份常量。
+pub(crate) fn is_raw_extension(ext: &str) -> bool {
+    RAW_EXTENSIONS
+        .iter()
+        .any(|x| x.eq_ignore_ascii_case(ext.trim_start_matches('.')))
+}
+
 fn find_edited_version(base_dir: &Path, stem: &str) -> Option<PhotoFileInfo> {
     let candidates = [
         format!("{}_Luminar.tif", stem),
@@ -72,7 +80,12 @@ fn find_edited_version(base_dir: &Path, stem: &str) -> Option<PhotoFileInfo> {
     None
 }
 
-fn extract_tone_from_xmp(meta: &XmpMetadata) -> Option<ToneAdjustments> {
+/// 从 XMP 元数据里取调色。六个参数**全空**才算「没调过」—— 只填一个曝光
+/// 也是用户的编辑，不能因为其余是 0 就当成没有。
+///
+/// `pub(crate)`：选片集打开时（`albumcmds`）要用同一份判定，否则「文件夹视图
+/// 有调色、选片集视图全 0」会让面板基线说谎。
+pub(crate) fn extract_tone_from_xmp(meta: &XmpMetadata) -> Option<ToneAdjustments> {
     if meta.exposure.is_some()
         || meta.highlights.is_some()
         || meta.shadows.is_some()

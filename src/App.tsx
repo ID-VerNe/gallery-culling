@@ -12,6 +12,7 @@ import { MetadataEditorModal } from './components/MetadataEditorModal';
 import { ShortcutHelpModal } from './components/ShortcutHelpModal';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { XmpConflictDialog } from './components/XmpConflictDialog';
+import { AlbumDialog, type AlbumSaveScope } from './components/AlbumDialog';
 import { ToastProvider, useToast } from './components/Toast';
 import { TaskProgressBar } from './components/TaskProgressBar';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
@@ -23,6 +24,7 @@ import { useFolderScan } from './hooks/useFolderScan';
 import { useBatchOps } from './hooks/useBatchOps';
 import { useRatingFlagSync, type UndoConflict } from './hooks/useRatingFlagSync';
 import { useXmpRefresh } from './hooks/useXmpRefresh';
+import { useAlbum } from './hooks/useAlbum';
 import { useToneEditing } from './hooks/useToneEditing';
 import { useToneBatch } from './hooks/useToneBatch';
 import { useTaskMutex, useActivity, TaskMutexProvider } from './hooks/useTaskMutex';
@@ -37,6 +39,8 @@ import {
   ToneAdjustments,
 } from './types';
 import { DEFAULT_TONE } from './utils/autoTone';
+import { sortAlbumGroups, toAlbumItems } from './utils/albumGroups';
+import { usesExifField } from './utils/queryMatch';
 
 
 function AppShell() {
@@ -101,6 +105,18 @@ function AppShell() {
 
   /** 稳定引用：useFolderScan 的 handleScan 依赖它，内联箭头会让 identity 抖动。 */
   const getSelectedIndex = useCallback(() => selectedIndexRef.current, []);
+
+  /**
+   * 选片集身份的清空通道。
+   *
+   * `handleScanned` 是空依赖 useCallback，拿不到后面才声明的 `album`；而扫描
+   * 成功就意味着集合换了来源，「来自选片集 xxx」的标签必须当场撤掉，否则顶栏
+   * 会声称这批照片来自某本选片集，实际却是刚扫的目录。
+   *
+   * 与 `selectedIndexRef` / `oneToOneRef` 同一个模式：用一个 ref 把「后声明的
+   * 能力」交给「先声明的回调」。
+   */
+  const albumClearRef = useRef<() => void>(() => {});
 
   /** 乐观更新落回集合：评级、调色保存、AI 蒙版三处共用同一入口。 */
   const patchGroup = useCallback(
@@ -207,6 +223,8 @@ function AppShell() {
       }
       // Drop anything pinned to a photo that no longer exists.
       setPinnedId(null);
+      // 集合换了来源：选片集身份失效（不这么做顶栏会一直声称来自某本选片集）。
+      albumClearRef.current();
     },
     [],
   );
@@ -345,6 +363,60 @@ function AppShell() {
     setPinnedId,
   } = pin;
 
+  /**
+   * FR-10：选片集。
+   *
+   * `onLoaded` 替宿主做四件收尾 —— 换集合、灌调色基线、重置选中、清撤销栈。
+   * 尤其是撤销栈：里面存的是**上一个集合**的照片，留着会让 Ctrl+Z 把标记写到
+   * 不在视图里的文件上（与重扫同一个理由）。
+   */
+  const album = useAlbum({
+    onLoaded: (load) => {
+      setGroups(load.groups);
+      // 调色基线必须一起灌：少了它面板显示全 0，一点保存就把真实调色覆盖成 0。
+      toneSeed(load.tones);
+      setSelectedIndex(0);
+      setCompareIndex(load.groups.length > 1 ? 1 : 0);
+      setSelectedIds(new Set());
+      setPinnedId(null);
+      clearCullUndo();
+    },
+  });
+  albumClearRef.current = album.clear;
+
+  const [isAlbumOpen, setIsAlbumOpen] = useState(false);
+
+  /**
+   * 保存范围：有多选就存选中，否则存当前筛选 —— 范围写在按钮上，不让用户猜。
+   */
+  const albumSaveScope: AlbumSaveScope = selectedIds.size > 0 ? 'selected' : 'filtered';
+  const albumSaveGroups =
+    albumSaveScope === 'selected'
+      ? filteredGroups.filter((g) => selectedIds.has(g.id))
+      : filteredGroups;
+  /** 默认存到「当前目录旁边」，这样照片都在 album 目录下、相对路径生效。 */
+  const albumDefaultPath = jpgFolder.trim()
+    ? `${jpgFolder.trim().replace(/[\/]+$/, '')}.galleryalbum`
+    : undefined;
+
+  /**
+   * 改排序：选片集视图里**本地排序**。
+   *
+   * 不能走 `handleSortOrderChange` —— 那条会按当前目录重扫，在选片集视图里
+   * 重扫等于把整本选片集冲掉，而用户只是想换个顺序。
+   */
+  const handleSortChange = useCallback(
+    (order: SortOrder) => {
+      if (album.path) {
+        setGroups((prev) => sortAlbumGroups(prev, order));
+        setSortOrder(order);
+        return;
+      }
+      handleSortOrderChange(order);
+    },
+    [album.path, handleSortOrderChange, setSortOrder],
+  );
+
   // 「有基准且基准在左」的对比模式下，± 与宫格点击作用在**对比候选**而非当前
   // 照片 —— 用户此时盯着右窗格。判定留在 AppShell（它是唯一同时持有
   // viewMode / pinnedId / isPinnedOnLeft 的地方），useCollection 只管改索引。
@@ -381,7 +453,9 @@ function AppShell() {
   // 10 张/秒 = 每秒 10 次磁盘写，而只有最后一次索引有价值。防抖窗口与四个
   // flush 点（目录切换 / 卸载 / 页面隐藏 / Tauri 关闭请求）都在 hook 内部。
   useSessionDebounce({
-    jpgFolder,
+    // 选片集视图没有单一目录，也就没有「上次看到哪」可记：写进去的索引会在
+    // 下次扫描那个目录时被当成用户的位置恢复，而它其实来自另一批照片。
+    jpgFolder: album.path ? '' : jpgFolder,
     rawFolder,
     lastIndex: selectedIndex,
     sortOrder,
@@ -525,7 +599,7 @@ function AppShell() {
         onFilterChange={handleFilterChange}
         filterCounts={filterCounts}
         sortOrder={sortOrder}
-        onSortChange={handleSortOrderChange}
+        onSortChange={handleSortChange}
         viewMode={external.viewMode}
         onViewModeChange={external.setViewMode}
         onOpenExportModal={() => setIsExportOpen(true)}
@@ -538,6 +612,9 @@ function AppShell() {
         onRefreshXmp={handleRefreshXmp}
         isRefreshingXmp={xmpRefresh.refreshing}
         scanBlockedReason={mutex.blockReason('scan')}
+        onOpenAlbum={() => setIsAlbumOpen(true)}
+        albumName={album.path ? baseNameOfPath(album.path) : null}
+        albumCount={album.path ? groups.length : undefined}
       />
 
       {/* Scan progress (M-05) — 空闲时不渲染，不留空白条 */}
@@ -675,6 +752,12 @@ function AppShell() {
               onSearchQueryChange={setGridSearch}
               onFilterReset={() => setFilterMode('all')}
               queryParse={queryParse}
+              queryExifUnavailable={
+                // 整个集合一条 EXIF 都没有（= 选片集视图），而查询用到了相机参数
+                groups.length > 0 &&
+                groups.every((g) => !g.exif) &&
+                usesExifField(queryParse)
+              }
               onSearchOpenChange={(open) => {
                 setGridSearchOpen(open);
                 if (!open) setGridSearch('');
@@ -746,6 +829,25 @@ function AppShell() {
         allGroups={groups}
         onMetadataUpdated={handleMetadataUpdated}
         onError={(m) => toast.error(m)}
+      />
+
+      {/* FR-10：选片集（存为 / 打开 / 缺失报告） */}
+      <AlbumDialog
+        isOpen={isAlbumOpen}
+        onClose={() => setIsAlbumOpen(false)}
+        totalCount={groups.length}
+        filteredCount={filteredGroups.length}
+        selectedCount={selectedIds.size}
+        saveScope={albumSaveScope}
+        albumPath={album.path}
+        saving={album.saving}
+        opening={album.opening}
+        report={album.report}
+        onSave={() =>
+          void album.saveAs(toAlbumItems(albumSaveGroups), albumDefaultPath)
+        }
+        onOpen={() => void album.open()}
+        onDismissReport={album.dismissReport}
       />
 
       {/* Keyboard & mouse reference */}
@@ -820,6 +922,11 @@ function AppShell() {
  * 只显示文件名不显示全路径 —— 弹窗宽度有限，而用户认得出自己的照片；
  * 完整路径在 tooltip 与日志里。
  */
+/** 取路径末段（顶栏芯片只放得下文件名）。 */
+function baseNameOfPath(path: string): string {
+  return path.split(/[\/]/).pop() ?? path;
+}
+
 function conflictMessage(conflict: UndoConflict | null): string {
   if (!conflict) return '';
   const lines = conflict.details.slice(0, 5).map((d) => {

@@ -16,7 +16,11 @@ use crate::album;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumItemInput {
+    /// 主路径（RAW 优先）。写 XMP、打开原片都以它为准。
     pub path: String,
+    /// 配对 JPG。分目录摆放是常态，所以单独给一条而不是从前面的路径猜。
+    #[serde(default)]
+    pub jpg_path: Option<String>,
     #[serde(default)]
     pub rating: u8,
     #[serde(default)]
@@ -32,7 +36,7 @@ pub struct AlbumSaveResult {
     pub saved: usize,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumOpenResult {
     pub path: String,
@@ -43,14 +47,35 @@ pub struct AlbumOpenResult {
 
 /// 把输入转成文档。相对路径直接拒绝 —— 相对「谁」是歧义的，
 /// 前端手上永远有绝对路径（扫描结果），没有理由放宽。
-pub fn build_documents(album_path: &Path, items: &[AlbumItemInput]) -> Result<Vec<album::AlbumDoc>, String> {
-    let mut pairs: Vec<(PathBuf, u8, String, String)> = Vec::with_capacity(items.len());
+pub fn build_documents(
+    album_path: &Path,
+    items: &[AlbumItemInput],
+) -> Result<Vec<album::AlbumDoc>, String> {
+    let mut pairs: Vec<album::AlbumEntryInput> = Vec::with_capacity(items.len());
     for it in items {
         let p = PathBuf::from(&it.path);
         if !p.is_absolute() {
             return Err(format!("选片集只接受绝对路径，收到: {}", it.path));
         }
-        pairs.push((p, it.rating, it.flag.clone(), it.label.clone()));
+        // 配对 JPG 与主路径同一条规矩：相对路径在这里就是错误数据，
+        // 悄悄丢掉会让「打开后黑框」变成一个没有线索的谜。
+        let jpg = match it.jpg_path.as_deref() {
+            Some(s) if !s.trim().is_empty() => {
+                let q = PathBuf::from(s);
+                if !q.is_absolute() {
+                    return Err(format!("选片集只接受绝对路径，收到: {s}"));
+                }
+                Some(q)
+            }
+            _ => None,
+        };
+        pairs.push(album::AlbumEntryInput {
+            path: p,
+            jpg,
+            rating: it.rating,
+            flag: it.flag.clone(),
+            label: it.label.clone(),
+        });
     }
     Ok(album::to_documents(album_path, &pairs))
 }
@@ -95,6 +120,14 @@ pub(crate) fn open_album_impl(path: &str) -> Result<AlbumOpenResult, String> {
 ///
 /// 快照仍然有用：缺失的文件没有磁盘状态可读，保留快照才能报告「它原来是几星」。
 /// 另外按目录缓存 `cullstore`，2000 张散在几个目录时不会重复读 JSON。
+///
+/// **刻意不读 EXIF**：实测 `exif` crate 对 ARW 是**整文件读取**（9.4 ms/张 ≈
+/// 读 25 MB，156 张 1.5 s、2000 张 19 s，见 `real_album_open_smoke`）。选片集
+/// 的验收标准是「相对路径 / 换机可开 / 缺失列出 / ≤2000 / 原子写」，不含相机
+/// 参数；为它把打开时间拉长两个数量级不值得。
+/// 代价（必须在界面上说出来，不能静默）：底栏不显示 ISO/快门，查询语法里的
+/// `iso:` / `camera:` 等条件不会命中 —— 前端 `ThumbnailGrid` 的
+/// `queryExifUnavailable` 会明确提示。要补的话见 ADR-010「后续」。
 fn apply_disk_state(entries: &mut [album::ResolvedDoc]) {
     use std::collections::HashMap;
     let mut stores: HashMap<PathBuf, crate::cullstore::Store> = HashMap::new();
@@ -109,8 +142,12 @@ fn apply_disk_state(entries: &mut [album::ResolvedDoc]) {
             .unwrap_or_default()
             .to_string();
         let entry = store.get(&base);
+        let xmp_path = crate::xmp::get_xmp_path(&p);
+        // 侧边栏**存在**与**读得出**是两件事：`read_xmp_full` 对空文件/坏 XML
+        // 也返回 None，但文件确实在，导出时的文件计数与宫格角标都按「在不在」算。
+        e.has_xmp = xmp_path.is_file();
 
-        match crate::xmp::read_xmp_full(&crate::xmp::get_xmp_path(&p)) {
+        match crate::xmp::read_xmp_full(&xmp_path) {
             Some(m) => {
                 e.rating = m.rating;
                 e.flag = crate::cullstore::resolve_flag(
@@ -118,12 +155,16 @@ fn apply_disk_state(entries: &mut [album::ResolvedDoc]) {
                     crate::xmp::legacy_flag_from_label(&m.label),
                     entry,
                 );
-                e.label = m.label;
+                e.label = m.label.clone();
+                // 调色基线必须一起带回来：面板显示全 0 时用户点保存就会把
+                // 真实调色覆盖成 0。与扫描路径共用同一份提取逻辑。
+                e.tone = crate::scanner::extract_tone_from_xmp(&m);
             }
             None => {
                 e.rating = 0;
                 e.flag = crate::cullstore::resolve_flag(false, "none", entry);
                 e.label = String::new();
+                e.tone = None;
             }
         }
     }
@@ -168,9 +209,20 @@ mod tests {
     fn item(p: &Path, rating: u8, flag: &str, label: &str) -> AlbumItemInput {
         AlbumItemInput {
             path: p.to_string_lossy().to_string(),
+            jpg_path: None,
             rating,
             flag: flag.to_string(),
             label: label.to_string(),
+        }
+    }
+
+    fn pair(raw: &Path, jpg: &Path, rating: u8) -> AlbumItemInput {
+        AlbumItemInput {
+            path: raw.to_string_lossy().to_string(),
+            jpg_path: Some(jpg.to_string_lossy().to_string()),
+            rating,
+            flag: "pick".to_string(),
+            label: String::new(),
         }
     }
 
@@ -271,6 +323,7 @@ mod tests {
             &album_path.to_string_lossy(),
             &[AlbumItemInput {
                 path: "a.ARW".to_string(),
+                jpg_path: None,
                 rating: 0,
                 flag: "none".to_string(),
                 label: String::new(),
@@ -278,6 +331,96 @@ mod tests {
         )
         .expect_err("相对路径必须拒绝");
         assert!(err.contains("只接受绝对路径"), "实际: {err}");
+    }
+
+    #[test]
+    fn relative_paired_jpg_is_rejected_too() {
+        let dir = scratch("reljpg");
+        let album_path = dir.join("a.galleryalbum");
+        let raw = dir.join("a.ARW");
+        std::fs::write(&raw, b"x").unwrap();
+        let err = save_album_impl(
+            &album_path.to_string_lossy(),
+            &[AlbumItemInput {
+                path: raw.to_string_lossy().to_string(),
+                jpg_path: Some("a.JPG".to_string()),
+                rating: 0,
+                flag: "none".to_string(),
+                label: String::new(),
+            }],
+        )
+        .expect_err("配对 JPG 的相对路径同样必须拒绝");
+        assert!(err.contains("只接受绝对路径"), "实际: {err}");
+    }
+
+    #[test]
+    fn reopened_album_keeps_the_jpg_pairing() {
+        let dir = scratch("pairing");
+        let album_path = dir.join("a.galleryalbum");
+        // JPG / RAW 分目录：本应用的常规摆放
+        let raw_dir = dir.join("raw");
+        let jpg_dir = dir.join("jpg");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        std::fs::create_dir_all(&jpg_dir).unwrap();
+        let raw = raw_dir.join("DSC1.ARW");
+        let jpg = jpg_dir.join("DSC1.JPG");
+        std::fs::write(&raw, b"r").unwrap();
+        std::fs::write(&jpg, b"j").unwrap();
+
+        save_album_impl(&album_path.to_string_lossy(), &[pair(&raw, &jpg, 2)]).unwrap();
+        let opened = open_album_impl(&album_path.to_string_lossy()).unwrap();
+
+        let e = &opened.entries[0];
+        assert!(e.is_raw);
+        assert_eq!(e.jpg_path.as_deref(), Some(jpg.to_string_lossy().as_ref()));
+        assert!(e.jpg_exists, "打开后必须能重建 COMPLETE 组，否则 LUMEN 关掉时整屏黑框");
+    }
+
+    #[test]
+    fn open_carries_the_tone_baseline_from_xmp() {
+        let dir = scratch("tone");
+        let album_path = dir.join("a.galleryalbum");
+        let photo = dir.join("t.ARW");
+        std::fs::write(&photo, b"x").unwrap();
+        crate::xmp::update_xmp_tone(
+            &photo,
+            Some(0.65),
+            Some(-20.0),
+            None,
+            None,
+            None,
+            Some(15.0),
+        )
+        .unwrap();
+
+        save_album_impl(&album_path.to_string_lossy(), &[item(&photo, 0, "none", "")]).unwrap();
+        let opened = open_album_impl(&album_path.to_string_lossy()).unwrap();
+
+        // 没有基线时调色面板显示全 0，用户一点保存就把真实调色覆盖成 0
+        let tone = opened.entries[0].tone.as_ref().expect("调色必须随选片集一起回来");
+        assert_eq!(tone.exposure, 0.65);
+        assert_eq!(tone.contrast, 15.0);
+        assert_eq!(tone.tint, 0.0, "没写的参数仍是 0");
+    }
+
+    #[test]
+    fn open_reports_has_xmp_from_disk() {
+        let dir = scratch("hasxmp");
+        let album_path = dir.join("a.galleryalbum");
+        let with = dir.join("with.ARW");
+        let without = dir.join("without.ARW");
+        std::fs::write(&with, b"x").unwrap();
+        std::fs::write(&without, b"x").unwrap();
+        crate::xmp::write_xmp(&with, 3, "none", None).unwrap();
+
+        save_album_impl(
+            &album_path.to_string_lossy(),
+            &[item(&with, 0, "none", ""), item(&without, 0, "none", "")],
+        )
+        .unwrap();
+        let opened = open_album_impl(&album_path.to_string_lossy()).unwrap();
+        assert!(opened.entries[0].has_xmp, "有侧边栏就该标出来（宫格角标与导出计数都靠它）");
+        assert!(!opened.entries[1].has_xmp);
     }
 
     #[test]
@@ -294,4 +437,83 @@ mod tests {
         assert!(save_album_impl("", &[]).is_err());
         assert!(open_album_impl("   ").is_err());
     }
+
+    /// 真实素材冒烟：**打开一整本选片集要多久**。
+    ///
+    /// 为什么值得留：打开路径要为每一条读 XMP、读 EXIF、stat 配对 JPG ——
+    /// 这些在合成测试里全是零成本，只有真文件才量得出「2000 张的上限下会不会
+    /// 卡住界面」。EXIF 是其中最贵的一项（要开文件、解析 TIFF IFD），
+    /// 而它不能省：查询语法里的 `iso:` / `camera:` 全读它。
+    #[test]
+    #[ignore = "需要真实素材：设置 GALLERY_REAL_RAW_DIR 后加 --ignored 运行"]
+    fn real_album_open_smoke() {
+        // 两种素材都收：沙箱（`<root>/pairs`）与整本真实相册（只读）。
+        let pairs = match (
+            std::env::var("GALLERY_REAL_RAW_DIR"),
+            std::env::var("GALLERY_REAL_ALBUM_DIR"),
+        ) {
+            (Ok(root), _) => std::path::PathBuf::from(root).join("pairs"),
+            (Err(_), Ok(album)) => std::path::PathBuf::from(album),
+            _ => {
+                println!("[real_album_open] 未设置 GALLERY_REAL_RAW_DIR / GALLERY_REAL_ALBUM_DIR，跳过");
+                return;
+            }
+        };
+        assert!(pairs.is_dir(), "素材目录不存在: {}", pairs.display());
+
+        // 用真实扫描结果造一本选片集（不自己拼路径：配对该由扫描器说了算）
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let scanned = crate::scanner::scan_folders(
+            pairs.to_str().unwrap(),
+            Some(pairs.to_str().unwrap()),
+            "filename",
+            &cancel,
+            |_, _, _| {},
+        )
+        .expect("扫描应成功");
+        assert!(scanned.total_count >= 5, "素材太少，量不出什么");
+
+        let items: Vec<AlbumItemInput> = scanned
+            .groups
+            .iter()
+            .map(|g| AlbumItemInput {
+                path: g
+                    .raw
+                    .as_ref()
+                    .map(|f| f.path.clone())
+                    .or_else(|| g.jpg.as_ref().map(|f| f.path.clone()))
+                    .expect("每组至少一个文件"),
+                jpg_path: g.jpg.as_ref().map(|f| f.path.clone()),
+                rating: g.rating,
+                flag: g.flag.clone(),
+                label: g.label.clone(),
+            })
+            .collect();
+
+        let dir = scratch("real_open");
+        let album_path = dir.join("real.galleryalbum");
+        save_album_impl(&album_path.to_string_lossy(), &items).expect("保存应成功");
+
+        let t0 = std::time::Instant::now();
+        let opened = open_album_impl(&album_path.to_string_lossy()).expect("打开应成功");
+        let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let n = opened.entries.len().max(1);
+        println!(
+            "[real_album_open] {} 张 / {:.0} ms（{:.2} ms/张）/ 缺失 {}",
+            opened.entries.len(),
+            ms,
+            ms / n as f64,
+            opened.missing
+        );
+
+        assert_eq!(opened.missing, 0, "刚保存的选片集不该有缺失");
+        for e in &opened.entries {
+            assert!(e.exists);
+            assert!(e.is_raw, "素材是 ARW，主路径必须判成 RAW");
+        }
+        // 出口标准：一本 156 张的选片集要能在「一次点击」的时间量级内打开。
+        // 超过 1 秒就该考虑分片或后台加载。
+        assert!(ms < 1000.0, "打开 156 张耗时 {ms:.0} ms，超过 1 秒");
+    }
 }
+

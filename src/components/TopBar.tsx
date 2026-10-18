@@ -46,6 +46,9 @@ export const TopBar: React.FC<TopBarProps> = ({
   isLuminarRunning,
   onRefreshXmp,
   isRefreshingXmp,
+  onOpenAlbum,
+  albumName,
+  albumCount,
 }) => (
   <header
     aria-label="Gallery Culling 应用工具栏"
@@ -94,6 +97,9 @@ export const TopBar: React.FC<TopBarProps> = ({
       isLuminarRunning={isLuminarRunning}
       onRefreshXmp={onRefreshXmp}
       isRefreshingXmp={isRefreshingXmp}
+      onOpenAlbum={onOpenAlbum}
+      albumName={albumName}
+      albumCount={albumCount}
     />
   </header>
 );

@@ -12,6 +12,7 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThumbnailGrid } from './ThumbnailGrid';
 import { mockInvokeCommand } from '../test/setup';
+import { parseQuery } from '../utils/queryMatch';
 import type { PhotoGroupInfo } from '../types';
 
 function group(id: string, over: Partial<PhotoGroupInfo> = {}): PhotoGroupInfo {
@@ -95,5 +96,35 @@ describe('G-12：图例作为一个整体播报', () => {
     renderGrid();
     const legend = screen.getByRole('note', { name: /角标图例/ });
     expect(within(legend).getAllByText(/RAW|XMP/).length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * 选片集视图不读 EXIF（打开速度的代价，见 ADR-010）。代价必须由界面说出来：
+ * `iso:800` 安静返回 0 张时，用户会以为自己没拍过，而不是「这批没读 EXIF」。
+ */
+describe('FR-10：EXIF 条件在无相机参数的集合里要说明原因', () => {
+  const isoQuery = 'iso:800';
+
+  it('查询用到 EXIF 且集合没有相机参数时给出提示', () => {
+    renderGrid({
+      searchOpen: true,
+      searchQuery: isoQuery,
+      queryParse: parseQuery(isoQuery),
+      queryExifUnavailable: true,
+    });
+    expect(screen.getByText(/相机参数未加载/)).toBeTruthy();
+  });
+
+  it('查询不涉及 EXIF 字段时不误报（普通文件名搜索照常显示匹配数）', () => {
+    const nameQuery = 'DSC0';
+    renderGrid({
+      searchOpen: true,
+      searchQuery: nameQuery,
+      queryParse: parseQuery(nameQuery),
+      queryExifUnavailable: false,
+    });
+    expect(screen.queryByText(/相机参数未加载/)).toBeNull();
+    expect(screen.getByText(/个条件 · 匹配 3 张/)).toBeTruthy();
   });
 });

@@ -21,6 +21,7 @@ export const ACTIVITIES = [
   'batch-write',
   'apply-tone',
   'refresh',
+  'album',
   'thumbnail',
 ] as const;
 
@@ -35,6 +36,7 @@ export const ACTIVITY_LABELS: Record<TaskActivity, string> = {
   'batch-write': '批量写盘',
   'apply-tone': '套用调色',
   refresh: '读取 XMP',
+  album: '读写选片集',
   thumbnail: '生成缩略图',
 };
 
@@ -52,15 +54,18 @@ export const ACTIVITY_LABELS: Record<TaskActivity, string> = {
  * 但与导出争磁盘 IO。
  */
 export const BLOCKED_BY: Record<TaskActivity, readonly TaskActivity[]> = {
-  scan: ['export', 'render', 'ai', 'batch-write', 'apply-tone', 'refresh'],
-  export: ['scan', 'render', 'ai', 'batch-write', 'apply-tone', 'refresh', 'thumbnail'],
-  render: ['scan', 'export', 'ai', 'batch-write', 'apply-tone', 'refresh', 'thumbnail'],
-  ai: ['scan', 'export', 'render', 'batch-write', 'apply-tone', 'refresh'],
-  'batch-write': ['scan', 'export', 'render', 'ai', 'apply-tone', 'refresh'],
-  'apply-tone': ['scan', 'export', 'render', 'ai', 'batch-write', 'refresh'],
+  scan: ['export', 'render', 'ai', 'batch-write', 'apply-tone', 'refresh', 'album'],
+  export: ['scan', 'render', 'ai', 'batch-write', 'apply-tone', 'refresh', 'album', 'thumbnail'],
+  render: ['scan', 'export', 'ai', 'batch-write', 'apply-tone', 'refresh', 'album', 'thumbnail'],
+  ai: ['scan', 'export', 'render', 'batch-write', 'apply-tone', 'refresh', 'album'],
+  'batch-write': ['scan', 'export', 'render', 'ai', 'apply-tone', 'refresh', 'album'],
+  'apply-tone': ['scan', 'export', 'render', 'ai', 'batch-write', 'refresh', 'album'],
   // 刷新会读、裁决还会写同一批 sidecar：与所有长任务互斥，但与缩略图无冲突
   // （缩略图读的是内嵌预览，两边不碰同一个文件）。
-  refresh: ['scan', 'export', 'render', 'ai', 'batch-write', 'apply-tone'],
+  refresh: ['scan', 'export', 'render', 'ai', 'batch-write', 'apply-tone', 'album'],
+  // 打开选片集**会整体替换集合**，与扫描是同一个竞态（谁后完成谁覆盖）；
+  // 它还要读一遍 XMP，所以与所有写盘任务互斥。缩略图不碰同一个文件，放行。
+  album: ['scan', 'export', 'render', 'ai', 'batch-write', 'apply-tone', 'refresh'],
   thumbnail: ['export', 'render'],
 };
 
