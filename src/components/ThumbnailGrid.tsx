@@ -74,12 +74,13 @@ interface ThumbnailGridProps {
    */
   queryParse?: QueryParseResult;
   /**
-   * 查询用到了 EXIF 条件，但当前集合**一条相机参数都没有**（选片集视图）。
+   * 查询用到了 EXIF 条件，而集合里有 **N 张** 读不出相机参数。
    *
-   * 不提示的话，`iso:800` 会安静地返回 0 张 —— 用户会以为自己没拍过 ISO 800，
-   * 而不是「这批照片没读 EXIF」。
+   * 不提示的话，`iso:800` 会安静地漏掉这些照片 —— 用户会以为自己没拍过
+   * ISO 800，而不是「这几张没有 EXIF」。后端优先读配对 JPG（0.14 ms/张），
+   * 所以正常情况这里是 0；非 0 意味着缺配对 JPG 或文件读不出。
    */
-  queryExifUnavailable?: boolean;
+  queryExifMissing?: number;
   /** Total photos loaded, before the grid's own search is applied. */
   totalLoaded?: number;
   /**
@@ -113,7 +114,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   onFilterReset,
   onSearchOpenChange,
   queryParse,
-  queryExifUnavailable,
+  queryExifMissing = 0,
   totalLoaded,
   lumenThumbnails = false,
   selectedIds,
@@ -347,9 +348,12 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
               </span>
             ) : queryPending > 0 ? (
               <span className="text-white/40">输入中…</span>
-            ) : queryExifUnavailable ? (
-              <span className="text-amber-400/80">
-                相机参数未加载（选片集不读 EXIF），iso / 快门等条件不会命中
+            ) : queryExifMissing > 0 ? (
+              <span
+                className="text-amber-400/80"
+                title="缺少配对 JPG，或文件里的 EXIF 读不出来"
+              >
+                {queryExifMissing} 张没有相机参数，iso / 快门等条件不会命中它们
               </span>
             ) : queryTermCount > 0 ? (
               <span className="text-white/45">

@@ -383,6 +383,11 @@ export interface AlbumResolvedDoc {
   hasXmp: boolean;
   /** XMP 里的调色基线（调色面板靠它，缺了会把真实调色覆盖成 0）。 */
   tone?: ToneAdjustments | null;
+  /**
+   * 相机参数。后端**配对 JPG 优先**读（JPG 0.14 ms/张 vs RAW 11.1 ms/张），
+   * 没有配对 JPG 时才读主路径；两条都读不出才是 `null`。
+   */
+  exif?: ExifData | null;
   rating: number;
   flag: string;
   label: string;

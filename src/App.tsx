@@ -765,11 +765,11 @@ function AppShell() {
               onSearchQueryChange={setGridSearch}
               onFilterReset={() => setFilterMode('all')}
               queryParse={queryParse}
-              queryExifUnavailable={
-                // 整个集合一条 EXIF 都没有（= 选片集视图），而查询用到了相机参数
-                groups.length > 0 &&
-                groups.every((g) => !g.exif) &&
-                usesExifField(queryParse)
+              queryExifMissing={
+                // 只在查询用到相机参数时才算 —— 否则一打开选片集就先提示
+                // 「N 张没参数」，与用户当下要做的事无关。正常情况是 0
+                // （后端读配对 JPG，0.14 ms/张），非 0 才值得说出来。
+                usesExifField(queryParse) ? groups.filter((g) => !g.exif).length : 0
               }
               onSearchOpenChange={(open) => {
                 setGridSearchOpen(open);

@@ -132,6 +132,18 @@ describe('toAlbumGroups —— 分组重建', () => {
     const load = toAlbumGroups(result([doc({ hasXmp: true })]));
     expect(load.groups[0].hasXmp).toBe(true);
   });
+
+  it('exif 透传（后端已按配对 JPG 优先读过，转换层不再判断）', () => {
+    const exif = { iso: '800', aperture: 'f/2.8', shutterSpeed: '1/500' };
+    const load = toAlbumGroups(result([doc({ exif })]));
+    expect(load.groups[0].exif).toEqual(exif);
+  });
+
+  it('没有 exif 的组保持 undefined，不编一个空对象', () => {
+    // 空对象会让 `g.exif` 为真，App 里「缺几张」的计数就永远算不到它。
+    const load = toAlbumGroups(result([doc({ exif: null })]));
+    expect(load.groups[0].exif).toBeUndefined();
+  });
 });
 
 describe('toAlbumItems —— 保存时取哪些路径', () => {

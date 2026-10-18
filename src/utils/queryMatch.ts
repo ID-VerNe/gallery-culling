@@ -40,9 +40,10 @@ export type QueryOp = '=' | '>=' | '<=' | '>' | '<' | 'contains' | 'glob';
 /**
  * 依赖 EXIF 的字段。
  *
- * 存在的原因只有一个：选片集打开时**不读 EXIF**（实测 `exif` crate 对 ARW 是
- * 整文件读取，9.4ms/张，2000 张要 19 秒 —— 见 ADR-010）。这些字段在选片集
- * 视图里不会命中，界面必须说出来，否则用户会以为「我真的没拍过 ISO 800」。
+ * 选片集打开时**读** EXIF，但读的是**配对 JPG**（0.14 ms/张，实测 80 倍于
+ * RAW 的 11.1 ms/张）—— 扫描路径也是同一顺序。所以只有「缺配对 JPG 且主路径
+ * 也读不出」的那些组没有相机参数，界面必须说出**缺几张**，否则用户会以为
+ * 「我真的没拍过 ISO 800」。见 ADR-010 的修订段。
  */
 export const EXIF_FIELDS: ReadonlySet<QueryField> = new Set<QueryField>([
   'iso',

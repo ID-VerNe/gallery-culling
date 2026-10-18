@@ -111,6 +111,13 @@ pub struct ResolvedDoc {
     /// （`extract_tone_from_xmp` → `toneSeed`）必须同源。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tone: Option<crate::models::ToneAdjustments>,
+    /// 相机参数。**配对 JPG 优先**，没有 JPG 才读主路径。
+    ///
+    /// 实测（24MP：ARW 25MB / JPG 1.5MB）：JPG **0.14 ms/张**、RAW **11.1 ms/张**，
+    /// 差 80 倍。扫描路径（`scanner.rs`）早就写着 prefer JPG，选片集没有理由
+    /// 比扫描更慢 —— 也不该让同一张照片在文件夹视图有相机参数、在选片集没有。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exif: Option<crate::models::ExifData>,
     pub rating: u8,
     pub flag: String,
     pub label: String,
@@ -232,6 +239,15 @@ pub fn resolve_documents(album_path: &Path, docs: &[AlbumDoc]) -> Vec<ResolvedDo
             let jpg_meta = jpg
                 .as_ref()
                 .and_then(|p| fs::metadata(p).ok().filter(|m| m.is_file()));
+            // EXIF：与扫描路径**同一顺序** —— 配对 JPG 优先，没有 JPG 才读主路径。
+            // JPG 是 1.5MB 而 ARW 是 25MB，实测差 80 倍（0.14 vs 11.1 ms/张）。
+            let exif = if jpg_meta.is_some() {
+                jpg.as_deref().and_then(crate::scanner::read_exif_metadata)
+            } else if meta.is_some() {
+                crate::scanner::read_exif_metadata(&resolved)
+            } else {
+                None
+            };
             ResolvedDoc {
                 source: d.source.clone(),
                 exists: meta.is_some(),
@@ -260,6 +276,7 @@ pub fn resolve_documents(album_path: &Path, docs: &[AlbumDoc]) -> Vec<ResolvedDo
                 // 命令层读完 XMP 再填（本模块不碰 XMP）。
                 has_xmp: false,
                 tone: None,
+                exif,
                 rating: d.rating,
                 flag: d.flag.clone(),
                 label: d.label.clone(),
@@ -585,6 +602,88 @@ mod tests {
         fs::write(&raw, b"x").unwrap();
         let out = resolve_documents(&album, &[doc("a.ARW", 0, "none", "")]);
         assert!(!out[0].has_xmp, "格式模块不读 XMP，一律 false");
+    }
+
+    /// 造一个最小 JPEG：只有 SOI + APP1(EXIF) + EOI，没有任何图像数据。
+    ///
+    /// `read_from_container` 只按容器格式找 APP1 段，不检查后面有没有图像数据，
+    /// 所以这几个字节足够回答「读的是哪一份文件的 EXIF」。
+    fn minimal_jpeg_with_exif(iso: u16) -> Vec<u8> {
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(b"II\x2a\x00");
+        tiff.extend_from_slice(&8u32.to_le_bytes()); // IFD0 @ 8
+        // IFD0：一条 ExifIFDPointer
+        tiff.extend_from_slice(&1u16.to_le_bytes());
+        tiff.extend_from_slice(&0x8769u16.to_le_bytes());
+        tiff.extend_from_slice(&4u16.to_le_bytes()); // LONG
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&26u32.to_le_bytes()); // ExifIFD @ 26
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        // ExifIFD：ISO / FNumber / ExposureTime
+        tiff.extend_from_slice(&3u16.to_le_bytes());
+        tiff.extend_from_slice(&0x8827u16.to_le_bytes()); // PhotographicSensitivity
+        tiff.extend_from_slice(&3u16.to_le_bytes()); // SHORT
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&(iso as u32).to_le_bytes());
+        tiff.extend_from_slice(&0x829Du16.to_le_bytes()); // FNumber
+        tiff.extend_from_slice(&5u16.to_le_bytes()); // RATIONAL
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&68u32.to_le_bytes());
+        tiff.extend_from_slice(&0x829Au16.to_le_bytes()); // ExposureTime
+        tiff.extend_from_slice(&5u16.to_le_bytes());
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&76u32.to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        tiff.extend_from_slice(&28u32.to_le_bytes()); // f/2.8
+        tiff.extend_from_slice(&10u32.to_le_bytes());
+        tiff.extend_from_slice(&1u32.to_le_bytes()); // 1/500
+        tiff.extend_from_slice(&500u32.to_le_bytes());
+        assert_eq!(tiff.len(), 84);
+
+        let mut out = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        out.extend_from_slice(&((2 + 6 + tiff.len()) as u16).to_be_bytes());
+        out.extend_from_slice(b"Exif\x00\x00");
+        out.extend_from_slice(&tiff);
+        out.extend_from_slice(&[0xFF, 0xD9]);
+        out
+    }
+
+    #[test]
+    fn exif_is_read_from_the_paired_jpg_first() {
+        // 配对 JPG 有 ISO 800，主路径（`.ARW` 后缀）是**读不出 EXIF 的字节**。
+        // 实现若改成读主路径，这里会拿到 None。
+        let dir = scratch("exif_jpg");
+        let album = dir.join("a.galleryalbum");
+        fs::write(dir.join("a.JPG"), minimal_jpeg_with_exif(800)).unwrap();
+        fs::write(dir.join("a.ARW"), b"not an image").unwrap();
+        let mut d = doc("a.ARW", 0, "none", "");
+        d.jpg = Some("a.JPG".to_string());
+
+        let out = resolve_documents(&album, &[d]);
+        let exif = out[0].exif.as_ref().expect("配对 JPG 里的 EXIF 要读出来");
+        assert_eq!(exif.iso.as_deref(), Some("800"));
+        assert_eq!(exif.aperture.as_deref(), Some("f/2.8"));
+        assert_eq!(exif.shutter_speed.as_deref(), Some("1/500"));
+    }
+
+    #[test]
+    fn exif_falls_back_to_the_source_without_a_paired_jpg() {
+        // RAW_ONLY 组：没有配对 JPG 时兜底读主路径。
+        let dir = scratch("exif_src");
+        let album = dir.join("a.galleryalbum");
+        fs::write(dir.join("a.ARW"), minimal_jpeg_with_exif(3200)).unwrap();
+        let out = resolve_documents(&album, &[doc("a.ARW", 0, "none", "")]);
+        let exif = out[0].exif.as_ref().expect("没有 JPG 时应读主路径");
+        assert_eq!(exif.iso.as_deref(), Some("3200"));
+    }
+
+    #[test]
+    fn missing_files_have_no_exif() {
+        // 主路径不存在时不该 panic，也不该编一个空 EXIF 出来。
+        let dir = scratch("exif_none");
+        let album = dir.join("a.galleryalbum");
+        let out = resolve_documents(&album, &[doc("ghost.ARW", 0, "none", "")]);
+        assert!(out[0].exif.is_none());
     }
 
     #[test]

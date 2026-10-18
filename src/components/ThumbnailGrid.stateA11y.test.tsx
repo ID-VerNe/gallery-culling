@@ -100,31 +100,32 @@ describe('G-12：图例作为一个整体播报', () => {
 });
 
 /**
- * 选片集视图不读 EXIF（打开速度的代价，见 ADR-010）。代价必须由界面说出来：
- * `iso:800` 安静返回 0 张时，用户会以为自己没拍过，而不是「这批没读 EXIF」。
+ * 相机参数按**配对 JPG 优先**读取（0.14 ms/张，比 RAW 快 80 倍），所以正常
+ * 选片集里 `iso:` 是能用的。只有缺配对 JPG 又读不出主路径的那几张没有参数 ——
+ * 界面必须说出**缺几张**，否则 `iso:800` 安静漏掉它们，用户会以为自己没拍过。
  */
-describe('FR-10：EXIF 条件在无相机参数的集合里要说明原因', () => {
+describe('FR-10：EXIF 条件在有照片缺相机参数时要说明原因', () => {
   const isoQuery = 'iso:800';
 
-  it('查询用到 EXIF 且集合没有相机参数时给出提示', () => {
+  it('查询用到 EXIF 而集合里有人缺相机参数时说出缺几张', () => {
     renderGrid({
       searchOpen: true,
       searchQuery: isoQuery,
       queryParse: parseQuery(isoQuery),
-      queryExifUnavailable: true,
+      queryExifMissing: 2,
     });
-    expect(screen.getByText(/相机参数未加载/)).toBeTruthy();
+    expect(screen.getByText(/2 张没有相机参数/)).toBeTruthy();
   });
 
-  it('查询不涉及 EXIF 字段时不误报（普通文件名搜索照常显示匹配数）', () => {
+  it('缺参数为 0 时不误报（普通文件名搜索照常显示匹配数）', () => {
     const nameQuery = 'DSC0';
     renderGrid({
       searchOpen: true,
       searchQuery: nameQuery,
       queryParse: parseQuery(nameQuery),
-      queryExifUnavailable: false,
+      queryExifMissing: 0,
     });
-    expect(screen.queryByText(/相机参数未加载/)).toBeNull();
+    expect(screen.queryByText(/没有相机参数/)).toBeNull();
     expect(screen.getByText(/个条件 · 匹配 3 张/)).toBeTruthy();
   });
 });

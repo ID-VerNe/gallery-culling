@@ -153,4 +153,44 @@ describe('App —— 选片集', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].args).toMatchObject({ path: 'D:/shoot/pick.galleryalbum' });
   });
+
+  it('有人缺相机参数时，EXIF 查询说出缺几张（而不是安静地漏掉）', async () => {
+    mockStartup();
+    const base = albumResult.entries[0];
+    mockInvokeCommand('open_album_cmd', {
+      ...albumResult,
+      entries: [
+        { ...base, exif: { iso: '800' } },
+        {
+          ...base,
+          source: 'raw/DSC2.ARW',
+          path: 'D:/shoot/raw/DSC2.ARW',
+          jpgPath: 'D:/shoot/jpg/DSC2.JPG',
+          exif: { iso: '800' },
+        },
+        // 缺配对 JPG，主路径也读不出 → 没有相机参数的那一张
+        {
+          ...base,
+          source: 'raw/DSC3.ARW',
+          path: 'D:/shoot/raw/DSC3.ARW',
+          jpgPath: null,
+          jpgExists: false,
+          exif: null,
+        },
+      ],
+    });
+    await openAlbum();
+    await screen.findAllByText('DSC04339');
+
+    // 弹窗开着时 `isDialogOpen` 会拦掉所有单键快捷键，先关掉再按 `/`。
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
+
+    // `/` 是打开宫格搜索的约定键位
+    fireEvent.keyDown(window, { key: '/' });
+    fireEvent.change(await screen.findByLabelText('按查询条件筛选照片'), {
+      target: { value: 'iso:800' },
+    });
+
+    expect(await screen.findByText(/1 张没有相机参数/)).toBeTruthy();
+  });
 });
