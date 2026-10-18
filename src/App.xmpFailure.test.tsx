@@ -1,14 +1,17 @@
 /**
- * N-14(a) / §6 第 7 行：评级与旗标的 **XMP 写入失败路径**。
+ * N-14(a) / §6 第 7 行：评级与旗标的 **写盘失败路径**。
  *
  * 语义（必须读准再断言，别把乐观更新写成回滚）：
  *  `handleRate` / `handleFlag` 先**乐观更新本地 UI**，再 `await update_rating_flag_cmd`。
  *  失败时 `reportRatingFlagError` **只弹一个错误 toast**，**不回滚 UI** —— 文案明确写
- *  「界面上的星级和保留/淘汰仍然有效，但不会同步到 Lightroom」。
- *  这是**有意对齐失败（diverged）**的契约：本机可用、侧边栏暂未落盘。
+ *  「界面上的星级和保留/淘汰仍然有效，但重启或重新扫描后可能丢失」。
+ *  这是**有意对齐失败（diverged）**的契约：本机可用、磁盘暂未落盘。
+ *
+ *  注：旗标自 2026-10 起存 `.gallerycull.json`（不再借 `xmp:Label`），
+ *  所以文案不再只提 XMP —— 失败可能来自旗标存储或侧边栏。
  *
  * 因此三条断言是：
- *  1. 失败弹出错误提示，且文案含「XMP」/「不会同步」；
+ *  1. 失败弹出错误提示，且文案含「落盘」/「可能丢失」；
  *  2. UI 的星级/旗标**仍是新值**（乐观更新保留）——修复成"回滚"反而不符语义；
  *  3. 失败**不产生未处理的 Promise rejection**（错误出口必须兜住）。
  */
@@ -94,7 +97,7 @@ afterEach(() => {
 });
 
 describe('App —— 评级/旗标 XMP 写入失败 (N-14a)', () => {
-  it('评级写入失败：弹错误提示（含 XMP / 不会同步），但星级仍是新值、无未处理 rejection', async () => {
+  it('评级写入失败：弹错误提示（含「落盘」「可能丢失」），但星级仍是新值、无未处理 rejection', async () => {
     // reportRatingFlagError 会 console.error —— 抑制噪声，但保留 toast 断言。
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const unhandled = vi.fn();
@@ -106,11 +109,11 @@ describe('App —— 评级/旗标 XMP 写入失败 (N-14a)', () => {
 
     fireEvent.click(screen.getByLabelText('评 3 星'));
 
-    // 1) 错误出口：明确告知未写盘、且不会同步到 Lightroom。
+    // 1) 错误出口：明确告知未落盘、且改动可能丢失。
     await waitFor(() => {
       const alert = screen.getByRole('alert');
-      expect(alert).toHaveTextContent(/XMP/);
-      expect(alert).toHaveTextContent(/不会同步/);
+      expect(alert).toHaveTextContent(/落盘/);
+      expect(alert).toHaveTextContent(/可能丢失/);
     });
 
     // 2) 乐观更新保留：星级**仍然是新值**（不是回滚到 0）。
@@ -134,7 +137,7 @@ describe('App —— 评级/旗标 XMP 写入失败 (N-14a)', () => {
     fireEvent.click(screen.getByLabelText('标记保留 (Pick)'));
 
     await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent(/不会同步/),
+      expect(screen.getByRole('alert')).toHaveTextContent(/可能丢失/),
     );
 
     // UI 仍是 Pick（aria-pressed=true），证明没有回滚。

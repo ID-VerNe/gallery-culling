@@ -6,11 +6,32 @@ use std::sync::atomic::{AtomicBool, Ordering};
 mod metadata;
 pub use metadata::read_exif_metadata;
 
+#[cfg(test)]
+mod real_smoke;
+
+use crate::cullstore::{self, Entry, Store};
 use crate::models::{
     ExifData, FolderScanResult, PhotoFileInfo, PhotoGroupInfo, PhotoGroupStatus, ToneAdjustments,
     TASK_CANCELLED,
 };
-use crate::xmp::{check_sidecar_exists, flag_from_xmp, get_xmp_path, read_xmp_full, XmpMetadata};
+use crate::xmp::{
+    check_sidecar_exists, flag_from_xmp, get_xmp_path, legacy_flag_from_label, read_xmp_full,
+    XmpMetadata,
+};
+
+/// 旗标存储的查表顺序：RAW 文件夹优先，JPG 兜底。
+///
+/// 与侧边栏读取顺序一致，也与 `groupPath`（写盘优先 RAW）一致 —— 三者不一致
+/// 就会出现「写进去读不出来」。
+fn store_entry<'a>(
+    raw_store: &'a Store,
+    jpg_store: &'a Store,
+    base_name: &str,
+) -> Option<&'a Entry> {
+    raw_store
+        .get(base_name)
+        .or_else(|| jpg_store.get(base_name))
+}
 
 const RAW_EXTENSIONS: &[&str] = &[
     "arw", "cr2", "cr3", "nef", "dng", "orf", "rw2", "raf", "pef", "sr2", "srf", "x3f",
@@ -205,6 +226,11 @@ pub fn scan_folders(
         return Err(TASK_CANCELLED.to_string());
     }
 
+    // 旗标存储：每个文件夹一份，整次扫描只读两次（不按组读）。
+    // 缺失/损坏都返回空 store —— 一份坏文件绝不能把整个文件夹扫不出来。
+    let jpg_store = cullstore::load(jpg_path);
+    let raw_store = raw_path_buf.map(cullstore::load).unwrap_or_default();
+
     fn merge_xmp_metadata_into_exif(exif: &mut Option<ExifData>, xmp_meta: &XmpMetadata) {
         if let Some(e) = exif.as_mut() {
             if xmp_meta.lens_model.is_some() {
@@ -249,21 +275,32 @@ pub fn scan_folders(
                 None
             };
 
-            let (rating, flag) = if let Some(m) = &xmp_meta {
-                (m.rating, flag_from_xmp(m))
-            } else {
-                (0, "none".to_string())
+            let base_name = path_obj
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&stem_lower)
+                .to_string();
+
+            // 评级来自 XMP；旗标以本地 store 为准，旧文件回落 `Label` 约定。
+            // 注意「只有旗标、没有侧边栏」的照片：`xmp_meta` 为 None，也必须查 store，
+            // 否则 pick 会在下次扫描时消失。
+            let entry = store_entry(&raw_store, &jpg_store, &base_name);
+            let (rating, flag) = match &xmp_meta {
+                Some(m) => (
+                    m.rating,
+                    cullstore::resolve_flag(
+                        m.rejected,
+                        legacy_flag_from_label(&m.label),
+                        entry,
+                    ),
+                ),
+                None => (0, cullstore::resolve_flag(false, "none", entry)),
             };
 
             let mut exif = read_exif_metadata(path_obj);
             if let Some(m) = &xmp_meta {
                 merge_xmp_metadata_into_exif(&mut exif, m);
             }
-            let base_name = path_obj
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or(&stem_lower)
-                .to_string();
 
             let tone = xmp_meta.as_ref().and_then(extract_tone_from_xmp);
             let edited = path_obj
@@ -380,6 +417,14 @@ pub fn scan_folders(
                     })
                 })
                 .unwrap_or_else(|| stem_lower.clone());
+
+            // 旗标以本地 store 为准（旧文件回落 `Label` 约定）；`Rating=-1` 仍是
+            // 硬信号，外部工具写的淘汰必须立刻生效。
+            let flag = cullstore::resolve_flag(
+                xmp_meta.as_ref().map(|m| m.rejected).unwrap_or(false),
+                &flag,
+                store_entry(&raw_store, &jpg_store, &base_name),
+            );
 
             let tone = xmp_meta.as_ref().and_then(extract_tone_from_xmp);
             let edited = jpg_opt
@@ -605,6 +650,88 @@ mod tests {
 
         let _ = fs::remove_dir_all(&jpg_dir);
         let _ = fs::remove_dir_all(&raw_dir);
+    }
+
+    /// 写一份只含评级与色标的最小侧边栏（模拟旧版本 / Lightroom 写出的文件）。
+    fn write_legacy_sidecar(dir: &Path, stem: &str, rating: &str, label: &str) {
+        let body = format!(
+            "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
+             <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n\
+             \x20 <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n\
+             \x20  <rdf:Description rdf:about=\"\"\n\
+             \x20    xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\">\n\
+             \x20   <xmp:Rating>{}</xmp:Rating>\n\
+             \x20   <xmp:Label>{}</xmp:Label>\n\
+             \x20  </rdf:Description>\n\
+             \x20 </rdf:RDF>\n\
+             </x:xmpmeta>\n",
+            rating, label
+        );
+        fs::write(dir.join(format!("{}.xmp", stem)), body).unwrap();
+    }
+
+    fn scan_one(dir: &Path) -> PhotoGroupInfo {
+        let cancel = AtomicBool::new(false);
+        let res = scan_folders(dir.to_str().unwrap(), None, "filename", &cancel, |_, _, _| {})
+            .expect("扫描应成功");
+        assert_eq!(res.groups.len(), 1, "前提：目录里只有一张照片");
+        res.groups.into_iter().next().unwrap()
+    }
+
+    /// 旗标只存在本地 store、照片连侧边栏都没有时，也必须读回来。
+    ///
+    /// 这是 pick 从 `xmp:Label` 迁出后的核心保证：pick 不再产生 XMP 文件，
+    /// 若扫描只看 XMP，用户按 P 之后重开应用就什么都没了。
+    #[test]
+    fn store_pick_survives_without_any_sidecar() {
+        let dir = unique_dir("store_only");
+        fs::write(dir.join("B0001.jpg"), b"jpeg").unwrap();
+        cullstore::upsert(&dir, "B0001", "pick").expect("写旗标应成功");
+
+        let g = scan_one(&dir);
+        assert!(!g.has_xmp, "前提：这张照片没有侧边栏");
+        assert_eq!(g.flag, "pick", "只有 store 时也必须读回 pick");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 本地条目 `none` 必须压住旧文件里的 `Label=Green`，且**不改写**那份文件。
+    ///
+    /// 旧实现只能靠「清空 Label」来清旗标 —— 那会删掉用户真正的色标。
+    /// 现在清除表达为 store 里的 `none`，色标原样留在磁盘上。
+    #[test]
+    fn store_none_suppresses_legacy_green_label() {
+        let dir = unique_dir("store_none");
+        fs::write(dir.join("C0001.jpg"), b"jpeg").unwrap();
+        write_legacy_sidecar(&dir, "C0001", "3", "Green");
+        cullstore::upsert(&dir, "C0001", "none").expect("写 none 应成功");
+
+        let g = scan_one(&dir);
+        assert_eq!(g.flag, "none", "本地 none 必须压住旧的 Label=Green");
+        assert_eq!(g.rating, 3, "评级仍来自 XMP");
+
+        let sidecar = fs::read_to_string(dir.join("C0001.xmp")).unwrap();
+        assert!(
+            sidecar.contains("<xmp:Label>Green</xmp:Label>"),
+            "扫描不得改写/删除用户的色标: {}",
+            sidecar
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 外部（Lightroom / LUMEN）写的 `Rating=-1` 是硬信号：不能被本地 pick 压住。
+    #[test]
+    fn rating_minus_one_beats_store_pick() {
+        let dir = unique_dir("store_vs_reject");
+        fs::write(dir.join("D0001.jpg"), b"jpeg").unwrap();
+        write_legacy_sidecar(&dir, "D0001", "-1", "");
+        cullstore::upsert(&dir, "D0001", "pick").expect("写 pick 应成功");
+
+        let g = scan_one(&dir);
+        assert_eq!(g.flag, "reject", "外部淘汰必须立刻生效");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// 扫描主循环的取消检查点：预置取消标志 → 返回 Err(哨兵)，且不产出结果。

@@ -11,9 +11,10 @@ use std::path::PathBuf;
 
 use tauri::State;
 
+use crate::cullstore;
 use crate::thumbnail::get_cache_dir;
 use crate::xmp;
-use crate::xmp::{flag_from_xmp, read_xmp_full, write_xmp};
+use crate::xmp::{legacy_flag_from_label, read_xmp_full, write_xmp};
 use crate::lumen::{self, LumenError, LumenStatus, PreviewVariant, PINNED_LUMEN_VERSION};
 use crate::models::{
     LumenMaskResult, LumenPreviewResult, LumenRatingConflict, LumenRatingSync, LumenRecipe, MaskAdjustments,
@@ -258,6 +259,8 @@ pub async fn lumen_sync_ratings_cmd(
             .map_err(|e| format!("拉取 LUMEN RAW 评级失败: {}", e))?;
 
         let mut result = LumenRatingSync::default();
+        // 旗标存储：本命令只作用于一个文件夹，整轮读一次即可。
+        let store = cullstore::load(&folder_path);
         for (path, lumen_rating, lumen_flag) in entries {
             let p = PathBuf::from(&path);
             if !p.exists() {
@@ -266,10 +269,17 @@ pub async fn lumen_sync_ratings_cmd(
             let xmp = xmp::get_xmp_path(&p);
             let host_meta = read_xmp_full(&xmp);
             let host_rating = host_meta.as_ref().map(|m| m.rating).unwrap_or(0);
-            let host_flag = host_meta
-                .as_ref()
-                .map(flag_from_xmp)
-                .unwrap_or_else(|| "none".to_string());
+            // 宿主旗标必须走与扫描相同的优先级（store 优先、Rating=-1 硬信号），
+            // 否则 pick 只存在 store 里时会被误判成 none，触发无意义的拉取覆盖。
+            let base_name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let host_flag = cullstore::resolve_flag(
+                host_meta.as_ref().map(|m| m.rejected).unwrap_or(false),
+                host_meta
+                    .as_ref()
+                    .map(|m| legacy_flag_from_label(&m.label))
+                    .unwrap_or("none"),
+                store.get(base_name),
+            );
             let host_mtime = crate::db::file_mtime_secs(&xmp);
 
             // 游标：(rating, flag, source, sidecar_mtime)。判定用 (rating, flag,
@@ -291,6 +301,16 @@ pub async fn lumen_sync_ratings_cmd(
                 lumen::SyncDecision::PullFromLumen => {
                     // lumen 的 reject → 宿主的 reject（Rating=-1 语义已统一）
                     write_xmp(&p, lumen_rating, &lumen_flag)?;
+                    // 旗标同时落到本地 store：pick 已不再写 `xmp:Label`，
+                    // 只写 XMP 会让拉取来的 pick 在下次扫描时消失。
+                    // 写失败不中断整轮同步（评级已落盘），只记账。
+                    if let Err(e) = cullstore::upsert(
+                        p.parent().unwrap_or(&folder_path),
+                        base_name,
+                        &lumen_flag,
+                    ) {
+                        eprintln!("旗标同步失败（已忽略）: {}", e);
+                    }
                     let _ = db.upsert_rating_sync(
                         &path,
                         lumen_rating,

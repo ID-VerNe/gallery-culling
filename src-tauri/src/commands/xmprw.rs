@@ -1,11 +1,14 @@
-//! XMP 侧边栏写入：评级旗标（含 LUMEN 推送）与镜头元数据。
+//! 评级与旗标写入：评级进 XMP 侧边栏，旗标进本地 `.gallerycull.json`。
 //!
-//! 评级推送失败只记账不回滚 —— 宿主 XMP 已写成功，UI 不该因 sidecar 抖动而回退。
+//! 两条写入互不依赖（旗标不再借用 `xmp:Label`，见
+//! `.plan/adr-001-cull-flag-store.md`），但都失败即报错 —— 界面已乐观更新，
+//! 静默吞错会让用户以为标记已落盘。
 
 use std::path::Path;
 
 use tauri::State;
 
+use crate::cullstore;
 use crate::lumen;
 use crate::xmp as xmp;
 use crate::xmp::{update_xmp_metadata, write_xmp};
@@ -26,6 +29,15 @@ pub async fn update_rating_flag_cmd(
 
     blocking("更新评级任务异常", move || {
         let path = Path::new(&file_path);
+
+        // 旗标先落盘：它是本次操作的主数据，且与 XMP 无关。
+        // 目录/文件名取不到就报错，不要静默丢标记。
+        let folder = path
+            .parent()
+            .ok_or_else(|| format!("无法确定照片所在目录: {}", file_path))?;
+        let base_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        cullstore::upsert(folder, base_name, &flag)?;
+
         if sync_xmp {
             write_xmp(path, rating, &flag)?;
         }

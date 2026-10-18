@@ -1,4 +1,5 @@
 mod commands;
+mod cullstore;
 mod db;
 pub mod lumen;
 mod luminar;

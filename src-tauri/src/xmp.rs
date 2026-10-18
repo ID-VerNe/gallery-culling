@@ -432,27 +432,40 @@ fn append_our_block(existing: &str, our_block: &str) -> Result<String, String> {
 /// 中途提前返回另走分支），套进闭包只会把控制流藏起来。
 fn read_sidecar(image_path: &Path) -> (PathBuf, XmpMetadata) {
     let xmp_path = get_xmp_path(image_path);
-    let meta = read_xmp_full(&xmp_path).unwrap_or_default();
+    let mut meta = read_xmp_full(&xmp_path).unwrap_or_default();
+    // 本方块只可能"拥有" `Green` —— 那是旧版本编码 pick 的标记。
+    //
+    // 其它色标（Blue/Red/Purple/Yellow）一律来自 Lightroom 自己的方块：`read_xmp_full`
+    // 读的是整份文档，原样写进本方块就会在同一文件里造出**两个** `xmp:Label`
+    // （XMP 简单属性只允许一个值）。清掉不丢数据 —— 真正的色标还在对方方块里。
+    //
+    // `Green` 保留是必须的：旧文件里的 pick 只靠它存在，若在改调色/镜头时把它
+    // 抹掉，用户没动过旗标却丢了旗标。
+    if meta.label != "Green" {
+        meta.label = String::new();
+    }
     (xmp_path, meta)
 }
 
-/// Write Adobe Lightroom Classic & Capture One compatible XMP sidecar (preserving existing lens/metadata if present)
+/// 写评级与淘汰状态到 XMP 侧边栏。
+///
+/// **不碰 `xmp:Label`**：它是 Lightroom 的色标字段（红/黄/绿/蓝/紫）。旗标自
+/// 2026-10 起由 `cullstore`（每文件夹 `.gallerycull.json`）独立存储，理由见
+/// `.plan/adr-001-cull-flag-store.md`。`flag` 参数只用来判断淘汰。
+///
+/// 旧版本把 pick 写成 `Label=Green`、把非 pick 写成空串 —— 前者让 Lightroom
+/// 里的绿标变成"留用"，后者直接删掉用户的色标。升级后文件里残留的 Green
+/// 必须**原样留着**：本函数无权替用户判断那是旧旗标还是真的绿标。
 pub fn write_xmp(image_path: &Path, rating: u8, flag: &str) -> Result<PathBuf, String> {
     let (_xmp_path, mut meta) = read_sidecar(image_path);
     meta.rating = rating;
-    meta.label = match flag {
-        "pick" => "Green".to_string(),
-        // reject: Lightroom & LUMEN RAW both use Rating = -1 (label stays empty),
-        // not Label = "Red" — otherwise the other app reads it back as a colour label.
-        _ => String::new(),
-    };
     if flag == "reject" {
         // 复用上面已读出的 meta，**不要**另造空壳：reject 只是把评级归零，
         // 镜头/调色/第三方命名空间都必须原样存活。原实现走
         // write_xmp_rating_minus_one（XmpMetadata::default()），每次 reject
         // 都会静默清空用户已写好的镜头与调色参数，且不可恢复。
         meta.rating = 0;
-        meta.label = String::new();
+        // 不清 `label`：淘汰只该表达为 `Rating=-1`。删色标属于越权。
         meta.rejected = true;
         return write_xmp_preserving(image_path, &meta);
     }
@@ -507,20 +520,31 @@ pub fn update_xmp_metadata(
     write_xmp_preserving(image_path, &meta)
 }
 
-/// 唯一的 flag 映射：XMP → 宿主 flag。
+/// 旧约定：`xmp:Label` → flag。**只用于读历史文件**。
 ///
-/// - `Rating = -1` → reject（Lightroom / LUMEN RAW 约定，优先于 Label）
-/// - `Label = Green` → pick（宿主历史约定；客体把 Green 读作色标，此处保持兼容）
-/// - `Label = Red` → reject（兼容宿主旧文件）
+/// 2026-10 之前本应用借 `Label` 存旗标（`Green`=pick、`Red`=reject）。新写入已改由
+/// `cullstore` 承担，这里保留只为不让老文件里的标记凭空消失；一旦该照片在本地
+/// store 里有条目，条目即覆盖本函数的结果。
+pub fn legacy_flag_from_label(label: &str) -> &'static str {
+    match label {
+        "Green" => "pick",
+        "Red" => "reject",
+        _ => "none",
+    }
+}
+
+/// XMP → flag 的兼容映射（**不看**本地 store）。
+///
+/// - `Rating = -1` → reject（Lightroom / LUMEN RAW 通用约定）
+/// - `Label = Green/Red` → 旧约定
+///
+/// 界面旗标的唯一真值是 `cullstore::resolve_flag`（store 优先、`-1` 最高优先）。
+/// 这里只给同步游标、诊断这类"只认 XMP"的场合用。
 pub fn flag_from_xmp(meta: &XmpMetadata) -> String {
     if meta.rejected {
         return "reject".to_string();
     }
-    match meta.label.as_str() {
-        "Green" => "pick".to_string(),
-        "Red" => "reject".to_string(),
-        _ => "none".to_string(),
-    }
+    legacy_flag_from_label(&meta.label).to_string()
 }
 
 #[cfg(test)]
@@ -655,6 +679,23 @@ mod tests {
         .to_string()
     }
 
+    /// 一份"Lightroom 写的"侧边栏：色标在它自己的方块里，不属于本应用。
+    fn foreign_label_sidecar(label: &str) -> String {
+        format!(
+            "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
+             <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n\
+             \x20 <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n\
+             \x20  <rdf:Description rdf:about=\"\"\n\
+             \x20    xmlns:lr=\"http://ns.adobe.com/lightroom/1.0/\"\n\
+             \x20    xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\">\n\
+             \x20   <xmp:Label>{}</xmp:Label>\n\
+             \x20  </rdf:Description>\n\
+             \x20 </rdf:RDF>\n\
+             </x:xmpmeta>\n",
+            label
+        )
+    }
+
     #[test]
     fn write_preserves_lightroom_namespaces() {
         let img = std::env::temp_dir().join(format!("xmp_keep_{}.jpg", std::process::id()));
@@ -680,7 +721,7 @@ mod tests {
         assert!(after.contains("exif:GPSLatitude"), "GPS 被摧毁");
         // 本方块被更新
         assert!(after.contains("<xmp:Rating>5</xmp:Rating>"), "星级未更新");
-        assert!(after.contains("<xmp:Label>Green</xmp:Label>"), "旗标未写入");
+        assert!(after.contains("<xmp:Label>Green</xmp:Label>"), "色标未写入");
         // xpacket 外壳保留
         assert!(after.contains("<?xpacket"), "xpacket 头丢失");
         assert!(after.contains("<?xpacket end=\"w\"?>"), "xpacket 尾丢失");
@@ -876,7 +917,12 @@ mod tests {
             after
         );
         assert!(after.contains("<xmp:Rating>5</xmp:Rating>"), "新值未写入");
-        assert!(after.contains("<xmp:Label>Green</xmp:Label>"), "旗标未写入");
+        // pick 不再写 Label：旗标已迁到 cullstore，色标字段归还给色标
+        assert!(
+            !after.contains("<xmp:Label>"),
+            "pick 不应再写色标: {}",
+            after
+        );
 
         // 再读回来必须是 5（而不是陈旧的 1）
         assert_eq!(read_xmp_full(&xmp).unwrap().rating, 5, "回读必须是新星级");
@@ -930,12 +976,15 @@ mod tests {
     }
 
     #[test]
-    fn reject_writes_minus_one_rating() {
-        // Lightroom / LUMEN RAW 约定：reject = xmp:Rating -1（而不是 Label=Red）
+    fn reject_writes_minus_one_rating_and_keeps_colour_label() {
+        // Lightroom / LUMEN RAW 约定：reject = xmp:Rating -1（而不是 Label=Red）。
+        // 色标在 Lightroom 自己的方块里：不得删，也不得复制一份进本方块。
         let img = std::env::temp_dir().join(format!("xmp_reject_{}.jpg", std::process::id()));
         let xmp = get_xmp_path(&img);
-        let _ = fs::remove_file(&xmp);
+        fs::write(&xmp, foreign_label_sidecar("Blue")).unwrap();
+
         write_xmp(&img, 3, "reject").expect("写应成功");
+
         let content = fs::read_to_string(&xmp).unwrap();
         assert!(
             content.contains("<xmp:Rating>-1</xmp:Rating>"),
@@ -943,10 +992,73 @@ mod tests {
             content
         );
         assert!(
-            !content.contains("<xmp:Label>"),
-            "reject 不应再写 Label: {}",
+            content.contains("<xmp:Label>Blue</xmp:Label>"),
+            "淘汰不得删除用户的色标: {}",
             content
         );
+        assert_eq!(
+            content.matches("<xmp:Label>").count(),
+            1,
+            "不得在同一文件里造出第二个 xmp:Label: {}",
+            content
+        );
+        let _ = fs::remove_file(&xmp);
+    }
+
+    #[test]
+    fn clearing_flag_keeps_colour_label() {
+        // 按 U / 0 清除旗标，同样不得删色标。旧实现走 `_ => String::new()` 直接清空。
+        let img = std::env::temp_dir().join(format!("xmp_clear_label_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        fs::write(&xmp, foreign_label_sidecar("Red")).unwrap();
+
+        write_xmp(&img, 0, "none").expect("清除应成功");
+
+        let content = fs::read_to_string(&xmp).unwrap();
+        assert!(
+            content.contains("<xmp:Label>Red</xmp:Label>"),
+            "清除旗标不得删除用户的色标: {}",
+            content
+        );
+        assert!(
+            content.contains("<xmp:Rating>0</xmp:Rating>"),
+            "评级应归零: {}",
+            content
+        );
+        let _ = fs::remove_file(&xmp);
+    }
+
+    /// 旧文件的 pick 只存在本方块的 `Label=Green` 里。改调色/镜头不得把它抹掉 ——
+    /// 否则用户没动过旗标，却在改滑杆时静默丢了「留用」。
+    #[test]
+    fn legacy_green_pick_survives_tone_update() {
+        let img = std::env::temp_dir().join(format!("xmp_legacy_green_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        let _ = fs::remove_file(&xmp);
+
+        // 造一份"旧版本写出的"侧边栏：本方块里带 Label=Green
+        write_xmp_preserving(
+            &img,
+            &XmpMetadata {
+                rating: 4,
+                label: "Green".into(),
+                ..Default::default()
+            },
+        )
+        .expect("预置旧文件应成功");
+
+        update_xmp_tone(&img, Some(0.5), Some(0.0), Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+            .expect("改调色应成功");
+
+        let content = fs::read_to_string(&xmp).unwrap();
+        assert!(
+            content.contains("<xmp:Label>Green</xmp:Label>"),
+            "改调色不得抹掉旧文件的 pick 标记: {}",
+            content
+        );
+        let meta = read_xmp_full(&xmp).expect("读应成功");
+        assert_eq!(flag_from_xmp(&meta), "pick", "旧文件仍须读回 pick");
+        assert_eq!(meta.rating, 4);
         let _ = fs::remove_file(&xmp);
     }
 
@@ -1119,32 +1231,56 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_rating_flag_through_sidecar() {
-        // 写 → 读 闭环：pick/reject/none 都必须原样回来
-        for (rating, flag) in [(3u8, "pick"), (0u8, "reject"), (5u8, "none"), (1u8, "none")] {
+    fn roundtrip_rating_through_sidecar() {
+        // 评级闭环：XMP 仍是星级的真值。
+        //
+        // 旗标的闭环**不在这里**：pick 自 2026-10 起由 cullstore 存
+        // （`.gallerycull.json`），写 XMP 只剩淘汰（Rating=-1）。旗标闭环见
+        // `cullstore::tests::upsert_then_load_roundtrip`。
+        for rating in [0u8, 1, 3, 5] {
             let img = std::env::temp_dir().join(format!(
-                "xmp_rt_{}_{}_{}.jpg",
+                "xmp_rt_{}_{}.jpg",
                 std::process::id(),
-                rating,
-                flag
+                rating
             ));
             let xmp = get_xmp_path(&img);
             let _ = fs::remove_file(&xmp);
-            write_xmp(&img, rating, flag).expect("写应成功");
+            write_xmp(&img, rating, "none").expect("写应成功");
             let back = read_xmp_full(&xmp).expect("读应成功");
-            assert_eq!(
-                flag_from_xmp(&back),
-                flag,
-                "flag 闭环失败: rating={} flag={} → {:?}",
-                rating,
-                flag,
-                back
-            );
-            if flag != "reject" {
-                assert_eq!(back.rating, rating, "rating 闭环失败");
-            }
+            assert_eq!(back.rating, rating, "rating 闭环失败");
+            assert_eq!(flag_from_xmp(&back), "none", "未淘汰不该读成旗标");
             let _ = fs::remove_file(&xmp);
         }
+    }
+
+    #[test]
+    fn reject_roundtrips_as_reject() {
+        let img = std::env::temp_dir().join(format!("xmp_rt_reject_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        let _ = fs::remove_file(&xmp);
+        write_xmp(&img, 0, "reject").expect("写应成功");
+        let back = read_xmp_full(&xmp).expect("读应成功");
+        assert_eq!(flag_from_xmp(&back), "reject", "淘汰必须读回 reject");
+        assert!(back.rejected, "Rating=-1 必须置 rejected");
+        let _ = fs::remove_file(&xmp);
+    }
+
+    #[test]
+    fn pick_is_not_encoded_as_colour_label() {
+        // 回归护栏：pick 一旦再被写成 Label=Green，Lightroom 的绿标就又变成"留用"，
+        // 且按 U 清除时会把用户色标删掉。这条锁住"不写"。
+        let img = std::env::temp_dir().join(format!("xmp_pick_nolabel_{}.jpg", std::process::id()));
+        let xmp = get_xmp_path(&img);
+        let _ = fs::remove_file(&xmp);
+        write_xmp(&img, 4, "pick").expect("写应成功");
+        let content = fs::read_to_string(&xmp).unwrap();
+        assert!(
+            !content.contains("<xmp:Label>"),
+            "pick 不得写色标: {}",
+            content
+        );
+        assert!(content.contains("<xmp:Rating>4</xmp:Rating>"));
+        let _ = fs::remove_file(&xmp);
     }
 
     #[test]
@@ -1235,7 +1371,8 @@ mod tests {
 
         let meta = read_xmp_full(&xmp_file).expect("Should read xmp");
         assert_eq!(meta.rating, 4);
-        assert_eq!(meta.label, "Green");
+        // pick 不再写色标（旗标已迁到 cullstore）
+        assert_eq!(meta.label, "");
 
         // Clean up
         let _ = fs::remove_file(xmp_file);
@@ -1257,7 +1394,7 @@ mod tests {
 
         let full_meta = read_xmp_full(&xmp_file).expect("Should read full xmp");
         assert_eq!(full_meta.rating, 5);
-        assert_eq!(full_meta.label, "Green");
+        assert_eq!(full_meta.label, "");
         assert_eq!(
             full_meta.lens_model.as_deref(),
             Some("Voigtlander 50mm F2 APO")
@@ -1297,7 +1434,7 @@ mod tests {
 
         let full_meta = read_xmp_full(&xmp_file).expect("Should read full xmp");
         assert_eq!(full_meta.rating, 3);
-        assert_eq!(full_meta.label, "Green");
+        assert_eq!(full_meta.label, "");
         assert_eq!(full_meta.exposure, Some(0.65));
         assert_eq!(full_meta.highlights, Some(-20.0));
         assert_eq!(full_meta.shadows, Some(45.0));

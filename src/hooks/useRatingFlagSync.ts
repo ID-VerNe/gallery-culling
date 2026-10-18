@@ -82,7 +82,7 @@ export function useRatingFlagSync(opts: {
       // B6：toast 会消失，格子上的"未同步"角标不会 —— 两者都要给。
       if (groupId) markUnsynced(groupId);
       toast.error(
-        `照片标记未写入 XMP 侧边栏：${String(err)}\n界面上的星级和保留/淘汰仍然有效，但不会同步到 Lightroom。`,
+        `照片标记未能完整落盘：${String(err)}\n界面上的星级和保留/淘汰仍然有效，但重启或重新扫描后可能丢失。`,
       );
     },
     [toast, markUnsynced],
