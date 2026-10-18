@@ -180,7 +180,8 @@ export function useRatingFlagSync(opts: {
       const targetPath = groupPath(group);
       if (!targetPath) return;
       try {
-        await api.updateRatingFlag(targetPath, group.rating, group.flag, true);
+        // 显式重试：用户点了一次就该立刻写，不必等防抖窗口。
+        await api.updateRatingFlag(targetPath, group.rating, group.flag, true, false);
         markSynced(group.id);
         toast.success('已重新同步到 XMP 侧边栏。');
       } catch (err) {
@@ -250,11 +251,13 @@ export function useRatingFlagSync(opts: {
     });
 
     try {
+      // 撤销是一次确定的回填，不需要等后续按键：直接落盘。
       await api.updateRatingFlag(
         snapshot.path,
         snapshot.rating,
         snapshot.flag,
         true,
+        false,
       );
       toast.success(
         `已撤销上一处改动：星级恢复为 ${snapshot.rating} 星，标记恢复为 ${FLAG_LABELS[snapshot.flag]}。`,

@@ -48,18 +48,24 @@ export const api = {
 
   /**
    * Update photo rating and pick/reject flag
+   *
+   * `coalesce` 让后端把同一张照片的连续改动折叠成一次落盘（FR-03）：
+   * - 单张按键连击传 `true`（默认）—— 400ms 静默窗口内只写一次；
+   * - 批量、重试、撤销传 `false` —— 每张只改一次，没必要等窗口。
    */
   updateRatingFlag: async (
     filePath: string,
     rating: number,
     flag: string,
     syncXmp: boolean = true,
+    coalesce: boolean = true,
   ): Promise<boolean> => {
     return await invoke<boolean>('update_rating_flag_cmd', {
       filePath,
       rating,
       flag,
       syncXmp,
+      coalesce,
     });
   },
 

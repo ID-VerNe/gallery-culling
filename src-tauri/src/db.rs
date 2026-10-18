@@ -47,6 +47,18 @@ pub(crate) fn apply_setting(settings: &mut AppSettings, key: &str, value: &str) 
     }
 }
 
+/// 一条尚未落盘的写入意图（FR-03）。
+///
+/// 只描述「用户做过什么、还没写进磁盘」，不参与任何读取判定。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingWrite {
+    pub photo_path: String,
+    pub rating: u8,
+    pub flag: String,
+    /// 用户做这次改动的时间（Unix 秒）。回放时据此判断侧边栏是否被外部改过。
+    pub updated_at: i64,
+}
+
 impl Clone for Database {
     fn clone(&self) -> Self {
         Self {
@@ -57,8 +69,12 @@ impl Clone for Database {
 
 impl Database {
     pub fn new() -> Result<Self, String> {
-        let db_path = get_db_path();
-        let conn = Connection::open(&db_path)
+        Self::open(&get_db_path())
+    }
+
+    /// 打开指定路径的库。测试用独立临时库，避免污染用户真实的 `gallery_culling.db`。
+    pub fn open(db_path: &Path) -> Result<Self, String> {
+        let conn = Connection::open(db_path)
             .map_err(|e| format!("打开数据库失败 ({}): {}", db_path.display(), e))?;
 
         // Initialize tables
@@ -97,6 +113,21 @@ impl Database {
             [],
         )
         .map_err(|e| format!("创建 sessions 表失败: {}", e))?;
+
+        // 待写盘意图（FR-03）：评级先落这张表，再异步写 XMP。
+        //
+        // 它**不是**第二份真值 —— XMP / `.gallerycull.json` 才是。这里只记录
+        // 「用户已经做过、但还没落盘」的意图，写成功即删；任何读路径都不读它。
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS pending_xmp (
+                photo_path TEXT PRIMARY KEY,
+                rating     INTEGER NOT NULL,
+                flag       TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )",
+            [],
+        )
+        .map_err(|e| format!("创建 pending_xmp 表失败: {}", e))?;
 
         Ok(Self {
             conn: std::sync::Arc::new(Mutex::new(conn)),
@@ -195,6 +226,68 @@ impl Database {
         Ok(())
     }
 
+    /// 记下一次待写盘意图。同一张照片只保留最新一条。
+    ///
+    /// 调用方必须在**发起写盘之前**调用它：这一行是「用户确实改过」的唯一证据，
+    /// 写盘失败或进程被杀时靠它回放。
+    pub fn enqueue_pending(
+        &self,
+        photo_path: &str,
+        rating: u8,
+        flag: &str,
+        updated_at: i64,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO pending_xmp (photo_path, rating, flag, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(photo_path) DO UPDATE SET
+                rating = ?2, flag = ?3, updated_at = ?4",
+            params![photo_path, rating as i64, flag, updated_at],
+        )
+        .map_err(|e| format!("记录待写盘标记失败: {}", e))?;
+        Ok(())
+    }
+
+    /// 读出全部待写盘意图（启动回放用）。
+    pub fn list_pending(&self) -> Result<Vec<PendingWrite>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT photo_path, rating, flag, updated_at FROM pending_xmp")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(PendingWrite {
+                    photo_path: row.get::<_, String>(0)?,
+                    rating: row.get::<_, i64>(1)?.max(0) as u8,
+                    flag: row.get::<_, String>(2)?,
+                    updated_at: row.get::<_, i64>(3)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(rows.flatten().collect())
+    }
+
+    /// 落盘成功后删除意图。
+    pub fn delete_pending(&self, photo_path: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM pending_xmp WHERE photo_path = ?1",
+            params![photo_path],
+        )
+        .map_err(|e| format!("删除待写盘记录失败: {}", e))?;
+        Ok(())
+    }
+
+    /// 待写盘条数（诊断与测试用）。
+    pub fn count_pending(&self) -> Result<usize, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pending_xmp", [], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+        Ok(n.max(0) as usize)
+    }
+
     pub fn save_session(
         &self,
         jpg_folder: &str,
@@ -264,7 +357,8 @@ fn get_db_path() -> PathBuf {
     }
 }
 
-fn now_secs() -> i64 {
+/// 当前 Unix 秒。写盘意图的时间戳与侧边栏 mtime 用同一把尺子。
+pub fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -283,6 +377,69 @@ pub fn file_mtime_secs(path: &Path) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 每个用例独立临时库：测试并行跑，共用一个文件会互相踩。
+    fn temp_db(tag: &str) -> (Database, PathBuf) {
+        let path = std::env::temp_dir().join(format!("gc_db_{}_{}.db", tag, std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        (Database::open(&path).expect("建临时库"), path)
+    }
+
+    #[test]
+    fn pending_upsert_keeps_latest_intent() {
+        let (db, path) = temp_db("pending_upsert");
+        db.enqueue_pending("C:/p/a.JPG", 3, "none", 100).unwrap();
+        // 同一张照片再改一次：只保留最新一条，不能堆成两行
+        db.enqueue_pending("C:/p/a.JPG", 5, "pick", 200).unwrap();
+
+        let rows = db.list_pending().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0],
+            PendingWrite {
+                photo_path: "C:/p/a.JPG".to_string(),
+                rating: 5,
+                flag: "pick".to_string(),
+                updated_at: 200,
+            }
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn pending_roundtrip_and_delete() {
+        let (db, path) = temp_db("pending_roundtrip");
+        db.enqueue_pending("C:/p/a.JPG", 1, "reject", 10).unwrap();
+        db.enqueue_pending("C:/p/b.JPG", 4, "pick", 20).unwrap();
+        assert_eq!(db.count_pending().unwrap(), 2);
+
+        db.delete_pending("C:/p/a.JPG").unwrap();
+        let rows = db.list_pending().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].photo_path, "C:/p/b.JPG");
+
+        // 删不存在的行不算错（回放可能重复删）
+        db.delete_pending("C:/p/missing.JPG").unwrap();
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 意图必须活过进程重启：这是 FR-03「零丢失」的全部依据。
+    #[test]
+    fn pending_survives_reopen() {
+        let (db, path) = temp_db("pending_reopen");
+        db.enqueue_pending("C:/p/a.JPG", 2, "pick", 42).unwrap();
+        drop(db);
+
+        let reopened = Database::open(&path).expect("重开");
+        let rows = reopened.list_pending().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].rating, 2);
+        assert_eq!(rows[0].updated_at, 42);
+
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn settings_pairs_contains_lumen_keys() {

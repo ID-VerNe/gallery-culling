@@ -82,12 +82,20 @@ describe('L-11 —— 撤销：键盘', () => {
 
     fireEvent.keyDown(document.body, { key: '3' });
     await waitFor(() => expect(rateCalls()).toBe(1));
-    expect(lastInvokeArgs('update_rating_flag_cmd')).toMatchObject({ rating: 3 });
+    // 单张按键走合并（FR-03）：连击由后端折叠，参数必须是 true
+    expect(lastInvokeArgs('update_rating_flag_cmd')).toMatchObject({
+      rating: 3,
+      coalesce: true,
+    });
 
     fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true });
 
     await waitFor(() => expect(rateCalls()).toBe(2));
-    expect(lastInvokeArgs('update_rating_flag_cmd')).toMatchObject({ rating: 0 });
+    // 撤销是一次确定的回填，不走合并
+    expect(lastInvokeArgs('update_rating_flag_cmd')).toMatchObject({
+      rating: 0,
+      coalesce: false,
+    });
     await waitFor(() => expect(screen.getByText(/已撤销上一处改动/)).toBeInTheDocument());
   });
 

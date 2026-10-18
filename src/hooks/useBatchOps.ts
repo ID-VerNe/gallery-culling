@@ -101,7 +101,8 @@ export function useBatchOps(opts: {
         onGroupPatched(g.id, { rating: nextRating, flag: nextFlag });
 
         try {
-          await api.updateRatingFlag(targetPath, nextRating, nextFlag, true);
+          // 每张只改一次，没有「后续改动」需要等：关掉合并，直接落盘。
+          await api.updateRatingFlag(targetPath, nextRating, nextFlag, true, false);
           markSynced(g.id);
           ok++;
         } catch (err) {

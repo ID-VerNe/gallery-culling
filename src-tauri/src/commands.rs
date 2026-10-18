@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::db::Database;
 use crate::lumen;
+use crate::syncqueue;
 
 use crate::models::AppSettings;
 
@@ -101,6 +102,23 @@ pub struct AppState {
     pub scan_cancel: Arc<AtomicBool>,
     /// 导出取消标志（协作式轮询）。置位后导出丢弃临时目录，目标目录零污染。
     pub export_cancel: Arc<AtomicBool>,
+    /// 写盘合并队列（FR-03）：同一照片的连续改动折叠成一次落盘。
+    pub sync: Arc<syncqueue::Coalescer>,
+}
+
+impl AppState {
+    /// 组装应用状态。合并队列的 sink 复用同一个数据库句柄 —— 落盘成功后由它
+    /// 删除 `pending_xmp` 里那条意图。
+    pub fn new(db: Database) -> Self {
+        let sink = Arc::new(xmprw::DiskSink::new(db.clone()));
+        Self {
+            db,
+            lumen: lumen::LumenRuntime::new(),
+            scan_cancel: Arc::new(AtomicBool::new(false)),
+            export_cancel: Arc::new(AtomicBool::new(false)),
+            sync: Arc::new(syncqueue::Coalescer::new(sink)),
+        }
+    }
 }
 
 /// 进度节流器。

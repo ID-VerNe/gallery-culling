@@ -70,6 +70,12 @@ fn normalize_key(base_name: &str) -> String {
     base_name.trim().to_lowercase()
 }
 
+/// 校验旗标取值。写入前先调用：非法值不该进合并队列，更不该在 `pending_xmp`
+/// 里留下一条永远回放不成功的记录。
+pub(crate) fn validate_flag(flag: &str) -> Result<&'static str, String> {
+    normalize_flag(flag)
+}
+
 fn normalize_flag(flag: &str) -> Result<&'static str, String> {
     match flag.trim() {
         "pick" => Ok("pick"),

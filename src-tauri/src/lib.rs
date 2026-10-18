@@ -6,6 +6,7 @@ mod luminar;
 pub mod models;
 mod proc;
 mod scanner;
+mod syncqueue;
 mod thumbnail;
 pub mod xmp;
 
@@ -15,12 +16,24 @@ pub mod xmp;
 // commands 的什么」可一眼读尽，新增命令时也不会被 glob 悄悄放行。
 use commands::{AppState, open_in_luminar_roundtrip_cmd};
 use db::Database;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let db = Database::new().expect("Failed to initialize SQLite database");
+    let state = AppState::new(db);
+
+    // FR-03 回放：上次没写完的意图在这里补写。
+    //
+    // 放后台线程：启动路径上一张照片都不用等。回放逐条立即写（不等防抖窗口），
+    // 与用户的新操作共用同一个队列，所以同一张照片不会被写两遍。
+    let replay_db = state.db.clone();
+    let replay_queue = Arc::clone(&state.sync);
+    std::thread::spawn(move || {
+        if let Err(e) = syncqueue::replay_pending(&replay_db, &replay_queue) {
+            eprintln!("回放待写盘记录失败: {}", e);
+        }
+    });
 
     tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
@@ -31,12 +44,7 @@ pub fn run() {
         // 说明：M-17 的会话防抖**不在这里加窗口关闭钩子**。后端拿不到前端防抖窗口内
         // 尚未发送的选中索引，加钩子只会制造"已保存"的伪安全感。正确落点是前端在
         // `getCurrentWindow().onCloseRequested` / 组件卸载 / 目录切换三处主动 flush。
-        .manage(AppState {
-            db,
-            lumen: lumen::LumenRuntime::new(),
-            scan_cancel: Arc::new(AtomicBool::new(false)),
-            export_cancel: Arc::new(AtomicBool::new(false)),
-        })
+        .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::scan_folders_cmd,
             commands::cancel_scan_cmd,
