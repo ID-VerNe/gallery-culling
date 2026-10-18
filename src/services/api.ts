@@ -76,6 +76,23 @@ export const api = {
   },
 
   /**
+   * FR-04：撤销/重做前的磁盘一致性检查。
+   *
+   * 传入「我们以为磁盘上是什么」，后端读回真实 sidecar 并逐张比对，只返回
+   * 不一致的那些。空数组 = 可以安全覆盖。
+   *
+   * 比对规则（含 `Rating=-1` 与淘汰的换算）留在 Rust：`xmp.rs` 是那份编码的
+   * 单一真值，前端再实现一遍必然漂移。
+   */
+  checkCullState: async (
+    items: { path: string; rating: number; flag: string; label: string }[],
+  ): Promise<{ path: string; detail: string }[]> => {
+    return await invoke<{ path: string; detail: string }[]>('check_cull_state_cmd', {
+      items,
+    });
+  },
+
+  /**
    * Open file in Photoshop
    */
   openInPhotoshop: async (

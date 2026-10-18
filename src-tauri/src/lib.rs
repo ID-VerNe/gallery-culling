@@ -50,6 +50,7 @@ pub fn run() {
             commands::cancel_scan_cmd,
             commands::get_thumbnail_cmd,
             commands::update_rating_flag_cmd,
+            commands::check_cull_state_cmd,
             commands::open_in_photoshop_cmd,
             commands::open_in_default_app_cmd,
             commands::open_folder_cmd,

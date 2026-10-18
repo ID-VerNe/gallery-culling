@@ -20,7 +20,7 @@ import { useCollection } from './hooks/useCollection';
 import { useComparePin } from './hooks/useComparePin';
 import { useFolderScan } from './hooks/useFolderScan';
 import { useBatchOps } from './hooks/useBatchOps';
-import { useRatingFlagSync } from './hooks/useRatingFlagSync';
+import { useRatingFlagSync, type UndoConflict } from './hooks/useRatingFlagSync';
 import { useToneEditing } from './hooks/useToneEditing';
 import { useSessionDebounce } from './hooks/useSessionDebounce';
 import { toLumenGateStatus, useLumenStatus } from './hooks/useLumenStatus';
@@ -134,6 +134,9 @@ function AppShell() {
     clearRatingFlag: handleClearRatingFlag,
     undo: handleUndo,
     redo: handleRedo,
+    pendingConflict,
+    confirmConflict,
+    dismissConflict,
     clearCullUndo,
   } = rating;
 
@@ -691,7 +694,7 @@ function AppShell() {
           if (action) void runBatch(action);
         }}
         title="确认批量修改"
-        message={`${pendingBatchSummary}\n\n改动会立即写入每张照片的 XMP 侧边栏，无法整批撤销。`}
+        message={`${pendingBatchSummary}\n\n改动会立即写入每张照片的 XMP 侧边栏；整批算一步，可以一次撤销（Ctrl+Z）。`}
         confirmLabel="写入 XMP"
         cancelLabel="取消"
         destructive={pendingBatch?.kind === 'clear'}
@@ -714,8 +717,45 @@ function AppShell() {
         cancelLabel="继续编辑"
         destructive
       />
+
+      {/* FR-04：撤销/重做前发现磁盘被别的程序改过 —— 不盲目覆盖 */}
+      <ConfirmDialog
+        isOpen={pendingConflict !== null}
+        onClose={dismissConflict}
+        onConfirm={() => void confirmConflict()}
+        title="磁盘内容已被其他程序修改"
+        message={conflictMessage(pendingConflict)}
+        confirmLabel={pendingConflict?.direction === 'redo' ? '仍要重做' : '仍要撤销'}
+        cancelLabel="取消"
+        destructive
+      />
     </div>
   );
+}
+
+/**
+ * 冲突确认框正文：最多列 5 张，其余折叠成一句。
+ *
+ * 只显示文件名不显示全路径 —— 弹窗宽度有限，而用户认得出自己的照片；
+ * 完整路径在 tooltip 与日志里。
+ */
+function conflictMessage(conflict: UndoConflict | null): string {
+  if (!conflict) return '';
+  const lines = conflict.details.slice(0, 5).map((d) => {
+    const name = d.path.split(/[\\/]/).pop() ?? d.path;
+    return `· ${name}：${d.detail}`;
+  });
+  if (conflict.details.length > 5) {
+    lines.push(`…另有 ${conflict.details.length - 5} 张`);
+  }
+  return [
+    `${conflict.details.length} 张照片的 XMP 已被其他程序修改：`,
+    ...lines,
+    '',
+    conflict.direction === 'undo'
+      ? '继续撤销会覆盖这些外部改动。'
+      : '继续重做会覆盖这些外部改动。',
+  ].join('\n');
 }
 
 export default function App() {

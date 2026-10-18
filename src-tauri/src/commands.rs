@@ -85,7 +85,13 @@ pub use apps::{
     __tauri_command_name_trash_photos_cmd,
     open_folder_cmd, open_in_default_app_cmd, open_in_photoshop_cmd, trash_photos_cmd,
 };
+mod cullcheck;
 mod xmprw;
+
+pub use cullcheck::{
+    __cmd__check_cull_state_cmd, __tauri_command_name_check_cull_state_cmd,
+    check_cull_state_cmd,
+};
 
 pub use xmprw::{
     __cmd__batch_update_metadata_cmd, __cmd__update_rating_flag_cmd,

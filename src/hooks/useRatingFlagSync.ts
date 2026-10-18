@@ -15,6 +15,18 @@ import type { BatchAction } from './useBatchOps';
 import type { ColorLabel, CullFlag, PhotoGroupInfo } from '../types';
 
 /**
+ * 撤销/重做前的冲突：磁盘上这张照片的 XMP 已经不再是我们上次写下去的样子。
+ *
+ * 不直接覆盖，而是把命令挂起等用户确认 —— 报告 §5.3 明确要求「不要盲目覆盖」。
+ */
+export interface UndoConflict {
+  command: CullCommand;
+  direction: 'undo' | 'redo';
+  /** 每张冲突照片的差异说明（后端生成）。 */
+  details: { path: string; detail: string }[];
+}
+
+/**
  * 评级与旗标的写盘：乐观更新 + 后台写 XMP + 失败留角标 + 多步撤销/重做。
  *
  * 三条约定，任何一条都不能破：
@@ -56,8 +68,13 @@ export function useRatingFlagSync(opts: {
     push: pushCommand,
     undo: takeUndoCommand,
     redo: takeRedoCommand,
+    peekUndo: peekUndoCommand,
+    peekRedo: peekRedoCommand,
     clear: clearCullUndo,
   } = useCullUndo();
+
+  /** 磁盘被外部改过、等待用户确认的撤销/重做。 */
+  const [pendingConflict, setPendingConflict] = useState<UndoConflict | null>(null);
 
   /** B6：把某张照片标记为"已同步到 XMP"（写盘成功时调用）。 */
   const markSynced = useCallback((id: string) => {
@@ -382,32 +399,104 @@ export function useRatingFlagSync(opts: {
   );
 
   /**
-   * FR-04 撤销：弹出最近一条命令，把每张照片的 `before` 写回去。
+   * 撤销/重做前的磁盘检查。只查**上次写盘成功过**的照片。
+   *
+   * `unsyncedIds` 里的照片磁盘本来就是旧值：拿 `after` 去比必然"冲突"，但那是
+   * 上一次失败的余波，不是外部改动。把它排除掉，才不会在用户点重试之前
+   * 每撤一次弹一次假警报。
+   *
+   * 检查本身失败（IPC 报错 / 命令未注册）时不阻断撤销：直接覆盖就是加入这项
+   * 检查之前的行为，没有回归；但要留一句 toast，别让用户以为检查过了。
+   */
+  const findConflicts = useCallback(
+    async (
+      command: CullCommand,
+      direction: 'undo' | 'redo',
+    ): Promise<{ path: string; detail: string }[]> => {
+      const expected = direction === 'undo' ? 'after' : 'before';
+      const items = command.items
+        .filter((item) => !unsyncedIds.has(item.id))
+        .map((item) => ({ path: item.path, ...item[expected] }));
+      if (items.length === 0) return [];
+      try {
+        return await api.checkCullState(items);
+      } catch (err) {
+        console.error('check_cull_state_cmd failed:', err);
+        toast.error(`无法确认磁盘状态，${direction === 'undo' ? '撤销' : '重做'}将直接覆盖。`);
+        return [];
+      }
+    },
+    [unsyncedIds, toast],
+  );
+
+  /** 真正执行一条命令并给出结果 toast（撤销/重做共用）。 */
+  const runCommand = useCallback(
+    async (command: CullCommand, direction: 'undo' | 'redo') => {
+      const failed = await applyCommand(command, direction);
+      if (failed === 0) {
+        toast.success(
+          direction === 'undo'
+            ? `已撤销「${command.summary}」。`
+            : `已重做「${command.summary}」。`,
+        );
+      }
+    },
+    [applyCommand, toast],
+  );
+
+  /**
+   * FR-04 撤销：把最近一条命令里每张照片的 `before` 写回去。
    *
    * 注意「上次写盘失败」的情形：此时 UI = 新值、磁盘 = 旧值。撤销把 UI 恢复成
    * 快照（= 当时的旧值）并照常发起写入 —— 内容与磁盘现值相同，收敛一致，
    * 只是多一次无害写入。刻意**不**因上次失败而跳过。
+   *
+   * 顺序是 peek → 查盘 → take：检查没通过时命令必须留在栈里，用户取消后
+   * 还能再撤；只有确认要写，才把它挪进重做栈。
    */
   const undo = useCallback(async () => {
-    const command = takeUndoCommand();
+    const command = peekUndoCommand();
     if (!command) {
       toast.info('没有可撤销的操作。');
       return;
     }
-    const failed = await applyCommand(command, 'undo');
-    if (failed === 0) toast.success(`已撤销「${command.summary}」。`);
-  }, [takeUndoCommand, applyCommand, toast]);
+    const conflicts = await findConflicts(command, 'undo');
+    if (conflicts.length > 0) {
+      setPendingConflict({ command, direction: 'undo', details: conflicts });
+      return;
+    }
+    takeUndoCommand();
+    await runCommand(command, 'undo');
+  }, [peekUndoCommand, takeUndoCommand, findConflicts, runCommand, toast]);
 
   /** FR-04 重做：把命令的 `after` 再写一遍。 */
   const redo = useCallback(async () => {
-    const command = takeRedoCommand();
+    const command = peekRedoCommand();
     if (!command) {
       toast.info('没有可重做的操作。');
       return;
     }
-    const failed = await applyCommand(command, 'redo');
-    if (failed === 0) toast.success(`已重做「${command.summary}」。`);
-  }, [takeRedoCommand, applyCommand, toast]);
+    const conflicts = await findConflicts(command, 'redo');
+    if (conflicts.length > 0) {
+      setPendingConflict({ command, direction: 'redo', details: conflicts });
+      return;
+    }
+    takeRedoCommand();
+    await runCommand(command, 'redo');
+  }, [peekRedoCommand, takeRedoCommand, findConflicts, runCommand, toast]);
+
+  /** 用户在冲突确认框里选择「仍然覆盖」。 */
+  const confirmConflict = useCallback(async () => {
+    const pending = pendingConflict;
+    if (!pending) return;
+    setPendingConflict(null);
+    if (pending.direction === 'undo') takeUndoCommand();
+    else takeRedoCommand();
+    await runCommand(pending.command, pending.direction);
+  }, [pendingConflict, takeUndoCommand, takeRedoCommand, runCommand]);
+
+  /** 用户取消：命令留在原栈，磁盘一个字节都不动。 */
+  const dismissConflict = useCallback(() => setPendingConflict(null), []);
 
   return {
     unsyncedIds,
@@ -430,6 +519,9 @@ export function useRatingFlagSync(opts: {
     clearRatingFlag,
     undo,
     redo,
+    pendingConflict,
+    confirmConflict,
+    dismissConflict,
     pushCommand,
     clearCullUndo,
   };

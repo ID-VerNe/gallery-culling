@@ -25,6 +25,12 @@ export interface UseCullUndoResult extends UndoView {
   undo: () => CullCommand | null;
   /** 弹出重做栈顶并压回撤销栈；空栈返回 null。 */
   redo: () => CullCommand | null;
+  /**
+   * 只看不取：撤销前的冲突检查要先知道命令内容，但检查没通过时命令必须
+   * 留在栈里（用户取消确认后还能再撤）。
+   */
+  peekUndo: () => CullCommand | null;
+  peekRedo: () => CullCommand | null;
   /** 丢弃两个栈（换目录 / 重新扫描时用：旧命令指向的照片可能已不在列表里）。 */
   clear: () => void;
 }
@@ -118,5 +124,15 @@ export function useCullUndo(): UseCullUndoResult {
     setView(EMPTY_VIEW);
   }, []);
 
-  return { ...view, push, undo, redo, clear };
+  const peekUndo = useCallback((): CullCommand | null => {
+    const stack = undoRef.current;
+    return stack.length > 0 ? stack[stack.length - 1] : null;
+  }, []);
+
+  const peekRedo = useCallback((): CullCommand | null => {
+    const stack = redoRef.current;
+    return stack.length > 0 ? stack[stack.length - 1] : null;
+  }, []);
+
+  return { ...view, push, undo, redo, peekUndo, peekRedo, clear };
 }

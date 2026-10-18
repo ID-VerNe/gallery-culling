@@ -6,7 +6,7 @@
  * 侧边栏或回 Lightroom 改回来。
  */
 import { describe, it, expect } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import App from './App';
 import { invokeCount, lastInvokeArgs, mockInvokeCommand } from './test/setup';
 import type { FolderScanResult, PhotoGroupInfo, ToneState } from './types';
@@ -67,6 +67,8 @@ function mockStartup(groups: PhotoGroupInfo[] = [group]) {
   mockInvokeCommand('get_thumbnail_cmd', 'D:/cache/thumb.jpg');
   mockInvokeCommand('get_tone_state_cmd', toneState);
   mockInvokeCommand('update_rating_flag_cmd', true);
+  // 默认磁盘与我们以为的一致；需要冲突的用例自己覆盖这一条。
+  mockInvokeCommand('check_cull_state_cmd', []);
 }
 
 async function scanOne(groups: PhotoGroupInfo[] = [group]) {
@@ -287,5 +289,51 @@ describe('FR-04 —— 多步撤销与重做', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: '重做：标记为淘汰' })).toBeEnabled(),
     );
+  });
+});
+
+describe('FR-04 —— 撤销前的磁盘冲突检查', () => {
+  it('磁盘被别的程序改过时先弹确认；取消则一个字节都不写，命令仍在栈里', async () => {
+    await scanOne();
+    mockInvokeCommand('check_cull_state_cmd', [
+      { path: 'D:/shoot/JPG/IMG_0001.jpg', detail: '星级：磁盘 5，预期 0' },
+    ]);
+
+    fireEvent.keyDown(document.body, { key: '3' });
+    await waitFor(() => expect(rateCalls()).toBe(1));
+
+    fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true });
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/张照片的 XMP 已被其他程序修改/)).toBeTruthy();
+    expect(within(dialog).getByText(/星级：磁盘 5，预期 0/)).toBeTruthy();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(rateCalls()).toBe(1);
+
+    // 命令没被 pop：再按一次 Ctrl+Z 仍会走到同一个确认框。
+    fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true });
+    const again = await screen.findByRole('dialog');
+    fireEvent.click(within(again).getByRole('button', { name: '仍要撤销' }));
+
+    await waitFor(() => expect(rateCalls()).toBe(2));
+    expect(lastInvokeArgs('update_rating_flag_cmd')).toMatchObject({
+      rating: 0,
+      coalesce: false,
+    });
+  });
+
+  it('磁盘一致时不弹确认，直接撤销', async () => {
+    await scanOne();
+
+    fireEvent.keyDown(document.body, { key: '4' });
+    await waitFor(() => expect(rateCalls()).toBe(1));
+
+    fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true });
+
+    await waitFor(() => expect(rateCalls()).toBe(2));
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

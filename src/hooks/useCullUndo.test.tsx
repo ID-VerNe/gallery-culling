@@ -207,6 +207,31 @@ describe('useCullUndo —— 命令栈', () => {
     expect(result.current.canRedo).toBe(true);
   });
 
+  it('peek 只看不取：命令留在原栈（冲突检查没通过时还能再撤）', () => {
+    const { result } = renderHook(() => useCullUndo());
+    const c = cmd('设为 4 星', item('a', {}, { rating: 4 }));
+
+    act(() => result.current.push(c));
+
+    let peeked: CullCommand | null = null;
+    act(() => {
+      peeked = result.current.peekUndo();
+    });
+    expect(peeked).toBe(c);
+    expect(result.current.canUndo).toBe(true);
+    expect(result.current.canRedo).toBe(false);
+
+    act(() => {
+      result.current.undo();
+    });
+    let peekedRedo: CullCommand | null = null;
+    act(() => {
+      peekedRedo = result.current.peekRedo();
+    });
+    expect(peekedRedo).toBe(c);
+    expect(result.current.canRedo).toBe(true);
+  });
+
   it('clear 同时清空两个栈（换目录 / 重新扫描）', () => {
     const { result } = renderHook(() => useCullUndo());
 

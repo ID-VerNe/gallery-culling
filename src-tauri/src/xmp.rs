@@ -572,6 +572,17 @@ fn read_sidecar(image_path: &Path) -> (PathBuf, XmpMetadata) {
     (xmp_path, meta)
 }
 
+/// 撤销前的一致性检查：读回一张照片在 XMP 里的（星级, 是否淘汰, 色标）。
+///
+/// 只读侧边栏，不碰本地旗标存储 —— 旗标是我们独占写的文件，外部工具改不到它，
+/// 真正会被别的程序动过的只有 `xmp:Rating` 与 `xmp:Label`。
+///
+/// 语义与 `write_xmp` 的入参一一对应，所以调用方可以拿「上次写入的意图」直接比对。
+pub fn read_disk_state(image_path: &Path) -> (u8, bool, String) {
+    let (_, meta) = read_sidecar(image_path);
+    (meta.rating, meta.rejected, meta.label)
+}
+
 /// 写评级、淘汰与色标到 XMP 侧边栏。
 ///
 /// 旗标自 2026-10 起由 `cullstore`（每文件夹 `.gallerycull.json`）独立存储，

@@ -254,7 +254,7 @@ LUMEN：PyInstaller + Inno Setup / DMG，随包 Python、ExifTool、9 个模型�
 
 ### 5.3 多步撤销（P0，本项目要超过 LUMEN 的一项）
 
-> **◐ 主体已完成（2026-10-18，`adr-004-undo-stack.md`）**：命令栈 50 步、批量算一步、`Ctrl/Cmd+Z` 撤销 / `Ctrl/Cmd+Shift+Z`（或 `Ctrl+Y`）重做、底栏可读摘要，均已落地并有 18 条用例 + 8 处变异验证。**未完成**：本条「成本/风险」里要求的外部改动检测（撤销前检查 sidecar mtime，被别的程序改过要提示）—— 需新增后端命令与确认流程，作为第二步。
+> **✅ 已完成（2026-10-18，`adr-004-undo-stack.md`）**：命令栈 50 步、批量算一步、`Ctrl/Cmd+Z` 撤销 / `Ctrl/Cmd+Shift+Z`（或 `Ctrl+Y`）重做、底栏可读摘要；外部改动检测落在后端 `check_cull_state_cmd`（比内容而非 mtime），冲突时弹确认不盲目覆盖。共 25 条用例 + 13 处变异验证。
 
 **LUMEN 做法（以及它没做的部分）**
 - LUMEN 的**编辑**动作走命令层，窗口上下文把每次 `apply` 记成一个可撤销步骤（`commands.py:3-8`）；这是它撤销设计的可取之处。
@@ -696,7 +696,7 @@ Reach 1-5（受影响用户比例）、Impact 1-5、Confidence 0-1、Effort 人�
 
 > **S1 已全部落地（2026-10-18）**：FR-01 → `adr-001-flag-storage.md`，FR-03 → `adr-002-write-coalescing.md`，FR-02 → `adr-003-colour-labels.md`。出口标准逐条达成：XMP 往返测试全绿（Rust 184 单测，含 Lightroom 风格侧边栏的单值不变式用例）；LR 色标不再被覆盖（写入层按 `rdf:Description` 位置去重，就地改外部那份而非新增）；合并生效（400ms 静默窗口，`syncqueue::Coalescer`）。
 >
-> **S2 进行中（2026-10-18）**：FR-04 主体已落地（`adr-004-undo-stack.md`，50 步命令栈 + 批量算一步 + 重做），出口标准「20 步撤销」达成；剩余 FR-04 的外部改动检测与 FR-06 查询式筛选。
+> **S2 进行中（2026-10-18）**：FR-04 已全部落地（`adr-004-undo-stack.md`，50 步命令栈 + 批量算一步 + 重做 + 撤销前磁盘冲突检查），出口标准「20 步撤销」达成；剩余 FR-06 查询式筛选。
 
 依赖关系：S1 是所有后续的前提（色标与写盘队列）；S2 的查询依赖色标字段；S4 独立，可与 S2/S3 并行（不同人）；S5 依赖 S1 的元数据模型。
 
