@@ -24,9 +24,11 @@
 //! 打开时**逐条 stat、缺失只报告不阻塞**：一次外拍的照片散在几个盘上是常态，
 //! 少一张不该让整本打不开。
 
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub const ALBUM_APPLICATION: &str = "Gallery Culling album";
 pub const ALBUM_VERSION: u32 = 1;
@@ -231,58 +233,90 @@ pub fn read_album(path: &Path) -> Result<Vec<AlbumDoc>, String> {
 /// 逐条 stat：缺失只标 `exists=false`，绝不中断。
 pub fn resolve_documents(album_path: &Path, docs: &[AlbumDoc]) -> Vec<ResolvedDoc> {
     let dir = album_dir(album_path);
-    docs.iter()
-        .map(|d| {
-            let resolved = resolve_source(dir, &d.source);
-            let meta = fs::metadata(&resolved).ok().filter(|m| m.is_file());
-            let jpg = d.jpg.as_deref().map(|s| resolve_source(dir, s));
-            let jpg_meta = jpg
+    let one = |d: &AlbumDoc| -> ResolvedDoc {
+        let resolved = resolve_source(dir, &d.source);
+        let meta = fs::metadata(&resolved).ok().filter(|m| m.is_file());
+        let jpg = d.jpg.as_deref().map(|s| resolve_source(dir, s));
+        let jpg_meta = jpg
+            .as_ref()
+            .and_then(|p| fs::metadata(p).ok().filter(|m| m.is_file()));
+        // EXIF：与扫描路径**同一顺序** —— 配对 JPG 优先，没有 JPG 才读主路径。
+        // JPG 是 1.5MB 而 ARW 是 25MB，实测差 80 倍（0.14 vs 11.1 ms/张）。
+        let exif = if jpg_meta.is_some() {
+            jpg.as_deref().and_then(crate::scanner::read_exif_metadata)
+        } else if meta.is_some() {
+            crate::scanner::read_exif_metadata(&resolved)
+        } else {
+            None
+        };
+        ResolvedDoc {
+            source: d.source.clone(),
+            exists: meta.is_some(),
+            is_raw: is_raw_path(&resolved),
+            size: meta.as_ref().map(|m| m.len()).unwrap_or(0),
+            mtime: meta
                 .as_ref()
-                .and_then(|p| fs::metadata(p).ok().filter(|m| m.is_file()));
-            // EXIF：与扫描路径**同一顺序** —— 配对 JPG 优先，没有 JPG 才读主路径。
-            // JPG 是 1.5MB 而 ARW 是 25MB，实测差 80 倍（0.14 vs 11.1 ms/张）。
-            let exif = if jpg_meta.is_some() {
-                jpg.as_deref().and_then(crate::scanner::read_exif_metadata)
-            } else if meta.is_some() {
-                crate::scanner::read_exif_metadata(&resolved)
-            } else {
-                None
-            };
-            ResolvedDoc {
-                source: d.source.clone(),
-                exists: meta.is_some(),
-                is_raw: is_raw_path(&resolved),
-                size: meta.as_ref().map(|m| m.len()).unwrap_or(0),
-                mtime: meta
-                    .as_ref()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0),
-                path: resolved.to_string_lossy().to_string(),
-                // 配对 JPG 只有**真的在磁盘上**才算数：记着路径但文件已被删，
-                // 前端拿到一个不存在的 jpg 会渲染成破图，比没有更糟。
-                jpg_path: jpg
-                    .filter(|_| jpg_meta.is_some())
-                    .map(|p| p.to_string_lossy().to_string()),
-                jpg_exists: jpg_meta.is_some(),
-                jpg_size: jpg_meta.as_ref().map(|m| m.len()).unwrap_or(0),
-                jpg_mtime: jpg_meta
-                    .as_ref()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0),
-                // 命令层读完 XMP 再填（本模块不碰 XMP）。
-                has_xmp: false,
-                tone: None,
-                exif,
-                rating: d.rating,
-                flag: d.flag.clone(),
-                label: d.label.clone(),
-            }
-        })
-        .collect()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            path: resolved.to_string_lossy().to_string(),
+            // 配对 JPG 只有**真的在磁盘上**才算数：记着路径但文件已被删，
+            // 前端拿到一个不存在的 jpg 会渲染成破图，比没有更糟。
+            jpg_path: jpg
+                .filter(|_| jpg_meta.is_some())
+                .map(|p| p.to_string_lossy().to_string()),
+            jpg_exists: jpg_meta.is_some(),
+            jpg_size: jpg_meta.as_ref().map(|m| m.len()).unwrap_or(0),
+            jpg_mtime: jpg_meta
+                .as_ref()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            // 命令层读完 XMP 再填（本模块不碰 XMP）。
+            has_xmp: false,
+            tone: None,
+            exif,
+            rating: d.rating,
+            flag: d.flag.clone(),
+            label: d.label.clone(),
+        }
+    };
+    match exif_pool() {
+        // `par_iter().map().collect()` **保序**（rayon 对 indexed iterator 的
+        // 保证），所以返回顺序与 `docs` 一致 —— 前端按下标认照片，乱序就张冠李戴。
+        Some(pool) => pool.install(|| docs.par_iter().map(one).collect()),
+        None => docs.iter().map(one).collect(),
+    }
+}
+
+/// 读 EXIF 用的线程池（8 线程，进程内只建一次）。
+///
+/// **为什么并行**：EXIF 读取是整文件读，一张 24MP RAW 是 25MB。实测 125 张
+/// （3.13 GB，SSD）：
+///
+/// | | 串行 | 8 线程 | 20 线程 |
+/// |---|---|---|---|
+/// | 冷缓存（首次打开） | 3516 ms（28.1/张） | — | 392 ms（3.1/张） |
+/// | 热缓存 | 1554 ms（12.4/张） | 354 ms（2.8/张） | 314 ms（2.5/张） |
+///
+/// 8 → 20 线程只再省 13%，但同时在读的文件从 8 个变 20 个（峰值内存
+/// 8×25MB → 20×25MB）。取 8：拿到绝大部分收益，不把内存拉满。
+///
+/// 用**局部池**而不是全局池：不占别的模块（以后可能用 rayon）的线程，也不依赖
+/// `build_global` 只能成功一次这个约束。建池失败（线程创建不了）时回退串行 ——
+/// 打开选片集不该因为「开不出线程」而失败。
+fn exif_pool() -> Option<&'static rayon::ThreadPool> {
+    static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(8)
+            .thread_name(|i| format!("album-exif-{i}"))
+            .build()
+            .ok()
+    })
+    .as_ref()
 }
 
 /// 保存时的一条输入：主路径 + 可选配对 JPG + 三项状态。
@@ -687,6 +721,37 @@ mod tests {
     }
 
     #[test]
+    fn parallel_resolution_keeps_the_document_order() {
+        // 并行读 EXIF 之后，返回顺序必须与 `docs` 一致 —— 前端按下标认照片。
+        // 实现若退化成「谁先读完谁在前」（比如误用 `par_bridge`），这条会红。
+        // 20 条足够让 8 个线程真的并行起来。
+        let dir = scratch("order");
+        let album = dir.join("a.galleryalbum");
+        let docs: Vec<AlbumDoc> = (0..20)
+            .map(|i| {
+                let name = format!("IMG_{i:03}.JPG");
+                fs::write(dir.join(&name), minimal_jpeg_with_exif(100 + i as u16)).unwrap();
+                doc(&name, 0, "none", "")
+            })
+            .collect();
+
+        let out = resolve_documents(&album, &docs);
+
+        let got: Vec<&str> = out.iter().map(|d| d.source.as_str()).collect();
+        let want: Vec<&str> = docs.iter().map(|d| d.source.as_str()).collect();
+        assert_eq!(got, want, "并行后顺序必须与输入一致");
+
+        // 顺带确认并行路径真的把 EXIF 读出来了（不是「顺序对了但活没干」）。
+        for (i, d) in out.iter().enumerate() {
+            assert_eq!(
+                d.exif.as_ref().and_then(|e| e.iso.as_deref()),
+                Some((100 + i).to_string().as_str()),
+                "第 {i} 条的 ISO 应来自它自己那份文件"
+            );
+        }
+    }
+
+    #[test]
     fn missing_fields_default_to_empty() {
         let dir = scratch("defaults");
         let p = dir.join("x.galleryalbum");
@@ -702,5 +767,69 @@ mod tests {
         assert_eq!(docs[0].rating, 0);
         assert_eq!(docs[0].flag, "", "缺省空串，由前端归一化成 none");
         assert_eq!(docs[0].label, "");
+    }
+
+    #[test]
+    fn exif_pool_is_capped_at_eight_threads_and_reused() {
+        // 8 是实测拐点：20 线程只再省 13%，但同时在读的文件从 8 个变 20 个。
+        // 这条锁住配置，防止有人顺手调成 `current_num_threads()`（=20）。
+        let pool = exif_pool().expect("线程池应能建起来");
+        assert_eq!(pool.current_num_threads(), 8);
+        // `OnceLock` 复用：反复打开选片集不该每次新建 8 个线程。
+        assert!(
+            std::ptr::eq(pool, exif_pool().expect("第二次也应拿到同一个池")),
+            "池应只建一次"
+        );
+    }
+
+    /// 真实 RAW_ONLY 集合的打开耗时（没有配对 JPG，只能读主路径）。
+    ///
+    /// 这是并行化瞄准的最坏情况：125 张 24MP ARW = 3.13 GB。
+    /// `GALLERY_BENCH_DIR` 指到任意「ARW + JPG 配对」的拍摄目录即可。
+    #[test]
+    #[ignore = "基准测量：真实 ARW，需 --ignored 明确触发"]
+    fn bench_resolve_raw_only() {
+        let dir = PathBuf::from(std::env::var("GALLERY_BENCH_DIR").unwrap_or_else(|_| {
+            "C:/Users/VerNe/Pictures/Camera Roll/2026年8月29日-新桥市民广场格温".into()
+        }));
+        let mut raws: Vec<PathBuf> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension()
+                    .and_then(|x| x.to_str())
+                    .map(|x| x.eq_ignore_ascii_case("ARW"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        raws.sort();
+        assert!(!raws.is_empty(), "{} 里没有 ARW", dir.display());
+
+        let album = dir.join("bench.galleryalbum");
+        let docs: Vec<AlbumDoc> = raws
+            .iter()
+            .map(|p| AlbumDoc {
+                source: p.file_name().unwrap().to_string_lossy().to_string(),
+                jpg: None, // 关键：RAW_ONLY，强制走主路径
+                rating: 0,
+                flag: "none".into(),
+                label: String::new(),
+            })
+            .collect();
+
+        // 跑两轮：第 1 轮接近冷缓存（用户首次打开），第 2 轮热缓存。
+        for round in 1..=2 {
+            let t = std::time::Instant::now();
+            let out = resolve_documents(&album, &docs);
+            let ms = t.elapsed().as_secs_f64() * 1000.0;
+            let hit = out.iter().filter(|d| d.exif.is_some()).count();
+            println!(
+                "[bench] RAW_ONLY 第{round}轮 {} 张 {ms:.0} ms（{:.2} ms/张）/ EXIF 命中 {hit}",
+                docs.len(),
+                ms / docs.len() as f64
+            );
+            assert_eq!(hit, docs.len(), "每一张都该读出 EXIF");
+        }
     }
 }
