@@ -31,6 +31,7 @@ pub enum Activity {
     Export,
     Render,
     Ai,
+    Refresh,
 }
 
 impl Activity {
@@ -41,6 +42,7 @@ impl Activity {
             Activity::Export => "导出照片",
             Activity::Render => "渲染导出",
             Activity::Ai => "AI 蒙版",
+            Activity::Refresh => "读取 XMP",
         }
     }
 }
@@ -50,11 +52,12 @@ impl Activity {
 /// 它们分别对应：共享取消标志（Scan/Export）、共享 LUMEN 编辑态
 /// （Render/Ai）、以及读同一批文件。将来若加入「可与扫描并行」的活动
 /// （例如缩略图），**不能**直接塞进这个列表，要改成显式邻接表。
-const EXCLUSIVE: [Activity; 4] = [
+const EXCLUSIVE: [Activity; 5] = [
     Activity::Scan,
     Activity::Export,
     Activity::Render,
     Activity::Ai,
+    Activity::Refresh,
 ];
 
 /// 两个活动是否不能同时存在。**自反**：同一活动也不允许开两份。

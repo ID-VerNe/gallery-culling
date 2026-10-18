@@ -10,6 +10,7 @@ mod syncqueue;
 mod taskgate;
 mod thumbnail;
 pub mod xmp;
+mod xmprefresh;
 
 // FE-07：显式导入替代 glob。此前 `use commands::*` 把 8 个子模块转发的全部
 // 命令宏一并卷入本作用域，而 generate_handler 里用的都是 `commands::` 限定
@@ -52,6 +53,8 @@ pub fn run() {
             commands::get_thumbnail_cmd,
             commands::update_rating_flag_cmd,
             commands::check_cull_state_cmd,
+            commands::refresh_from_xmp_cmd,
+            commands::resolve_xmp_conflicts_cmd,
             commands::open_in_photoshop_cmd,
             commands::open_in_default_app_cmd,
             commands::open_folder_cmd,

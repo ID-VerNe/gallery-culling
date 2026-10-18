@@ -47,6 +47,24 @@ pub(crate) fn apply_setting(settings: &mut AppSettings, key: &str, value: &str) 
     }
 }
 
+/// 一次外部改动的检测游标（FR-08）。
+///
+/// 语义是「上次读这个侧边栏时，它长什么样」。刷新时先 stat 拿 mtime：
+/// 与这里一致就**一个字节都不读**（10k 张的增量全靠这一条），不一致才读内容，
+/// 再与这里的 `rating/flag/label` 比 —— 内容没变（外部只是重新保存了一次）就
+/// 只更新 mtime，不打扰界面。
+///
+/// 它**不是**真值：真值是 XMP 本身。这里只是「我上次看到的样子」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XmpCursor {
+    pub sidecar_path: String,
+    /// 毫秒级 mtime。用秒会在「同一秒内两次写」时漏掉改动。
+    pub mtime_ms: i64,
+    pub rating: u8,
+    pub flag: String,
+    pub label: String,
+}
+
 /// 一条尚未落盘的写入意图（FR-03）。
 ///
 /// 只描述「用户做过什么、还没写进磁盘」，不参与任何读取判定。
@@ -135,6 +153,22 @@ impl Database {
         // 旧库补列：`CREATE TABLE IF NOT EXISTS` 对已存在的表是空操作，不会补列。
         // 色标是后加的字段，升级用户的库里没有它 —— 显式检查后再 ALTER。
         ensure_column(&conn, "pending_xmp", "label", "TEXT NOT NULL DEFAULT ''")?;
+
+        // XMP 增量游标（FR-08）：每个侧边栏一行，记录上次读到的 mtime 与三项状态。
+        // 主键是**侧边栏路径**而不是照片路径：同一个 base_name 在 JPG / RAW 两侧
+        // 可能各有一份 sidecar，两份的 mtime 各自独立变化。
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS xmp_cursor (
+                sidecar_path TEXT PRIMARY KEY,
+                mtime_ms     INTEGER NOT NULL,
+                rating       INTEGER NOT NULL,
+                flag         TEXT NOT NULL,
+                label        TEXT NOT NULL DEFAULT '',
+                seen_at      INTEGER NOT NULL
+            )",
+            [],
+        )
+        .map_err(|e| format!("创建 xmp_cursor 表失败: {}", e))?;
 
         Ok(Self {
             conn: std::sync::Arc::new(Mutex::new(conn)),
@@ -277,6 +311,32 @@ impl Database {
         Ok(rows.flatten().collect())
     }
 
+    /// 读出单张照片的待写盘意图（刷新时的冲突判定用）。
+    ///
+    /// 与 `list_pending` 分开：刷新一次要问 10k 次「这张有没有未同步意图」，
+    /// 每次都全表扫一遍是不可接受的。
+    pub fn lookup_pending(&self, photo_path: &str) -> Result<Option<PendingWrite>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT photo_path, rating, flag, label, updated_at
+                 FROM pending_xmp WHERE photo_path = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![photo_path], |row| {
+                Ok(PendingWrite {
+                    photo_path: row.get::<_, String>(0)?,
+                    rating: row.get::<_, i64>(1)?.max(0) as u8,
+                    flag: row.get::<_, String>(2)?,
+                    label: row.get::<_, String>(3)?,
+                    updated_at: row.get::<_, i64>(4)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
     /// 落盘成功后删除意图。
     pub fn delete_pending(&self, photo_path: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
@@ -295,6 +355,96 @@ impl Database {
             .query_row("SELECT COUNT(*) FROM pending_xmp", [], |row| row.get(0))
             .map_err(|e| e.to_string())?;
         Ok(n.max(0) as usize)
+    }
+
+    /// 记下一次「我看到了什么」（FR-08）。同一侧边栏只保留最新一行。
+    pub fn upsert_xmp_cursor(&self, cursor: &XmpCursor) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO xmp_cursor (sidecar_path, mtime_ms, rating, flag, label, seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(sidecar_path) DO UPDATE SET
+                mtime_ms = ?2, rating = ?3, flag = ?4, label = ?5, seen_at = ?6",
+            params![
+                cursor.sidecar_path,
+                cursor.mtime_ms,
+                cursor.rating as i64,
+                cursor.flag,
+                cursor.label,
+                now_secs()
+            ],
+        )
+        .map_err(|e| format!("记录 XMP 游标失败: {}", e))?;
+        Ok(())
+    }
+
+    /// 批量写游标（扫描收尾用）：**必须在一个事务里**。
+    ///
+    /// 逐条 `execute` 每次都会提交并 fsync，10k 张会让扫描收尾多花数秒 ——
+    /// 这是「扫描完卡一下」的典型来源。
+    pub fn upsert_xmp_cursors(&self, cursors: &[XmpCursor]) -> Result<(), String> {
+        if cursors.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("开启游标事务失败: {}", e))?;
+        let now = now_secs();
+        for cursor in cursors {
+            tx.execute(
+                "INSERT INTO xmp_cursor (sidecar_path, mtime_ms, rating, flag, label, seen_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(sidecar_path) DO UPDATE SET
+                    mtime_ms = ?2, rating = ?3, flag = ?4, label = ?5, seen_at = ?6",
+                params![
+                    cursor.sidecar_path,
+                    cursor.mtime_ms,
+                    cursor.rating as i64,
+                    cursor.flag,
+                    cursor.label,
+                    now
+                ],
+            )
+            .map_err(|e| format!("写入 XMP 游标失败（{}）: {}", cursor.sidecar_path, e))?;
+        }
+        tx.commit()
+            .map_err(|e| format!("提交游标事务失败: {}", e))?;
+        Ok(())
+    }
+
+    /// 查询某个侧边栏的游标。没有记录 = 从未读过它。
+    pub fn lookup_xmp_cursor(&self, sidecar_path: &str) -> Result<Option<XmpCursor>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT sidecar_path, mtime_ms, rating, flag, label
+                 FROM xmp_cursor WHERE sidecar_path = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![sidecar_path], |row| {
+                Ok(XmpCursor {
+                    sidecar_path: row.get::<_, String>(0)?,
+                    mtime_ms: row.get::<_, i64>(1)?,
+                    rating: row.get::<_, i64>(2)?.max(0) as u8,
+                    flag: row.get::<_, String>(3)?,
+                    label: row.get::<_, String>(4)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(rows.next().and_then(|r| r.ok()))
+    }
+
+    /// 侧边栏已消失时清掉游标：留着会让每次刷新都重复判一次「外部删除」。
+    pub fn delete_xmp_cursor(&self, sidecar_path: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM xmp_cursor WHERE sidecar_path = ?1",
+            params![sidecar_path],
+        )
+        .map_err(|e| format!("删除 XMP 游标失败: {}", e))?;
+        Ok(())
     }
 
     pub fn save_session(
@@ -404,6 +554,18 @@ pub fn file_mtime_secs(path: &Path) -> i64 {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs() as i64)
         .unwrap_or(-1)
+}
+
+/// 毫秒级 mtime（FR-08 的增量游标用）。
+///
+/// 秒级不够：同一秒内「外部写一次 → 我们刷新一次 → 外部再写一次」时，两次
+/// mtime 会被截断成同一个值，第二次改动就被静默跳过了。
+pub fn file_mtime_ms(path: &Path) -> Option<i64> {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
 }
 
 #[cfg(test)]
@@ -567,5 +729,103 @@ mod tests {
         apply_setting(&mut s, "thumbnail_width", "not-a-number");
         assert_eq!(s.thumbnail_width, 200); // 默认值不被污染
         apply_setting(&mut s, "unknown_future_key", "x"); // 未知键静默忽略
+    }
+
+    fn cursor(path: &str, mtime: i64, rating: u8, flag: &str, label: &str) -> XmpCursor {
+        XmpCursor {
+            sidecar_path: path.to_string(),
+            mtime_ms: mtime,
+            rating,
+            flag: flag.to_string(),
+            label: label.to_string(),
+        }
+    }
+
+    /// 游标必须能被读回，且「同一侧边栏再写一次」只更新不新增。
+    #[test]
+    fn xmp_cursor_roundtrip_and_upsert() {
+        let (db, path) = temp_db("cursor_roundtrip");
+        db.upsert_xmp_cursor(&cursor("C:/p/a.xmp", 1000, 3, "pick", "Red"))
+            .unwrap();
+
+        let got = db
+            .lookup_xmp_cursor("C:/p/a.xmp")
+            .unwrap()
+            .expect("应能读回");
+        assert_eq!(got, cursor("C:/p/a.xmp", 1000, 3, "pick", "Red"));
+
+        // 外部又改了一次：同一路径覆盖，不新增行
+        db.upsert_xmp_cursor(&cursor("C:/p/a.xmp", 2000, 5, "none", ""))
+            .unwrap();
+        let got = db.lookup_xmp_cursor("C:/p/a.xmp").unwrap().unwrap();
+        assert_eq!(got.mtime_ms, 2000, "mtime 必须跟着更新");
+        assert_eq!(got.rating, 5);
+        assert_eq!(got.flag, "none");
+
+        // 没记录过 = None（不是空游标，调用方要能区分「从未读过」与「读过但空」）
+        assert!(db.lookup_xmp_cursor("C:/p/missing.xmp").unwrap().is_none());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 侧边栏消失后游标要能删掉，否则每次刷新都重判一次「外部删除」。
+    #[test]
+    fn xmp_cursor_delete() {
+        let (db, path) = temp_db("cursor_delete");
+        db.upsert_xmp_cursor(&cursor("C:/p/a.xmp", 1, 2, "none", ""))
+            .unwrap();
+        db.delete_xmp_cursor("C:/p/a.xmp").unwrap();
+        assert!(db.lookup_xmp_cursor("C:/p/a.xmp").unwrap().is_none());
+        // 删不存在的行不算错
+        db.delete_xmp_cursor("C:/p/none.xmp").unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 批量写（扫描收尾）：一次写多条，空批次是空操作。
+    #[test]
+    fn xmp_cursor_batch_upsert() {
+        let (db, path) = temp_db("cursor_batch");
+        db.upsert_xmp_cursors(&[]).expect("空批次应直接返回");
+
+        db.upsert_xmp_cursors(&[
+            cursor("C:/p/a.xmp", 10, 1, "none", ""),
+            cursor("C:/p/b.xmp", 20, 2, "pick", "Blue"),
+        ])
+        .unwrap();
+
+        assert_eq!(db.lookup_xmp_cursor("C:/p/a.xmp").unwrap().unwrap().rating, 1);
+        let b = db.lookup_xmp_cursor("C:/p/b.xmp").unwrap().unwrap();
+        assert_eq!(b.rating, 2);
+        assert_eq!(b.label, "Blue");
+
+        // 覆盖已有行而不是报主键冲突
+        db.upsert_xmp_cursors(&[cursor("C:/p/a.xmp", 11, 4, "reject", "")])
+            .unwrap();
+        let a = db.lookup_xmp_cursor("C:/p/a.xmp").unwrap().unwrap();
+        assert_eq!(a.mtime_ms, 11);
+        assert_eq!(a.rating, 4);
+        assert_eq!(a.flag, "reject");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 单张查 pending：刷新时问 10k 次，不能每次全表扫。
+    #[test]
+    fn lookup_pending_returns_only_that_row() {
+        let (db, path) = temp_db("pending_lookup");
+        db.enqueue_pending("C:/p/a.JPG", 3, "pick", "Red", 100)
+            .unwrap();
+        db.enqueue_pending("C:/p/b.JPG", 5, "none", "", 200)
+            .unwrap();
+
+        let a = db.lookup_pending("C:/p/a.JPG").unwrap().expect("应有记录");
+        assert_eq!(a.rating, 3);
+        assert_eq!(a.flag, "pick");
+        assert_eq!(a.label, "Red");
+        assert_eq!(a.updated_at, 100);
+
+        assert!(db.lookup_pending("C:/p/c.JPG").unwrap().is_none());
+
+        let _ = std::fs::remove_file(&path);
     }
 }

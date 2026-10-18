@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::cullstore;
-use crate::db::Database;
+use crate::db::{Database, XmpCursor};
 use crate::lumen;
 use crate::syncqueue::{Intent, IntentSink};
 use crate::xmp as xmp;
@@ -49,6 +49,30 @@ impl IntentSink for DiskSink {
             // 当前值，`""` 表示这张照片现在没有色标。只传增量会让折叠后的意图
             // 丢掉被覆盖那次改动里的色标。
             write_xmp(path, intent.rating, &intent.flag, Some(&intent.label))?;
+
+            // FR-08：写盘成功后立刻推进增量游标。
+            //
+            // 不推进的话，下次「从 XMP 重新读取」会把这个 sidecar 判成外部改动，
+            // 白读一遍 —— 值相同所以无害，但 10k 张就是 10k 次多余读取。
+            //
+            // 记的必须是**磁盘上的实际值**：reject 会被 `write_xmp` 写成
+            // `Rating=-1`（读回是 0 星 + 淘汰），照抄 `intent.rating` 会让游标
+            // 与磁盘长期不一致，下次 mtime 一变就误报「外部把 5 星改成了 0 星」。
+            let xmp_path = xmp::get_xmp_path(path);
+            if let Some(mtime_ms) = crate::db::file_mtime_ms(&xmp_path) {
+                let disk_rating = if intent.flag == "reject" {
+                    0
+                } else {
+                    intent.rating
+                };
+                let _ = self.db.upsert_xmp_cursor(&XmpCursor {
+                    sidecar_path: xmp_path.to_string_lossy().to_string(),
+                    mtime_ms,
+                    rating: disk_rating,
+                    flag: intent.flag.clone(),
+                    label: intent.label.clone(),
+                });
+            }
         }
 
         // **只有全部写成功才删意图。** 失败时留着，下次启动回放。
@@ -246,6 +270,33 @@ mod tests {
             "只能有一份色标: {}",
             content
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// reject 落盘后游标必须记**磁盘实际值**（0 星），不是意图里的星级。
+    ///
+    /// 记错的话，下次 mtime 一变（外部重新保存一次）就会误报
+    /// 「外部把 5 星改成了 0 星」—— 而磁盘上本来就是淘汰态，什么都没发生。
+    #[test]
+    fn reject_records_disk_rating_in_cursor() {
+        let dir = temp_dir("reject_cursor");
+        let photo = dir.join("DSC_0004.ARW");
+        let db = Database::open(&dir.join("test.db")).expect("临时库");
+        db.enqueue_pending(&photo.to_string_lossy(), 5, "reject", "", now_secs())
+            .expect("记意图");
+
+        replay_pending(&db, &queue_for(&db)).expect("回放");
+
+        let sidecar = crate::xmp::get_xmp_path(&photo)
+            .to_string_lossy()
+            .to_string();
+        let cursor = db
+            .lookup_xmp_cursor(&sidecar)
+            .expect("查游标")
+            .expect("写盘后必须推进游标");
+        assert_eq!(cursor.rating, 0, "磁盘上是 Rating=-1，读回 0 星");
+        assert_eq!(cursor.flag, "reject");
 
         let _ = fs::remove_dir_all(&dir);
     }

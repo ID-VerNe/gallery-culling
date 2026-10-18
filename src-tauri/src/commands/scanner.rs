@@ -59,9 +59,10 @@ pub async fn scan_folders_cmd(
     );
 
     let app_for_progress = app.clone();
+    let db = state.db.clone();
     let result = blocking("扫描任务异常", move || {
         let mut throttle = ProgressThrottle::new();
-        scan_folders(
+        let result = scan_folders(
             &jpg_folder,
             raw_folder.as_deref(),
             &sort,
@@ -78,7 +79,20 @@ pub async fn scan_folders_cmd(
                     );
                 }
             },
-        )
+        )?;
+
+        // FR-08：把这次扫描看到的状态记成增量基线。
+        //
+        // 扫描本来就读过每一份 XMP，这里只多 stat 一次 mtime。不记的话，用户
+        // 第一次触发「从 XMP 重新读取」会把全部照片判成「首次见到」，10k 张
+        // 白读一遍 —— 增量从第二次才有，等于没有。
+        let cursors = crate::xmprefresh::build_cursors(&result.groups);
+        if let Err(e) = db.upsert_xmp_cursors(&cursors) {
+            // 基线失败不影响扫描结果：最坏情况是下次刷新退化成全量读一次。
+            eprintln!("记录 XMP 增量基线失败（已忽略）: {}", e);
+        }
+
+        Ok::<_, String>(result)
     })
     .await?;
 

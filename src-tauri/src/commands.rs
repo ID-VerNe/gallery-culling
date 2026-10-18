@@ -87,6 +87,7 @@ pub use apps::{
 };
 mod cullcheck;
 mod xmprw;
+mod xmprefresh;
 
 pub use cullcheck::{
     __cmd__check_cull_state_cmd, __tauri_command_name_check_cull_state_cmd,
@@ -98,6 +99,12 @@ pub use xmprw::{
     __tauri_command_name_batch_update_metadata_cmd,
     __tauri_command_name_update_rating_flag_cmd,
     batch_update_metadata_cmd, update_rating_flag_cmd,
+};
+
+pub use xmprefresh::{
+    __cmd__refresh_from_xmp_cmd, __cmd__resolve_xmp_conflicts_cmd,
+    __tauri_command_name_refresh_from_xmp_cmd, __tauri_command_name_resolve_xmp_conflicts_cmd,
+    refresh_from_xmp_cmd, resolve_xmp_conflicts_cmd,
 };
 
 pub struct AppState {
