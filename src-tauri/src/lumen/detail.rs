@@ -140,10 +140,15 @@ pub fn ensure_detail(
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .ok_or_else(|| LumenError::Protocol("缓存路径非法".to_string()))?;
-    let tmp = out
-        .parent()
-        .unwrap_or(cache_root)
-        .join(format!("{}.tmp", file_name));
+    // 临时文件名必须**保留 `.jpg` 结尾**：`photo.export` 会校验 output 的扩展名
+    // （`output must end in .jpg, .png, .tif or .dng`），`<name>.jpg.tmp` 直接被
+    // 拒。预览那条路侥幸没踩到（`render.preview` 不校验扩展名），所以单测里
+    // 「写固定字节」的假渲染器一路绿 —— 真机冒烟一跑就红，正是它该抓的东西。
+    let tmp_name = file_name
+        .rsplit_once('.')
+        .map(|(stem, ext)| format!("{stem}.tmp.{ext}"))
+        .unwrap_or_else(|| format!("{file_name}.tmp"));
+    let tmp = out.parent().unwrap_or(cache_root).join(tmp_name);
 
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent).map_err(|e| LumenError::Io(e.to_string()))?;
@@ -238,10 +243,15 @@ pub fn evict_detail_cache(cache_root: &Path, limit: u64) -> EvictReport {
 }
 
 /// 文件名是否是细节缓存产物（淘汰的唯一判定入口）。
+///
+/// 也算上 `*_detail_lumen.tmp.jpg`：那是渲染中途的临时文件，进程被杀 / 断电
+/// 会留下 4–6MB 残file。不认它，这些文件就永远在 2GB 预算之外（预算只统计
+/// 它认识的），越积越多。淘汰只在渲染成功后调用、而渲染是单飞的，所以不会
+/// 删到正在写的那份。
 pub fn is_detail_cache_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
-        .map(|n| n.ends_with("_detail_lumen.jpg"))
+        .map(|n| n.ends_with("_detail_lumen.jpg") || n.ends_with("_detail_lumen.tmp.jpg"))
         .unwrap_or(false)
 }
 
@@ -395,12 +405,21 @@ mod tests {
         let out = inputs.cache_path(&root, &inputs.key(Path::new("src.ARW")));
         let tmp_expected = {
             let name = out.file_name().unwrap().to_string_lossy().to_string();
-            out.parent().unwrap().join(format!("{}.tmp", name))
+            let (stem, ext) = name.rsplit_once('.').unwrap();
+            out.parent().unwrap().join(format!("{stem}.tmp.{ext}"))
         };
 
         let got = ensure_detail(Path::new("src.ARW"), &root, inputs, |tmp, args| {
             assert!(args.get("long_edge").is_none(), "细节必须是原生尺寸");
-            assert!(args["output"].as_str().unwrap().ends_with(".tmp"));
+            // 真机冒烟抓到的：`photo.export` 校验 output 扩展名，
+            // `<name>.jpg.tmp` 会被拒（output must end in .jpg/.png/.tif/.dng）。
+            // 假渲染器不校验，所以这条断言是那个 bug 唯一的单测哨兵。
+            let output = args["output"].as_str().unwrap();
+            assert!(
+                output.ends_with(".jpg"),
+                "photo.export 要求 output 以图片扩展名结尾，实际: {output}"
+            );
+            assert!(output.contains(".tmp."), "仍是临时文件: {output}");
             std::fs::write(tmp, b"rendered").unwrap();
             Ok(())
         })
@@ -488,6 +507,11 @@ mod tests {
         )));
         assert!(!is_detail_cache_file(Path::new(
             "D:/c/lumen/abc_detail_lumen.jpg.tmp"
+        )));
+        // 现行临时名（保留 .jpg 结尾才过得了 photo.export 的扩展名校验）：
+        // 必须算进预算，否则崩一次就留下 4–6MB 永远不计的残file。
+        assert!(is_detail_cache_file(Path::new(
+            "D:/c/lumen/abc_detail_lumen.tmp.jpg"
         )));
         assert!(!is_detail_cache_file(Path::new("D:/c/lumen/other.jpg")));
     }

@@ -828,4 +828,81 @@ mod tests {
             err
         );
     }
+
+    /// 真机冒烟（手动运行，不进 CI）：真实 24MP ARW + 真实 lumen-cli，走
+    /// `detail_impl` 全链路（缓存键 / 单飞 / 原子落盘 / 淘汰判定）。
+    ///
+    /// ```text
+    /// GALLERY_REAL_RAW_DIR="%TEMP%\gallery-realraw-20261018" \
+    ///   cargo test --lib real_arw_detail_smoke -- --ignored --nocapture
+    /// ```
+    ///
+    /// 为什么必须真文件：夹具里的 RAW 是 JPEG 改后缀，`photo.export` 出不了图；
+    /// 合成测试也证明不了「省略 `long_edge` 真能拿到原生尺寸」—— 那正是
+    /// 报告 §5.4 里 6–8 秒与「1600 是硬顶」两条结论的根基。
+    ///
+    /// 断言的是**数字**，不是「返回 Ok」：首次 ≤10s、缓存命中 ≤100ms、
+    /// 产物长边 ≥4000（24MP 原图 6000+，1600 预览拉大绝不可能到这个数）。
+    #[test]
+    #[ignore = "需要真实素材 + lumen-cli：设置 GALLERY_REAL_RAW_DIR 后加 --ignored 运行"]
+    fn real_arw_detail_smoke() {
+        let Ok(root) = std::env::var("GALLERY_REAL_RAW_DIR") else {
+            println!("[detail] 未设置 GALLERY_REAL_RAW_DIR，跳过");
+            return;
+        };
+        let src = PathBuf::from(root).join("rawonly").join("DSC04339.ARW");
+        assert!(src.is_file(), "缺少真实 RAW: {}", src.display());
+        let exe = lumen::find_lumen_cli("").expect("找不到 lumen-cli（开发态 src-tauri/binaries）");
+
+        let cache_root = scratch("real_arw");
+        let busy = AtomicBool::new(false);
+
+        // 与生产同一条渲染路径（生产多一步 apply_recipe，这里没有调色）。
+        let render = |_tmp: &Path, args: &Value| {
+            lumen::run_lumen(&exe, "photo.export", args).map(|_| ())
+        };
+
+        let first = detail_impl(&src, &cache_root, None, &busy, render).expect("首次渲染应成功");
+        let path = PathBuf::from(first.detail_path.clone().expect("必须返回产物路径"));
+        println!(
+            "[detail] 首次 {} ms / cached={} / {}",
+            first.elapsed_ms,
+            first.cached,
+            path.display()
+        );
+        assert!(!first.cached, "首次不该命中缓存");
+        assert!(
+            first.elapsed_ms <= 10_000,
+            "出口标准是首次 ≤10s，实测 {} ms",
+            first.elapsed_ms
+        );
+
+        let bytes = fs::metadata(&path).expect("产物应存在").len();
+        let (w, h) = image::image_dimensions(&path).expect("产物应是可解码 JPEG");
+        println!("[detail] 产物 {} KB / {}x{}", bytes / 1024, w, h);
+        assert!(bytes > 1_000_000, "全分辨率 JPEG 不应只有 {} B", bytes);
+        assert!(
+            w.max(h) >= 4000,
+            "应是原生尺寸（24MP 长边 6000+），实测 {}x{} —— 若这里是 1600，\
+             说明 long_edge 省略没生效或 photo.export 退回了预览尺寸",
+            w,
+            h
+        );
+
+        // 命中：同一张再来一次必须**零渲染**（闭包里 panic 就是证据）。
+        let second = detail_impl(&src, &cache_root, None, &busy, |_tmp, _args| {
+            panic!("命中缓存时不该再渲染");
+        })
+        .expect("缓存命中应成功");
+        println!("[detail] 命中 {} ms / cached={}", second.elapsed_ms, second.cached);
+        assert!(second.cached, "第二次必须走命中分支");
+        assert_eq!(second.detail_path, first.detail_path, "命中必须返回同一个文件");
+        assert!(
+            second.elapsed_ms <= 100,
+            "出口标准是命中 ≤100ms，实测 {} ms",
+            second.elapsed_ms
+        );
+
+        let _ = fs::remove_dir_all(&cache_root);
+    }
 }
