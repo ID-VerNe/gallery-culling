@@ -2,6 +2,7 @@ mod album;
 mod commands;
 mod cullstore;
 mod db;
+mod lrcat;
 pub mod lumen;
 mod luminar;
 pub mod models;
@@ -56,6 +57,7 @@ pub fn run() {
             commands::check_cull_state_cmd,
             commands::save_album_cmd,
             commands::open_album_cmd,
+            commands::read_lrcat_cmd,
             commands::refresh_from_xmp_cmd,
             commands::resolve_xmp_conflicts_cmd,
             commands::open_in_photoshop_cmd,

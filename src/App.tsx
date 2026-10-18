@@ -13,6 +13,7 @@ import { ShortcutHelpModal } from './components/ShortcutHelpModal';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { XmpConflictDialog } from './components/XmpConflictDialog';
 import { AlbumDialog, type AlbumSaveScope } from './components/AlbumDialog';
+import { LrcatDialog } from './components/LrcatDialog';
 import { ToastProvider, useToast } from './components/Toast';
 import { TaskProgressBar } from './components/TaskProgressBar';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
@@ -25,6 +26,7 @@ import { useBatchOps } from './hooks/useBatchOps';
 import { useRatingFlagSync, type UndoConflict } from './hooks/useRatingFlagSync';
 import { useXmpRefresh } from './hooks/useXmpRefresh';
 import { useAlbum } from './hooks/useAlbum';
+import { useLrcatImport } from './hooks/useLrcatImport';
 import { useToneEditing } from './hooks/useToneEditing';
 import { useToneBatch } from './hooks/useToneBatch';
 import { useTaskMutex, useActivity, TaskMutexProvider } from './hooks/useTaskMutex';
@@ -387,6 +389,16 @@ function AppShell() {
   const [isAlbumOpen, setIsAlbumOpen] = useState(false);
 
   /**
+   * FR-11：Lightroom 目录导入。
+   *
+   * 写盘走 `patchGroup`（与手动评级同一条乐观更新路径），逐张 `coalesce=false`
+   * —— 每张只改一次，没必要等合并窗口。互斥用 `batch-write`：导入写的就是
+   * 批量评级，不该另开一个活动。
+   */
+  const lrcat = useLrcatImport({ groups, onGroupPatched: patchGroup });
+  const [isLrcatOpen, setIsLrcatOpen] = useState(false);
+
+  /**
    * 保存范围：有多选就存选中，否则存当前筛选 —— 范围写在按钮上，不让用户猜。
    */
   const albumSaveScope: AlbumSaveScope = selectedIds.size > 0 ? 'selected' : 'filtered';
@@ -615,6 +627,7 @@ function AppShell() {
         onOpenAlbum={() => setIsAlbumOpen(true)}
         albumName={album.path ? baseNameOfPath(album.path) : null}
         albumCount={album.path ? groups.length : undefined}
+        onImportLrcat={() => setIsLrcatOpen(true)}
       />
 
       {/* Scan progress (M-05) — 空闲时不渲染，不留空白条 */}
@@ -848,6 +861,21 @@ function AppShell() {
         }
         onOpen={() => void album.open()}
         onDismissReport={album.dismissReport}
+      />
+
+      <LrcatDialog
+        isOpen={isLrcatOpen}
+        onClose={() => setIsLrcatOpen(false)}
+        reading={lrcat.reading}
+        applying={lrcat.applying}
+        report={lrcat.report}
+        plan={lrcat.plan}
+        progress={lrcat.progress}
+        failures={lrcat.failures}
+        cancelling={lrcat.cancelling}
+        onPick={() => void lrcat.pick()}
+        onApply={(overwrite) => void lrcat.apply(overwrite)}
+        onCancel={lrcat.cancel}
       />
 
       {/* Keyboard & mouse reference */}

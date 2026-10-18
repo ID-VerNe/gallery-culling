@@ -410,3 +410,33 @@ export interface AlbumItemInput {
   flag: string;
   label: string;
 }
+
+/* -------------------------------------------------------------------------- */
+/* FR-11：Lightroom 目录（`.lrcat`）导入                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * LR 目录里的一张照片（与 Rust `lrcat::LrcatPhoto` 对齐）。
+ *
+ * `rating` 已经把 LR 的 `-1`（淘汰）归一到 0，淘汰只由 `flag` 表达。
+ */
+export interface LrcatPhoto {
+  /** 拼好的绝对路径（平台分隔符，可能是 UNC `\\server\share\...`）。 */
+  path: string;
+  rating: number;
+  flag: string;
+  label: string;
+}
+
+export interface LrcatReadResult {
+  /** 选中的 `.lrcat` 绝对路径。 */
+  catalog: string;
+  /** 落在当前集合目录里的照片（`folders` 过滤后）。 */
+  photos: LrcatPhoto[];
+  /** 跳过的虚拟副本数（同一底片的另一份调色，路径与主图相同）。 */
+  skippedVirtual: number;
+  /** 库内总条目数（含虚拟副本），用于报告「库里有什么」。 */
+  total: number;
+  /** 原地读失败、走了复制副本（LR 正在运行）。 */
+  copied: boolean;
+}

@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Library,
   BookMarked,
+  Database,
 } from 'lucide-react';
 import type { FilterMode, SortOrder, ViewMode } from '../types';
 import { FILTER_OPTIONS } from '../utils/filterMatch';
@@ -101,6 +102,13 @@ export interface ToolbarRowProps {
   albumName?: string | null;
   /** 选片集里实际载入的张数（缺失的没算进来）。 */
   albumCount?: number;
+  /**
+   * FR-11：打开「导入 Lightroom 目录」弹窗。
+   *
+   * 与选片集分开一个入口：选片集是「这批照片是哪些」，导入是「把 LR 的判断
+   * 搬过来」，两者的目标状态完全不同，合并进一个弹窗会让用户分不清。
+   */
+  onImportLrcat?: () => void;
 }
 
 export const ToolbarRow: React.FC<ToolbarRowProps> = ({
@@ -122,6 +130,7 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
   onOpenAlbum,
   albumName,
   albumCount,
+  onImportLrcat,
 }) => {
   // M-10：按下态由宿主传入的派生真值决定（用户意图 && 当前有可调对象）。
   const tonalVisible = tonalPanelVisible;
@@ -285,6 +294,19 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
           >
             <Library className="w-3.5 h-3.5" aria-hidden="true" />
             <span className="pb-[1px]">选片集</span>
+          </button>
+        )}
+
+        {/* FR-11 导入 Lightroom 目录 */}
+        {onImportLrcat && (
+          <button
+            onClick={onImportLrcat}
+            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 text-white rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap"
+            title="导入 Lightroom 目录（.lrcat）：把 LR 里的评级、旗标、色标对齐到当前文件夹"
+            aria-label="导入 Lightroom 目录"
+          >
+            <Database className="w-3.5 h-3.5" aria-hidden="true" />
+            <span className="pb-[1px]">导入 LR</span>
           </button>
         )}
 

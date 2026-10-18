@@ -49,6 +49,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenAlbum,
   albumName,
   albumCount,
+  onImportLrcat,
 }) => (
   <header
     aria-label="Gallery Culling 应用工具栏"
@@ -100,6 +101,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       onOpenAlbum={onOpenAlbum}
       albumName={albumName}
       albumCount={albumCount}
+      onImportLrcat={onImportLrcat}
     />
   </header>
 );

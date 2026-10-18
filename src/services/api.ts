@@ -16,6 +16,7 @@ import {
   LumenRatingSyncResult,
   LumenRecipe,
   LumenStatus,
+  LrcatReadResult,
   MaskAdjustments,
   RenderFormat,
   ToneAdjustments,
@@ -339,6 +340,31 @@ export const api = {
       defaultPath: defaultPath || undefined,
       title: '打开选片集',
       filters: [{ name: '选片集', extensions: ['galleryalbum'] }],
+    });
+    return typeof selected === 'string' ? selected : null;
+  },
+
+  /**
+   * FR-11：读 Lightroom 目录（只读）。
+   *
+   * `folders` 是当前集合涉及的目录（绝对路径），后端只返回落在这些目录里的
+   * 照片 —— LR 目录常有几万张，全量传过来既慢又没法用。传空数组 = 全量。
+   *
+   * 后端**绝不写**用户的 `.lrcat`：原地只读打开失败（LR 正在运行 / WAL 需要
+   * 恢复）时复制一份副本再读，结果里 `copied` 为 true。
+   */
+  readLrcat: async (path: string, folders: string[]): Promise<LrcatReadResult> => {
+    return await invoke<LrcatReadResult>('read_lrcat_cmd', { path, folders });
+  },
+
+  /** 「导入 Lightroom 目录」的文件对话框。LR 的扩展名就是 `.lrcat`。 */
+  selectLrcatPath: async (defaultPath?: string): Promise<string | null> => {
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      defaultPath: defaultPath || undefined,
+      title: '选择 Lightroom 目录',
+      filters: [{ name: 'Lightroom 目录', extensions: ['lrcat'] }],
     });
     return typeof selected === 'string' ? selected : null;
   },

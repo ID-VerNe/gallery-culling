@@ -89,12 +89,17 @@ pub use apps::{
 };
 mod cullcheck;
 mod albumcmds;
+mod lrcatcmds;
 mod xmprw;
 mod xmprefresh;
 
 pub use albumcmds::{
     __cmd__open_album_cmd, __cmd__save_album_cmd, __tauri_command_name_open_album_cmd,
     __tauri_command_name_save_album_cmd, open_album_cmd, save_album_cmd,
+};
+
+pub use lrcatcmds::{
+    __cmd__read_lrcat_cmd, __tauri_command_name_read_lrcat_cmd, read_lrcat_cmd,
 };
 
 pub use cullcheck::{
