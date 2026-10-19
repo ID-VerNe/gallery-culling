@@ -5,7 +5,7 @@
  * 全部查表，组件与文案函数里不再出现 `mode === 'render' ? … : …` 的散落分支。
  * 新增第三种模式时只改本文件。
  */
-import type { ExportMode, RenderFormat } from '../../types';
+import type { ExportMode, RenderFormat, WatermarkPresetName } from '../../types';
 
 export interface ExportModeSpec {
   /** 模式主标签。 */
@@ -102,5 +102,41 @@ export function clampQuality(value: number): number {
 
 /** 成片格式是否支持 JPEG 质量参数（TIFF / DNG 无此概念）。 */
 export function formatUsesQuality(format: RenderFormat): boolean {
+  return format === 'jpg';
+}
+
+/**
+ * 水印配色预设。`value` 与后端 `watermark::PRESET_NAMES` 逐字一致 ——
+ * 后端对未知名是**整批拒绝**而不是静默回落，所以这里多一个名就意味着
+ * 一种必然失败的导出。新增配色要先改后端。
+ */
+export const WATERMARK_PRESETS: ReadonlyArray<{
+  value: WatermarkPresetName;
+  label: string;
+}> = [
+  { value: 'gallery', label: '画廊白' },
+  { value: 'noir', label: '暗夜黑' },
+  { value: 'travel', label: '暖旅卡其' },
+  { value: 'sage', label: '鼠尾草绿' },
+];
+
+/**
+ * 底边高度占短边的百分比范围。
+ *
+ * 与后端 `watermark::SIZE_MIN/MAX` 一致。前端滑杆本身就限定在这个区间，
+ * 后端再夹一次是防线：命令可以被脚本直接调用，不走 UI。
+ */
+export const WATERMARK_SIZE_MIN = 8;
+export const WATERMARK_SIZE_MAX = 35;
+export const DEFAULT_WATERMARK_SIZE = 14;
+
+/**
+ * 成片格式是否支持水印。
+ *
+ * 只有 JPEG：宿主水印是在导出的 JPEG 上「扩画布 + 贴字 + 重编码」一步，
+ * TIFF / DNG 是渲染器直出，没有这一步。与质量参数同一判断，但刻意分开
+ * 两个函数 —— 它们未来可能不再一致（例如 TIFF 支持无损贴字时）。
+ */
+export function formatUsesWatermark(format: RenderFormat): boolean {
   return format === 'jpg';
 }

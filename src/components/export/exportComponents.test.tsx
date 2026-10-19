@@ -1,5 +1,5 @@
 /**
- * 导出域四个纯展示组件的契约测试。
+ * 导出域五个纯展示组件的契约测试。
  *
  * 合成一个文件是因为它们的断言量都不大，且共同守卫同一件事：
  * **呈现组件只翻译 props，不做判断**。任何一条开始读全局状态或算业务规则，
@@ -14,6 +14,7 @@ import { ExportResultPanel } from './ExportResultPanel';
 import { ExportModeSelector } from './ExportModeSelector';
 import { OverwriteToggle } from './OverwriteToggle';
 import { RenderOptions } from './RenderOptions';
+import { WatermarkOptions } from './WatermarkOptions';
 import { LumenGateNotice } from './LumenGateNotice';
 
 describe('ExportResultPanel', () => {
@@ -264,6 +265,78 @@ describe('RenderOptions', () => {
   it('非 JPEG 时规整说明也不显示（质量输入本身不在了）', () => {
     render(<RenderOptions {...base} format="tif" qualityNotice="已调整为 50（允许 50–100）" />);
     expect(screen.queryByText(/已调整为/)).toBeNull();
+  });
+});
+
+describe('WatermarkOptions', () => {
+  const base = {
+    enabled: false,
+    preset: 'gallery' as const,
+    size: 14,
+    onChangeEnabled: vi.fn(),
+    onChangePreset: vi.fn(),
+    onChangeSize: vi.fn(),
+  };
+
+  it('默认折叠：水印是可选项，不该占每次导出的注意力', () => {
+    const { container } = render(<WatermarkOptions {...base} />);
+    const details = container.querySelector('details');
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute('open');
+    expect(screen.getByText('底边水印')).toBeInTheDocument();
+  });
+
+  it('未勾选时不出现配色与高度控件（没有可用的东西就不摆出来）', () => {
+    render(<WatermarkOptions {...base} />);
+    expect(screen.getByLabelText('给成片加底边水印')).not.toBeChecked();
+    expect(screen.queryByLabelText('配色')).toBeNull();
+    expect(screen.queryByLabelText(/底边高度/)).toBeNull();
+  });
+
+  it('勾选后展开配色与高度，四个配色全部来自配置表', () => {
+    render(<WatermarkOptions {...base} enabled />);
+    const select = screen.getByLabelText('配色');
+    expect(select.querySelectorAll('option')).toHaveLength(4);
+    // 预设名与后端 PRESET_NAMES 对齐：多一个名就是一种必然失败的导出
+    expect(
+      Array.from(select.querySelectorAll('option')).map((o) => o.getAttribute('value')),
+    ).toEqual(['gallery', 'noir', 'travel', 'sage']);
+    expect(screen.getByLabelText('配色')).toHaveValue('gallery');
+  });
+
+  it('高度滑杆按后端区间 8–35，回传数字', () => {
+    const onChangeSize = vi.fn();
+    render(<WatermarkOptions {...base} enabled onChangeSize={onChangeSize} />);
+    const slider = screen.getByLabelText(/底边高度/);
+    expect(slider).toHaveAttribute('min', '8');
+    expect(slider).toHaveAttribute('max', '35');
+    expect(slider).toHaveValue('14');
+    fireEvent.change(slider, { target: { value: '28' } });
+    expect(onChangeSize).toHaveBeenCalledWith(28);
+  });
+
+  it('勾选与配色改动只回传值，组件不自己算规则', () => {
+    const onChangeEnabled = vi.fn();
+    const onChangePreset = vi.fn();
+    render(
+      <WatermarkOptions
+        {...base}
+        enabled
+        onChangeEnabled={onChangeEnabled}
+        onChangePreset={onChangePreset}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('给成片加底边水印'));
+    expect(onChangeEnabled).toHaveBeenCalledWith(false);
+    fireEvent.change(screen.getByLabelText('配色'), { target: { value: 'noir' } });
+    expect(onChangePreset).toHaveBeenCalledWith('noir');
+  });
+
+  it('disabled 时勾选框、配色、高度全部禁用', () => {
+    render(<WatermarkOptions {...base} enabled disabled />);
+    expect(screen.getByLabelText('给成片加底边水印')).toBeDisabled();
+    expect(screen.getByLabelText('配色')).toBeDisabled();
+    expect(screen.getByLabelText(/底边高度/)).toBeDisabled();
   });
 });
 

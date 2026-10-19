@@ -72,6 +72,18 @@ pub struct ExportManifestItem {
     pub result: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// 本次是否给这张成片加了边框水印。
+    ///
+    /// `None` = 这批导出**没要求**加水印（复制模式、或用户在成片模式里关掉了），
+    /// 这时清单里整个键都省掉。`Some(false)` = 要求了但没加上，原因见 `warning`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watermark: Option<bool>,
+    /// 成片**已生成**、但水印没加上时的原因。
+    ///
+    /// 刻意不复用 `error`：那个字段意味着「这项导出失败」，而水印只是装饰 ——
+    /// 没有水印的照片照样要导出去，只是用户得知道少了什么。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 /// 目标目录 == 源文件父目录时的拒绝文案。
@@ -79,6 +91,45 @@ pub struct ExportManifestItem {
 /// 与前端 `exportMessages.buildValidationMessage` **逐字一致**：两处都拦，
 /// 用户无论从哪一层被挡下都看到同一句话，不会以为是两个不同的问题。
 pub const TARGET_IS_SOURCE_MSG: &str = "导出目标不能是源照片所在目录，请另选一个目标文件夹";
+
+/// 水印这一次的结局（清单留档）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct WatermarkOutcome {
+    /// 真的加上边框了吗（`false` = 没加，原因看 `warning`）。
+    pub applied: bool,
+    /// 没加上的具体原因。已加成功时为 `None`。
+    ///
+    /// 用 `String` 而不是 `&'static str`：原因里带着失败的文件路径，
+    /// 而把它烧成 `&'static` 意味着每次失败漏一块内存。
+    pub warning: Option<String>,
+}
+
+impl WatermarkOutcome {
+    fn applied() -> Self {
+        Self {
+            applied: true,
+            warning: None,
+        }
+    }
+    fn skipped(reason: impl Into<String>) -> Self {
+        Self {
+            applied: false,
+            warning: Some(reason.into()),
+        }
+    }
+}
+
+/// 成片模式的水印方案：`None` 表示本次不加。
+///
+/// 与 `batch_render_export_cmd` 的入参一一对应，但已经过校验与缺省补齐 ——
+/// 命令层负责把前端可能给错的值挡下，这里只认「确定能画」的设置。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WatermarkPlan {
+    pub settings: crate::watermark::WatermarkSettings,
+    /// 导出用的 JPEG 质量。水印要重编码一次，沿用同一质量 ——
+    /// **不偷偷提质量**：用户选 92 就是 92，否则质量选择落空。
+    pub quality: u8,
+}
 
 /// 成片模式的渲染参数（清单留档 + 传给渲染器）。
 #[derive(Debug, Clone, Copy, serde::Serialize)]
@@ -88,6 +139,16 @@ pub struct RenderManifest<'a> {
     pub quality: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub long_edge: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watermark: Option<WatermarkManifest<'a>>,
+}
+
+/// 清单里的水印设置（只说「用了什么配色、多宽」——字段清单固定在内侧）。
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatermarkManifest<'a> {
+    pub preset: &'a str,
+    pub size: f32,
 }
 
 /// 写在 `target/.gallery-export.json` 的导出清单（key 为 camelCase，照 §2 形状）。
@@ -179,6 +240,8 @@ impl ExportStaging {
                 dst: dst_str,
                 result: "skipped".to_string(),
                 error: None,
+                watermark: None,
+                warning: None,
             });
             return;
         }
@@ -196,6 +259,8 @@ impl ExportStaging {
                     dst: dst_str,
                     result: self.success_result.to_string(),
                     error: None,
+                    watermark: None,
+                    warning: None,
                 });
             }
             Err(e) => {
@@ -208,6 +273,8 @@ impl ExportStaging {
                     dst: dst_str,
                     result: "failed".to_string(),
                     error: Some(e.to_string()),
+                    watermark: None,
+                    warning: None,
                 });
             }
         }
@@ -218,18 +285,32 @@ impl ExportStaging {
     /// 与 `stage` 的差别：不复制，文件已在 `tmp`。调用方必须先确认 `tmp.is_file()`
     /// —— 渲染器返回 Ok 却没写盘是真实存在的情况（磁盘满、输出路径被拒），
     /// 那种情况绝不能算作已导出。
-    fn stage_rendered(&mut self, src: &Path, tmp: &Path, dst: &Path) {
+    ///
+    /// `watermark` 描述水印这一趟的结局：`None` = 这批没要加水印；
+    /// `Some` = 加了（`applied`）或没加上（原因在 `warning`）。
+    fn stage_rendered(
+        &mut self,
+        src: &Path,
+        tmp: &Path,
+        dst: &Path,
+        watermark: Option<WatermarkOutcome>,
+    ) {
         let manifest_idx = self.manifest.len();
         self.staged.push(StagedFile {
             tmp: tmp.to_path_buf(),
             dst: dst.to_path_buf(),
             manifest_idx,
         });
+        let (applied, warning) = watermark
+            .map(|w| (Some(w.applied), w.warning))
+            .unwrap_or((None, None));
         self.manifest.push(ExportManifestItem {
             src: src.to_string_lossy().to_string(),
             dst: dst.to_string_lossy().to_string(),
             result: self.success_result.to_string(),
             error: None,
+            watermark: applied,
+            warning,
         });
     }
 
@@ -245,6 +326,8 @@ impl ExportStaging {
             dst: dst.to_string_lossy().to_string(),
             result: "failed".to_string(),
             error: Some(reason),
+            watermark: None,
+            warning: None,
         });
     }
 
@@ -288,6 +371,10 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// `too_many_arguments` 豁免：这些参数就是清单文件的逐字段契约 —— 把「这批
+/// 导出到底怎么发生的」一次写全。收紧成结构体只会把「哪几项真的会变」藏起来，
+/// 而清单字段的增删本来就是显式的、需要逐篇 review 的事件。
+#[allow(clippy::too_many_arguments)]
 /// 写导出清单（best-effort：清单写失败不影响导出结果，只打日志）。
 fn write_export_manifest(
     target_dir: &Path,
@@ -522,6 +609,45 @@ pub fn export_items(
 ///
 /// 与 `export_items` 共享同一套收尾策略（临时目录 + 原子搬迁 + 取消零污染），
 /// 差异只在「怎么产出临时文件」：复制是 `fs::copy`，成片是调渲染器。
+/// 给一张**已渲染好**的临时成片加水印。
+///
+/// 只在 JPEG 上做：TIFF/DNG 要么是 16-bit 线性格式、要么走无损/封装，
+/// 而我们的实现是「读出来 → 扩画布 → 重编码」，对它们要么根本不支持
+/// （读不出 RGB8）、要么白白多压一次。
+///
+/// 失败**不连坐**：水印是装饰，成片本身已经渲染出来了。没加上就记一条
+/// `warning`，这张照样导出去 —— 为了一条边框丢掉整张渲染结果才是真损失。
+/// 返回 `None` 表示本批没要加水印（调用方据此把清单里那两个键整个省掉）。
+fn apply_watermark(
+    format: &str,
+    plan: Option<&WatermarkPlan>,
+    item: &ExportItem,
+    tmp: &Path,
+    quality: u8,
+) -> Option<WatermarkOutcome> {
+    let plan = plan.filter(|_| format == "jpg")?;
+    // 「配对 JPG 优先、主路径兜底」—— ADR-010 修订后全项目唯一的 EXIF 读法。
+    // 读配对 JPG 0.14 ms/张，读 RAW 11.1 ms/张，差 80 倍。
+    let exif = crate::scanner::read_exif_preferring_jpg(
+        item.jpg_path.as_deref().map(Path::new),
+        item.raw_path.as_deref().map(Path::new),
+    );
+    match crate::watermark::apply_to_file(tmp, &plan.settings, quality, exif.as_ref()) {
+        Ok(true) => Some(WatermarkOutcome::applied()),
+        Ok(false) => Some(WatermarkOutcome::skipped("没有可写的拍摄参数")),
+        Err(e) => {
+            // 后台记全，清单里给人看的那份不带路径以外的噪音。
+            eprintln!("[watermark] {} → {}", tmp.display(), e);
+            Some(WatermarkOutcome::skipped(e))
+        }
+    }
+}
+
+/// `too_many_arguments` 豁免：十个参数依次是输出形态（format/quality/long_edge）、
+/// 策略（overwrite）、取消（cancel）、水印方案，以及两个注入（render/on_progress）。
+/// 收成 `Options` 结构体会让测试里每次调用多包一层，而这里最珍视的正是
+/// 「九条契约测试直接调它」的形态。新增参数继续往后排，别插队。
+#[allow(clippy::too_many_arguments)]
 pub fn render_export_items(
     items: Vec<ExportItem>,
     target_folder: &Path,
@@ -530,6 +656,9 @@ pub fn render_export_items(
     long_edge: Option<u32>,
     overwrite: bool,
     cancel: &AtomicBool,
+    // 水印方案参数**排在后面**：既有调用点只要多加一个 `None`，
+    // 不必重排前八个实参（重排是静默错位，编译器看不出来）。
+    watermark: Option<WatermarkPlan>,
     mut render: impl FnMut(&Path, &Path) -> Result<(), String>,
     mut on_progress: impl FnMut(usize, usize, &str),
 ) -> Result<ExportOutcome, String> {
@@ -603,6 +732,8 @@ pub fn render_export_items(
                 dst: dst.to_string_lossy().to_string(),
                 result: "skipped".to_string(),
                 error: None,
+                watermark: None,
+                warning: None,
             });
             continue;
         }
@@ -612,7 +743,8 @@ pub fn render_export_items(
             Ok(()) => {
                 // 渲染器说成功但没写盘（磁盘满 / 输出被拒）：绝不能算已导出。
                 if tmp.is_file() {
-                    staging.stage_rendered(src, &tmp, &dst);
+                    let note = apply_watermark(format, watermark.as_ref(), item, &tmp, quality);
+                    staging.stage_rendered(src, &tmp, &dst, note);
                 } else {
                     staging.record_failure(src, &dst, "渲染器返回成功但未写出文件".to_string());
                 }
@@ -631,6 +763,12 @@ pub fn render_export_items(
         format,
         quality,
         long_edge,
+        // 水印配置也留档：日后拿到这张清单要能回答「这批图的边框是什么配色、
+        // 多宽」。没有加水印时整个键省掉，清单不撒谎也没有多余噪音。
+        watermark: watermark.as_ref().map(|p| WatermarkManifest {
+            preset: p.settings.preset.as_str(),
+            size: p.settings.size,
+        }),
     };
 
     if cancelled {
@@ -676,9 +814,69 @@ pub fn render_export_items(
     Ok(staging.outcome)
 }
 
+/// 前端传来的水印选项（`batch_render_export_cmd` 的第九个参数）。
+///
+/// 每个键都有缺省，所以老前端一个都不传也不会坏 —— 整键缺席等于
+/// 「没要水印」，部分缺席等于「按缺省补全」。
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatermarkOptions {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_watermark_preset")]
+    pub preset: String,
+    #[serde(default = "default_watermark_size")]
+    pub size: f32,
+}
+
+fn default_watermark_preset() -> String {
+    crate::watermark::PRESET_NAMES[0].to_string()
+}
+
+fn default_watermark_size() -> f32 {
+    14.0
+}
+
+/// 把前端选项翻成可执行的方案；翻不动就**整批拒绝**。
+///
+/// 为什么在这里早失败，而不是循环里逐张降级：拿不到字体会让 200 条同义
+/// warning 各说一遍「找不到字体」，而一次说清「系统没有中文字体，可关闭
+/// 水印后导出」才有用。预设名拼错同理 —— 用户要看见「没生效」，
+/// 而不是悄悄拿到另一种配色。
+///
+/// 格式不匹配（TIFF/DNG）**不算错误**：返回 `None`，UI 侧本就不在非 JPEG
+/// 时展示水印区，这里是给绕过 UI 的直接调用留的兜底。
+fn resolve_watermark(
+    format: &str,
+    requested: Option<&WatermarkOptions>,
+    quality: u8,
+) -> Result<Option<WatermarkPlan>, String> {
+    let Some(req) = requested else {
+        return Ok(None);
+    };
+    if !req.enabled || format != "jpg" {
+        return Ok(None);
+    }
+    let Some(preset) = crate::watermark::WatermarkPreset::parse(&req.preset) else {
+        return Err(format!(
+            "未知的水印配色「{}」，可选：{}",
+            req.preset,
+            crate::watermark::PRESET_NAMES.join(" / ")
+        ));
+    };
+    let size = crate::watermark::validate_size(req.size)?;
+    // 前置字体检查：宁可整批不开工，也不要 200 张图各自悄悄少个水印。
+    // 放在 preset/size 校验之后 —— 配置本身不对时先报配置的错。
+    crate::watermark::require_font()?;
+    Ok(Some(WatermarkPlan {
+        settings: crate::watermark::WatermarkSettings { preset, size },
+        quality,
+    }))
+}
+
 /// 成片渲染导出命令（薄封装：读设置 → 定位引擎 → 阻塞线程跑纯实现）。
 ///
-/// `too_many_arguments` 豁免：这八个参数是**前端 IPC 的契约**（Tauri 按名取键，
+/// `too_many_arguments` 豁免：这九个参数是**前端 IPC 的契约**（Tauri 按名取键，
 /// `src/services/api.ts` 逐个透传）。拆成结构体会同时改前端的调用形状，收益只是
 /// 让 lint 闭嘴；真正的参数收敛发生在下方纯实现 `render_export_items` 里。
 #[tauri::command]
@@ -692,6 +890,8 @@ pub async fn batch_render_export_cmd(
     quality: Option<u8>,
     long_edge: Option<u32>,
     overwrite: Option<bool>,
+    // 边框水印：整个键缺席 = 不加，`enabled=false` = 不加。
+    watermark: Option<WatermarkOptions>,
 ) -> Result<ExportOutcome, String> {
     // 白名单：UI 只暴露这三种。放行任意扩展名会让渲染器收到它不支持的目标格式，
     // 报错发生在渲染中途而不是调用前。
@@ -719,6 +919,7 @@ pub async fn batch_render_export_cmd(
 
     blocking("渲染导出任务异常", move || {
         let mut throttle = ProgressThrottle::new();
+        let plan = resolve_watermark(&format, watermark.as_ref(), quality)?;
         render_export_items(
             items,
             Path::new(&target_folder),
@@ -727,6 +928,7 @@ pub async fn batch_render_export_cmd(
             long_edge,
             overwrite,
             &cancel,
+            plan,
             |src, out| {
                 lumen::export_photo(
                     &exe,
@@ -1126,6 +1328,7 @@ mod tests {
             None,
             false,
             &no_cancel,
+            None,
             fake_render,
             |_, _, _| {},
         )
@@ -1176,6 +1379,7 @@ mod tests {
             None,
             false,
             &no_cancel,
+            None,
             |_src, out| {
                 if out.to_string_lossy().contains("IMG_B") {
                     return Err("渲染器崩了".to_string());
@@ -1221,6 +1425,7 @@ mod tests {
             None,
             false,
             &no_cancel,
+            None,
             |_src, _out| Ok(()), // 谎报成功，什么都不写
             |_, _, _| {},
         )
@@ -1250,6 +1455,7 @@ mod tests {
             None,
             false,
             &cancel,
+            None,
             |_src, out| {
                 fs::write(out, b"RENDERED").map_err(|e| e.to_string())?;
                 cancel_ref.store(true, Ordering::SeqCst);
@@ -1291,6 +1497,7 @@ mod tests {
             None,
             false,
             &no_cancel,
+            None,
             |_src, out| {
                 called = true;
                 fs::write(out, b"RENDERED").map_err(|e| e.to_string())
@@ -1328,6 +1535,7 @@ mod tests {
             None,
             true,
             &no_cancel,
+            None,
             |_src, out| {
                 called = true;
                 fs::write(out, b"RENDERED-NEW").map_err(|e| e.to_string())
@@ -1365,6 +1573,7 @@ mod tests {
             None,
             false,
             &no_cancel,
+            None,
             |_s, _o| {
                 called = true;
                 Ok(())
@@ -1395,6 +1604,7 @@ mod tests {
             None,
             false,
             &no_cancel,
+            None,
             fake_render,
             |_, _, _| {},
         )
@@ -1413,6 +1623,7 @@ mod tests {
             None,
             false,
             &no_cancel,
+            None,
             fake_render,
             |_, _, _| {},
         )
@@ -1435,6 +1646,7 @@ mod tests {
             None,
             false,
             &no_cancel,
+            None,
             fake_render,
             |_, _, _| {},
         )
@@ -1463,6 +1675,7 @@ mod tests {
             None,
             false,
             &no_cancel,
+            None,
             |_s, out| {
                 seen_outputs.push(out.to_path_buf());
                 target_existed_during_render = final_dst.exists();
@@ -1492,5 +1705,237 @@ mod tests {
 
         let _ = fs::remove_dir_all(&src);
         let _ = fs::remove_dir_all(&dst);
+    }
+    // ---- FR-12 边框水印的接线 ----
+
+    /// 一个「水印开着」的请求。
+    fn wm_on(preset: &str, size: f32) -> WatermarkOptions {
+        WatermarkOptions {
+            enabled: true,
+            preset: preset.to_string(),
+            size,
+        }
+    }
+
+    #[test]
+    fn no_request_means_no_plan() {
+        assert_eq!(resolve_watermark("jpg", None, 92).unwrap(), None);
+        assert_eq!(
+            resolve_watermark("jpg", Some(&wm_on("gallery", 14.0).clone_disabled()), 92).unwrap(),
+            None
+        );
+    }
+
+    impl WatermarkOptions {
+        /// enabled=false 的副本 —— 老前端 / 用户关掉开关时就是这个形状。
+        fn clone_disabled(&self) -> Self {
+            Self {
+                enabled: false,
+                ..self.clone()
+            }
+        }
+    }
+
+    #[test]
+    fn non_jpeg_gets_no_plan_without_an_error() {
+        // TIFF/DNG 不支持水印。这不是错误 —— UI 本就不在非 JPEG 时展示水印区，
+        // 这里只是给绕过 UI 的直接调用兜底：不加，且不拦着导出。
+        for fmt in ["tif", "dng", "png"] {
+            assert_eq!(
+                resolve_watermark(fmt, Some(&wm_on("gallery", 14.0)), 92).unwrap(),
+                None,
+                "{} 不该要水印",
+                fmt
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_preset_is_rejected_before_any_file_is_touched() {
+        // 拼错必须看得见，而不是悄悄换成画廊白 —— 用户会以为水印生效了。
+        let err = resolve_watermark("jpg", Some(&wm_on("GALLERY", 14.0)), 92)
+            .expect_err("未知预设应被拒绝");
+        assert!(err.contains("GALLERY"), "错误里要说出用户写的名字: {}", err);
+        assert!(err.contains("gallery"), "错误里要列出可选项: {}", err);
+    }
+
+    #[test]
+    fn watermark_size_is_clamped_and_carries_the_export_quality() {
+        // 质量必须跟着导出走：水印要重编码一次，偷偷提质量会让用户的质量选择落空。
+        let plan = resolve_watermark("jpg", Some(&wm_on("sage", 100.0)), 85)
+            .unwrap()
+            .expect("应产出方案");
+        assert_eq!(plan.settings.size, 35.0);
+        assert_eq!(
+            plan.settings.preset,
+            crate::watermark::WatermarkPreset::Sage
+        );
+        assert_eq!(plan.quality, 85);
+    }
+
+    #[test]
+    fn render_records_the_watermark_warning_and_still_exports() {
+        let (_src, dst, items) = render_fixture("wm_warn", &["IMG_A"]);
+        let plan = WatermarkPlan {
+            settings: crate::watermark::WatermarkSettings {
+                preset: crate::watermark::WatermarkPreset::Gallery,
+                size: 14.0,
+            },
+            quality: 92,
+        };
+        let outcome = render_export_items(
+            items,
+            &dst,
+            "jpg",
+            92,
+            None,
+            false,
+            &AtomicBool::new(false),
+            Some(plan),
+            fake_render,
+            |_, _, _| {},
+        )
+        .expect("水印出问题不该让整批失败");
+
+        // 成片照样导出去 —— 边框是装饰，不能为它丢掉渲染结果。
+        assert_eq!(outcome.exported, 1);
+        assert!(dst.join("IMG_A.jpg").is_file());
+        assert!(outcome.failed.is_empty());
+
+        let json = read_manifest(&dst);
+        assert_eq!(json["items"][0]["result"], "rendered");
+        assert_eq!(
+            json["items"][0]["watermark"], false,
+            "缺 EXIF 的水印结果要如实记 false，而不是省掉这个键"
+        );
+        assert!(
+            json["items"][0]["warning"]
+                .as_str()
+                .is_some_and(|w| !w.is_empty()),
+            "没加上要说清原因: {:?}",
+            json["items"][0]
+        );
+        // 批次级的配置也留档，日后要能回答「这批边框是什么配色、多宽」。
+        assert_eq!(json["render"]["watermark"]["preset"], "gallery");
+        assert_eq!(json["render"]["watermark"]["size"], 14.0);
+    }
+
+    #[test]
+    fn render_gives_a_real_jpeg_a_measured_border() {
+        let (src, dst, mut items) = render_fixture("wm_ok", &["IMG_A"]);
+        // 配对 JPG 里真有 ISO —— 这样文案非空，水印才会真画。
+        let jpg = src.join("paired.jpg");
+        fs::write(&jpg, crate::watermark::testdata::jpeg_with_iso(800)).unwrap();
+        items[0].jpg_path = Some(jpg.to_string_lossy().to_string());
+
+        let plan = WatermarkPlan {
+            settings: crate::watermark::WatermarkSettings {
+                preset: crate::watermark::WatermarkPreset::Noir,
+                size: 20.0,
+            },
+            quality: 92,
+        };
+        // 假渲染器写一张真 JPEG：802×1200，给水印一个能加工的输入。
+        let render_real = |_src: &Path, out: &Path| -> Result<(), String> {
+            let img = image::RgbImage::from_pixel(802, 1200, image::Rgb([70, 70, 70]));
+            img.save(out).map_err(|e| e.to_string())
+        };
+        let outcome = render_export_items(
+            items,
+            &dst,
+            "jpg",
+            92,
+            None,
+            false,
+            &AtomicBool::new(false),
+            Some(plan),
+            render_real,
+            |_, _, _| {},
+        )
+        .expect("带 EXIF 的水印不该失败");
+
+        assert_eq!(outcome.exported, 1, "{:?}", outcome.failed);
+        let after = image::open(dst.join("IMG_A.jpg")).unwrap().into_rgb8();
+        // round(802 × 20%) = 160 像素底边（取短边，与 LUMEN watermark.dimensions 同口径）。
+        assert_eq!(after.dimensions(), (802, 1360));
+        // 底边真的刷上了 noir 的底色 —— 只验尺寸的话，「记了 true 但什么都没画」
+        // 这类接线错误会漏过去。
+        let band = after.get_pixel(0, 1280);
+        let want = image::Rgb([20u8, 23, 23]);
+        assert!(
+            want.0
+                .iter()
+                .zip(band.0.iter())
+                .all(|(w, g)| (*w as i16 - *g as i16).abs() <= 6),
+            "底边应是 noir 底色: {:?}",
+            band
+        );
+
+        let json = read_manifest(&dst);
+        assert_eq!(json["items"][0]["watermark"], true);
+        assert!(
+            json["items"][0]["warning"].is_null(),
+            "加成功了就不该有 warning: {:?}",
+            json["items"][0]
+        );
+    }
+
+    #[test]
+    fn render_skips_watermark_for_other_formats_even_with_a_plan() {
+        // resolve_watermark 是第一道防线，这里是 apply_watermark 里的第二道：
+        // 万一上层漏了一个方案进来，PNG 也不该被画上 JPEG 条带、更不该在清单里
+        // 吹自己画过。没有这条用例，删掉那个 format 过滤也照样全绿。
+        let (_src, dst, items) = render_fixture("wm_png", &["IMG_A"]);
+        let plan = WatermarkPlan {
+            settings: crate::watermark::WatermarkSettings {
+                preset: crate::watermark::WatermarkPreset::Gallery,
+                size: 14.0,
+            },
+            quality: 92,
+        };
+        let outcome = render_export_items(
+            items,
+            &dst,
+            "png",
+            92,
+            None,
+            false,
+            &AtomicBool::new(false),
+            Some(plan),
+            fake_render,
+            |_, _, _| {},
+        )
+        .expect("非 JPEG 带方案也不该失败");
+        assert_eq!(outcome.exported, 1);
+
+        let json = read_manifest(&dst);
+        // 没画就没画，两个键都不该出现。
+        assert!(json["items"][0]["watermark"].is_null());
+        assert!(json["items"][0]["warning"].is_null());
+    }
+
+    #[test]
+    fn render_omits_the_watermark_keys_when_not_requested() {
+        let (_src, dst, items) = render_fixture("wm_off", &["IMG_A"]);
+        let outcome = render_export_items(
+            items,
+            &dst,
+            "jpg",
+            92,
+            None,
+            false,
+            &AtomicBool::new(false),
+            None,
+            fake_render,
+            |_, _, _| {},
+        )
+        .expect("没要水印也不该失败");
+        assert_eq!(outcome.exported, 1);
+
+        let json = read_manifest(&dst);
+        // 没要水印时这两个键整个省掉 —— 清单不为不存在的事情编字段。
+        assert!(json["items"][0]["watermark"].is_null());
+        assert!(json["items"][0]["warning"].is_null());
+        assert!(json["render"]["watermark"].is_null());
     }
 }

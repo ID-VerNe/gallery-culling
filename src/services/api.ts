@@ -22,6 +22,7 @@ import {
   ToneAdjustments,
   ToneState,
   ToneWriteReport,
+  WatermarkOptions,
   XmpConflictChoice,
   XmpRefreshReport,
   XmpResolveReport,
@@ -196,6 +197,10 @@ export const api = {
    * 但产物是「一张图一个文件」，所以没有 `includeRaw/includeJpg`，改由
    * 格式 / 长边 / 质量描述目标形态。返回结构刻意与 `batchExport` 保持一致，
    * 这样前端的结果呈现可以完全共用。
+   *
+   * `watermark` 是第九个参数：成片底边水印（仅 JPEG 生效）。传 `null` 或
+   * `enabled: false` 都**不传这个键** —— 后端 `Option` 缺省 `None`，清单里
+   * 也不会出现 watermark 字段。两者语义等价，但「键不存在」正是清单要记录的状态。
    */
   batchRenderExport: async (
     items: ExportItem[],
@@ -204,6 +209,7 @@ export const api = {
     longEdge: number,
     quality: number,
     overwrite = false,
+    watermark?: WatermarkOptions | null,
   ): Promise<ExportOutcome> => {
     return await invoke<ExportOutcome>('batch_render_export_cmd', {
       items,
@@ -214,6 +220,7 @@ export const api = {
       longEdge: longEdge === 0 ? null : longEdge,
       quality,
       overwrite,
+      ...(watermark != null && watermark.enabled ? { watermark } : {}),
     });
   },
 

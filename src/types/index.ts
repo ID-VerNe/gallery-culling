@@ -214,6 +214,27 @@ export type ExportMode = 'copy' | 'render';
 /** 成片输出格式（对应 LUMEN `photo.export` 支持的扩展名子集）。 */
 export type RenderFormat = 'jpg' | 'tif' | 'dng';
 
+/**
+ * 水印配色预设名。
+ *
+ * 与后端 `watermark::PRESET_NAMES` 逐字对齐 —— 后端对未知名整批拒绝
+ * （「未知的水印配色」），前端写死这四个名就不会撞上那条错误路径。
+ */
+export type WatermarkPresetName = 'gallery' | 'noir' | 'travel' | 'sage';
+
+/**
+ * `batch_render_export_cmd` 的水印参数（第九个，与格式/长边/质量并列）。
+ *
+ * 后端只对 JPEG 生效：宿主水印要在 JPEG 上重编码一次贴字，TIFF / DNG 是
+ * 渲染器直出，没有这一步。选中它们时前端不展示水印区，但传了也会被安全忽略。
+ */
+export interface WatermarkOptions {
+  enabled: boolean;
+  preset: WatermarkPresetName;
+  /** 底边高度占短边的百分比，后端夹到 8–35。 */
+  size: number;
+}
+
 /** 导出中单个失败项（batch_export_cmd 的错误累计，不再静默吞掉 Err） */
 export interface ExportFailure {
   path: string;

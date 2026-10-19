@@ -32,6 +32,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 fast_image_resize = "6.1"
+ab_glyph = "0.2"
 kamadak-exif = "0.6"
 rusqlite = { version = "0.33", features = ["bundled"] }
 trash = "5.2"

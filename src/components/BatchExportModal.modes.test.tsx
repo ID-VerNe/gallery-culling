@@ -378,3 +378,77 @@ describe('成片质量提示（JPG 源二次压缩）', () => {
     expect(screen.getByText(/仅含 JPG/)).toBeInTheDocument();
   });
 });
+
+describe('成片水印（FR-12）', () => {
+  /** 展开折叠区、勾上水印。返回供后续改配色 / 高度用。 */
+  const enableWatermark = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(screen.getByText('底边水印'));
+    await user.click(screen.getByLabelText('给成片加底边水印'));
+  };
+
+  it('默认关闭：IPC 里整个 watermark 键都不出现', async () => {
+    mockInvokeCommand('batch_render_export_cmd', ok);
+    const { user } = setup();
+    await switchToRender(user);
+    await fillTarget(user);
+    await user.click(screen.getByRole('button', { name: '开始生成成片' }));
+
+    await waitFor(() => expect(invokeCount('batch_render_export_cmd')).toBe(1));
+    const args = lastInvokeArgs('batch_render_export_cmd') as
+      | Record<string, unknown>
+      | undefined;
+    expect(args).toBeDefined();
+    // 键不存在 ≠ enabled:false —— 后端清单只给「要求过水印」的批次记字段
+    expect(Object.keys(args ?? {})).not.toContain('watermark');
+  });
+
+  it('勾上后带上配色与高度，滑杆回传数字而非字符串', async () => {
+    mockInvokeCommand('batch_render_export_cmd', ok);
+    const { user } = setup();
+    await switchToRender(user);
+    await enableWatermark(user);
+    await user.selectOptions(screen.getByLabelText('配色'), 'noir');
+    fireEvent.change(screen.getByLabelText(/底边高度/), { target: { value: '28' } });
+    await fillTarget(user);
+    await user.click(screen.getByRole('button', { name: '开始生成成片' }));
+
+    await waitFor(() => expect(invokeCount('batch_render_export_cmd')).toBe(1));
+    expect(lastInvokeArgs('batch_render_export_cmd')).toMatchObject({
+      watermark: { enabled: true, preset: 'noir', size: 28 },
+    });
+  });
+
+  it('水印区只在 JPEG 输出时出现；切走再切回，勾选状态保留', async () => {
+    const { user } = setup();
+    await switchToRender(user);
+    await enableWatermark(user);
+    expect(screen.getByLabelText('给成片加底边水印')).toBeChecked();
+
+    await user.click(screen.getByLabelText('TIFF'));
+    // TIFF 是渲染器直出，没有宿主贴字这一步 —— 整区消失
+    expect(screen.queryByLabelText('给成片加底边水印')).toBeNull();
+
+    await user.click(screen.getByLabelText('JPEG'));
+    // 表单状态保留，切回来还是用户调好的样子
+    expect(screen.getByLabelText('给成片加底边水印')).toBeChecked();
+    expect(screen.getByLabelText('配色')).toHaveValue('gallery');
+  });
+
+  it('运行中：勾选框与两个控件全部禁用', async () => {
+    setInvokeHandler((cmd) =>
+      cmd === 'batch_render_export_cmd' ? new Promise(() => {}) : null,
+    );
+    const { user } = setup();
+    await switchToRender(user);
+    await enableWatermark(user);
+    await fillTarget(user);
+    await user.click(screen.getByRole('button', { name: '开始生成成片' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '成片生成中…' })).toBeDisabled(),
+    );
+    expect(screen.getByLabelText('给成片加底边水印')).toBeDisabled();
+    expect(screen.getByLabelText('配色')).toBeDisabled();
+    expect(screen.getByLabelText(/底边高度/)).toBeDisabled();
+  });
+});

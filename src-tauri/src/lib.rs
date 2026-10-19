@@ -11,6 +11,7 @@ mod scanner;
 mod syncqueue;
 mod taskgate;
 mod thumbnail;
+mod watermark;
 pub mod xmp;
 mod xmprefresh;
 

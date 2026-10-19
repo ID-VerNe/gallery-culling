@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 mod metadata;
 pub use metadata::read_exif_metadata;
+/// 「配对 JPG 优先、主路径兜底」的 EXIF 读法（ADR-010 修订后全项目唯一顺序）。
+pub use metadata::read_exif_preferring_jpg;
 
 #[cfg(test)]
 mod real_smoke;

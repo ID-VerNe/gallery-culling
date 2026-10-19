@@ -9,12 +9,13 @@ import { useExportRun } from '../hooks/useExportRun';
 import { useActivity, useTaskMutex } from '../hooks/useTaskMutex';
 import { CopyOptions } from './export/CopyOptions';
 import { RenderOptions } from './export/RenderOptions';
+import { WatermarkOptions } from './export/WatermarkOptions';
 import { OverwriteToggle } from './export/OverwriteToggle';
 import { ExportModeSelector } from './export/ExportModeSelector';
 import { LumenGateNotice, type LumenGateStatus } from './export/LumenGateNotice';
 import { ExportResultPanel } from './export/ExportResultPanel';
 import { EXPORT_FILTERS } from './export/exportFilters';
-import { EXPORT_MODES } from './export/exportConfig';
+import { EXPORT_MODES, formatUsesWatermark } from './export/exportConfig';
 import type { QueryParseResult } from '../utils/queryMatch';
 
 interface BatchExportModalProps {
@@ -121,6 +122,16 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
                 form.renderLongEdge,
                 form.quality,
                 form.overwrite,
+                // 没勾就不传对象，后端清单里也不会出现 watermark 字段。
+                // 勾了但格式不是 JPEG 也照样传：后端会安全忽略，格式规则
+                // 只由后端说一遍，前端不复制第二份。
+                form.watermarkEnabled
+                  ? {
+                      enabled: true,
+                      preset: form.watermarkPreset,
+                      size: form.watermarkSize,
+                    }
+                  : null,
               ),
       targetFolder: form.targetFolder,
     });
@@ -313,6 +324,22 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
             onCommitQuality={form.commitQuality}
             disabled={isExporting}
           />
+          {/*
+            水印只对 JPEG 有意义（宿主要在导出的 JPEG 上重编码贴字）。
+            切到 TIFF / DNG 时整区消失，与水印一起关掉的选择不会丢失 ——
+            表单状态保留，切回来还是用户调好的样子。
+          */}
+          {formatUsesWatermark(form.renderFormat) && (
+            <WatermarkOptions
+              enabled={form.watermarkEnabled}
+              preset={form.watermarkPreset}
+              size={form.watermarkSize}
+              onChangeEnabled={form.setWatermarkEnabled}
+              onChangePreset={form.setWatermarkPreset}
+              onChangeSize={form.setWatermarkSize}
+              disabled={isExporting}
+            />
+          )}
           {/* 引擎状态只在成片模式有意义；复制路径完全不依赖它 */}
           <LumenGateNotice
             status={lumenStatus}

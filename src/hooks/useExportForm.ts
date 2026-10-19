@@ -11,7 +11,13 @@
  */
 import { useCallback, useMemo, useState } from 'react';
 import { api } from '../services/api';
-import type { ExportMode, FilterMode, PhotoGroupInfo, RenderFormat } from '../types';
+import type {
+  ExportMode,
+  FilterMode,
+  PhotoGroupInfo,
+  RenderFormat,
+  WatermarkPresetName,
+} from '../types';
 import { buildValidationMessage } from '../components/export/exportMessages';
 import {
   DEFAULT_EXPORT_FILTER,
@@ -24,6 +30,7 @@ import { matchesFilter } from '../utils/filterMatch';
 import { matchesQuery, type QueryParseResult } from '../utils/queryMatch';
 import {
   DEFAULT_RENDER_QUALITY,
+  DEFAULT_WATERMARK_SIZE,
   RENDER_QUALITY_MAX,
   RENDER_QUALITY_MIN,
   clampQuality,
@@ -106,6 +113,18 @@ export interface ExportForm {
    */
   qualityNotice: string | null;
 
+  // —— 成片水印（仅 render 模式 + JPEG 输出生效）——
+  /**
+   * 是否给成片加底边水印。默认关：水印多一次 JPEG 重编码，是用户的主动选择。
+   */
+  watermarkEnabled: boolean;
+  setWatermarkEnabled: (v: boolean) => void;
+  watermarkPreset: WatermarkPresetName;
+  setWatermarkPreset: (v: WatermarkPresetName) => void;
+  /** 底边高度占短边的百分比。UI 滑杆限定 8–35，后端再夹一次防脚本直调。 */
+  watermarkSize: number;
+  setWatermarkSize: (v: number) => void;
+
   // —— 派生 ——
   candidates: PhotoGroupInfo[];
   /**
@@ -177,6 +196,10 @@ export function useExportForm({
   const [renderLongEdge, setRenderLongEdgeRaw] = useState(0);
   const [qualityText, setQualityTextRaw] = useState(String(DEFAULT_RENDER_QUALITY));
   const [qualityNotice, setQualityNotice] = useState<string | null>(null);
+  const [watermarkEnabled, setWatermarkEnabledRaw] = useState(false);
+  const [watermarkPreset, setWatermarkPresetRaw] =
+    useState<WatermarkPresetName>('gallery');
+  const [watermarkSize, setWatermarkSizeRaw] = useState(DEFAULT_WATERMARK_SIZE);
   const [resetSignal, setResetSignal] = useState(0);
 
   const bump = useCallback(() => setResetSignal((n) => n + 1), []);
@@ -197,6 +220,9 @@ export function useExportForm({
     }, []),
     bump,
   );
+  const setWatermarkEnabled = useBumpingSetter(setWatermarkEnabledRaw, bump);
+  const setWatermarkPreset = useBumpingSetter(setWatermarkPresetRaw, bump);
+  const setWatermarkSize = useBumpingSetter(setWatermarkSizeRaw, bump);
 
   /**
    * `current_query` 档的求值上下文。
@@ -339,6 +365,12 @@ export function useExportForm({
     quality,
     commitQuality,
     qualityNotice,
+    watermarkEnabled,
+    setWatermarkEnabled,
+    watermarkPreset,
+    setWatermarkPreset,
+    watermarkSize,
+    setWatermarkSize,
     candidates,
     expectedFileCount,
     targetIsSourceDir,

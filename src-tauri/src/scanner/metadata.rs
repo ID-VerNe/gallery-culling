@@ -9,6 +9,24 @@ use std::path::Path;
 
 use crate::models::ExifData;
 
+/// 按「**配对 JPG 优先、主路径兜底**」读一组照片的 EXIF。
+///
+/// 这个顺序是 ADR-010 修订后全项目唯一的读法：JPG 是 1.5MB 而 RAW 是 25MB，
+/// 实测读 EXIF 差 80 倍（0.14 ms/张 vs 11.1 ms/张）。扫描路径（`scanner.rs`）
+/// 与选片集（`album::resolve_documents`）早就统一到这一顺序，水印没有理由
+/// 另立一套。
+///
+/// 两条路径都读不出来才返回 `None` —— **不编空壳**。调用方要能区分
+/// 「没参数」与「文件读不出」。
+pub fn read_exif_preferring_jpg(jpg: Option<&Path>, raw: Option<&Path>) -> Option<ExifData> {
+    if let Some(j) = jpg {
+        if let Some(data) = read_exif_metadata(j) {
+            return Some(data);
+        }
+    }
+    raw.and_then(read_exif_metadata)
+}
+
 /// Read EXIF metadata from an image file
 pub fn read_exif_metadata(file_path: &Path) -> Option<ExifData> {
     let file = File::open(file_path).ok()?;

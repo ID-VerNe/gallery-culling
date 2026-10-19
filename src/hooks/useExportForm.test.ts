@@ -274,6 +274,48 @@ describe('成片质量', () => {
   });
 });
 
+describe('成片水印', () => {
+  it('默认关闭：水印要多一次 JPEG 重编码，必须是主动选择', () => {
+    const { result } = setup();
+    expect(result.current.watermarkEnabled).toBe(false);
+    expect(result.current.watermarkPreset).toBe('gallery');
+    // 与后端 DEFAULT 一致（后端缺省 14.0）
+    expect(result.current.watermarkSize).toBe(14);
+  });
+
+  it('三个 setter 写入值并自增 resetSignal（清掉上次结果条）', () => {
+    const { result } = setup();
+    let signal = result.current.resetSignal;
+
+    act(() => result.current.setWatermarkEnabled(true));
+    expect(result.current.watermarkEnabled).toBe(true);
+    expect(result.current.resetSignal).toBeGreaterThan(signal);
+    signal = result.current.resetSignal;
+
+    act(() => result.current.setWatermarkPreset('sage'));
+    expect(result.current.watermarkPreset).toBe('sage');
+    expect(result.current.resetSignal).toBeGreaterThan(signal);
+    signal = result.current.resetSignal;
+
+    act(() => result.current.setWatermarkSize(28));
+    expect(result.current.watermarkSize).toBe(28);
+    expect(result.current.resetSignal).toBeGreaterThan(signal);
+  });
+
+  it('勾上水印不改变可执行性（它不是阻断条件）', () => {
+    const { result } = setup();
+    act(() => {
+      result.current.setTargetFolder('D:/out');
+      result.current.setMode('render');
+    });
+    expect(result.current.canRun).toBe(true);
+
+    act(() => result.current.setWatermarkEnabled(true));
+    expect(result.current.canRun).toBe(true);
+    expect(result.current.validation).toBeNull();
+  });
+});
+
 describe('expectedFileCount（组 ≠ 文件）', () => {
   it('复制模式按勾选类型逐组数文件，与结果条口径一致', () => {
     const { result } = setup();
