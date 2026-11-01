@@ -11,8 +11,8 @@
 1. **先发 issue（发现即提，不等批准）**：正文四要素齐全——现象（行为类必须带一条可直接粘贴的复现命令）/ 证据链（`文件:行号`）/ 影响面（P0–P2）/ 修复候选。给不出复现命令就贴 `needs-repro`。issue 是执行与验收的唯一依据。
 2. **写 plan 追评到 issue 下面**：探索结论（带证据）+ 方案 + **明确不做** + 验证方式，并含一行「用 issue 的复现命令复现：成功 / 失败（贴原始输出）」。复现失败说明描述与现状不符，退回补充，不进实施；定稿后只追加不改口。模板见 [`doc/ISSUE_GUIDE.md`](doc/ISSUE_GUIDE.md)「写 plan：追评到 issue 下面」。
 3. **开 worktree 改代码**：`git worktree add ../gallery-flask-<issue> -b type/<issue>-<slug> master`，不在主工作区切分支；分支 / PR 标题 / commit **三处都带 issue 号**。worktree 里没有 `node_modules` 与 `src-tauri/binaries`，见 PR_GUIDE「分支」一节。
-4. **开 PR**：正文分段齐全（问题 / 改动 / 测试 / 基线验证 / 门禁改动 / 影响面 / 验收对照）；`Closes` 只给纯文档与纯重构，**行为类用 `Refs`**。**门禁链改动有机器闸门**：diff 触及 `scripts/check-*.mjs` / `gates.json` / `run-gates.mjs` / `ci.yml` / `.githooks/` 时，`## 门禁改动` 段要逐个交代并在**段末**贴独立复核结论（`scripts/check-gate-change-review.mjs` 判定，`<PENDING>` 或结论排在证据前都红）。推之前用 `node scripts/check-pr-parity.mjs --shard static` 证明本地绿在干净检出里也成立。CI 全绿 + 无冲突才合并（merge commit，不 squash、不 rebase）。
-5. **合并后对账与回签**：修复者逐项核对「自述 vs 实际」（`git status`、文件存在性、门禁原始输出），给行为类 issue 贴 `needs-live-verify`；由发现者或**全新上下文**的会话按 PR_GUIDE 的模板回签，**回签通过才关 issue**。修复者不能给自己回签。
+4. **开 PR**：正文分段齐全（问题 / 改动 / 测试 / 基线验证 / 门禁改动 / 影响面 / 验收对照）；`Closes` 只给纯文档与纯重构，**行为类用 `Refs`**。**门禁链改动有机器闸门**：diff 触及 `scripts/check-*.mjs` / `gates.json` / `run-gates.mjs` / `ci.yml` / `.githooks/` 时，`## 门禁改动` 段要逐个交代并在**段末**贴独立复核结论（`scripts/check-gate-change-review.mjs` 判定，`<PENDING>` 或结论排在证据前都红）。推之前用 `node scripts/check-pr-parity.mjs --shard static` 证明本地绿在干净检出里也成立。**合并审批权归全新上下文的 subagent**（见 [`doc/PR_GUIDE.md`](doc/PR_GUIDE.md)「合并评审」），提交者不用等维护者人工点头；评审 `APPROVE` 后直接合并（merge commit，不 squash、不 rebase）。
+5. **合并后对账与回签**：修复者逐项核对「自述 vs 实际」（`git status`、文件存在性、门禁原始输出），给行为类 issue 贴 `needs-live-verify`；由发现者或**全新上下文**的会话按 PR_GUIDE 的模板回签，**回签通过才关 issue**。修复者不能给自己回签，也不能给自己做合并评审。
 
 ### 0.1 门禁清单只有一个事实来源
 

@@ -5,7 +5,7 @@
 
 ## 定位：PR 是最小可审查单元
 
-- 一 issue 一 PR：PR 是 issue 的实施载体。**合并只代表改动进了 `master`，不代表症状消失**——行为类 PR 用 `Refs #NN`，issue 由发现者回签后关闭。
+- 一 issue 一 PR：PR 是 issue 的实施载体。**合并只代表改动进了 `master`，不代表症状消失**——行为类 PR 用 `Refs #NN`，issue 由发现者回签后关闭。合并前的审批由全新上下文的 subagent 做（见「合并评审」），不需要维护者逐 PR 人工过目。
 - 拆分原则：每个 PR 都能独立通过门禁、独立合并、独立回滚；拆不开说明边界没想清，回 issue 补 plan。
 - 大 issue 先拆再派：**分节用 `P+字母`，优先级用 `P+数字`**。
 
@@ -137,13 +137,33 @@ node scripts/check-pr-parity.mjs                  # 全量三片
 4. 门禁链改动先自查：`node scripts/check-gate-change-review.mjs --base origin/master --body-file pr.md`——它会直接告出漏列哪个文件。
 5. 做过 CI 等价复跑：`node scripts/check-pr-parity.mjs --shard static`（pre-push 也会自动跑），PR 的「测试」段贴它的 PASS 行。
 
-## 合并条件（三条全满足才合）
+## 合并条件（全部满足才合）
 
 1. **CI 全绿**：`checks` 汇总 job 通过（三个分片任一红即失败）。
 2. **无冲突**：GitHub 显示 `MERGEABLE` / `CLEAN`；有冲突不强行合——在 worktree 里 `git merge origin/master` 解决，重跑门禁后再推。
 3. 适用时有 `## 基线验证` 段。
+4. **合并评审结论为 `APPROVE`**：由全新上下文的 subagent 出具，见下节。提交者不需要（也不应该）等维护者人工点头。
 
 合并方式跟随仓库现状：**merge commit**（`gh pr merge <n> --merge`），不 squash、不 rebase。远端 commit sha 与本地对不上是正常的（GitHub 可能重签），核对内容以 **tree sha** 为准。
+
+### 合并评审
+
+提交者写完全部文档、CI 转绿之后，**开辟一个全新上下文的 subagent 做合并评审**，由它决定合不合；维护者不再逐 PR 人工确认。
+
+**派发要求**（提交者负责把这些写进评审 task）：
+
+- 评审者必须是**全新上下文**，且不是本 PR 的作者会话；只给它 PR 编号、仓库路径和本节，**不投喂提交者的结论或辩解**。
+- 评审者的结论是唯一合并依据：`APPROVE` → 提交者直接合并；`REQUEST_CHANGES` → 按意见改，改完重新派一轮全新上下文的评审。
+
+**评审要做的**（默认怀疑，只信自己跑出来的东西）：
+
+1. 通读 diff，核对 PR 正文的每一句「已经做了什么」是否真的落在磁盘上——「完成声明以磁盘为准」。
+2. 在 PR 分支的 worktree 里**自己复跑** `npm run gates`，以及适用时的 `node scripts/check-pr-parity.mjs --shard static`，贴原始输出，不采信 PR 里转述的绿。
+3. 行为类 PR：核对验收是否真的覆盖 issue 的复现路径；改了门禁链的，按「门禁改动与独立复核」清单逐条查（是否弱化断言、放宽阈值、基线是否真红）。
+4. 核对分段齐全、`Closes` / `Refs` 用对、分支 / 标题 / commit 三处都带 issue 号。
+5. 结论写进 PR 评论：`APPROVE` 或 `REQUEST_CHANGES`，后附证据（门禁原始输出、文件行号）。**没有证据的结论无效。**
+
+评审通过后由提交者合并，完成「合并后：对账与回签」的自查部分，再另派一个全新上下文的会话做回签。
 
 > **本机 `git push` 不通时**：`https://github.com` 走代理会返回 `CONNECT tunnel failed 502`，但 **SSH 与 `api.github.com` 都通**。用
 > `git push git@github.com:ID-VerNe/gallery-culling.git <branch>`，`gh` 命令照常可用。
