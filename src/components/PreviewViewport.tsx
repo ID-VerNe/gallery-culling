@@ -198,7 +198,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
       {image.loading && !image.lumenActive && (
         <div
           role="status"
-          className="absolute top-4 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3.5 py-1.5 rounded-md text-xs font-semibold text-white/80 border border-default pointer-events-none"
+          className="absolute top-4 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3.5 py-1.5 rounded-md text-xs font-semibold text-white/80 border border-border-default pointer-events-none"
         >
           正在渲染 RAW…
         </div>
@@ -475,7 +475,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
             <button
               onClick={onOpenLuminar}
               disabled={isLuminarRunning}
-              className={`${BAR_BUTTON} bg-white/10 hover:bg-white/20 text-white border border-default disabled:opacity-50 disabled:cursor-not-allowed`}
+              className={`${BAR_BUTTON} bg-white/10 hover:bg-white/20 text-white border border-border-default disabled:opacity-50 disabled:cursor-not-allowed`}
               title="Luminar AI 修图"
               aria-label="在 Luminar AI 中修图"
             >

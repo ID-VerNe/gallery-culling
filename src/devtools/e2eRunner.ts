@@ -10,6 +10,7 @@
  * Vite 的 `/__e2e_log` 中间件落盘，外部脚本读 `e2e/.tmp/e2e-app.log`。
  *
  * 场景（由 `VITE_E2E_SCENARIO` 选择）：
+ *   - `load-photos`：只扫描并加载照片，不做任何操作。给真机目视复核（截图）用
  *   - `lumen-preset`：LUMEN RAW 预设 + 自动调色（用 `VITE_E2E_JPG`）
  *   - `render-export`：调色成片导出（`VITE_E2E_JPG` + `VITE_E2E_RAW` + `VITE_E2E_OUT`）
  *   - `detail-1to1`：RAW-only 1:1 细节（`VITE_E2E_RAW` 必须是**真实 ARW**，
@@ -445,6 +446,18 @@ async function scenarioRenderExport(
   raw(`[${el()}] 场景结束`);
 }
 
+/**
+ * 场景：只加载照片，不做任何操作。
+ *
+ * 用途：给真机目视复核（截图）准备一个「已扫出缩略图」的稳定起点。
+ * 不点选、不改评级、不写盘，所以可以反复跑而不会污染 fixture。
+ */
+async function scenarioLoadPhotos(jpgFolder: string, rawFolder: string, el: () => string) {
+  if (!(await scanFolders(jpgFolder, rawFolder, 1, el))) return;
+  const cells = document.querySelectorAll('[role="option"]').length;
+  raw(`[${el()}] >>> 读数 loaded=${cells}`);
+}
+
 /** 场景：LUMEN RAW 预设（问题一）+ 自动调色（问题二）。 */
 async function scenarioLumenPreset(jpgFolder: string, el: () => string) {
   // ── 前置：开启 LUMEN 引擎 ─────────────────────────────
@@ -819,7 +832,9 @@ export async function runE2E(
   }
 
   try {
-    if (scenario === 'lumen-preset') {
+    if (scenario === 'load-photos') {
+      await scenarioLoadPhotos(jpgFolder, opts.raw || '', el);
+    } else if (scenario === 'lumen-preset') {
       await scenarioLumenPreset(jpgFolder, el);
     } else if (scenario === 'render-export') {
       await scenarioRenderExport(jpgFolder, opts.raw || '', opts.out || '', el);

@@ -53,7 +53,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 }) => (
   <header
     aria-label="Gallery Culling 应用工具栏"
-    className="bg-background-base/80 backdrop-blur-md border-b border-default flex flex-col gap-1 px-3 py-1.5 shrink-0 text-xs"
+    className="bg-background-base/80 backdrop-blur-md border-b border-border-default flex flex-col gap-1 px-3 py-1.5 shrink-0 text-xs"
   >
     {/* -----------------------------------------------------------
         Row 1 — where the photos come from.

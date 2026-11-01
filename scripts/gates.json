@@ -49,6 +49,12 @@
       "why": "扫 src 里实际用到的「主题色+透明度」组合，逐个去 Tailwind 产物里核对有没有规则（issue #15）。配色写成 var(--color-*) 时 /NN 会被**静默丢弃**，不报错不警告，只有这条能盯住"
     },
     {
+      "name": "check-borders-emitted.mjs",
+      "cmd": ["node", "scripts/check-borders-emitted.mjs"],
+      "shard": "static",
+      "why": "扫 src 里所有描边颜色类，逐个去 Tailwind 产物里核对有没有规则（issue #18 · PD-1）。`border.default` 生成的是 `border-border-default`，写成 `border-default` 时一条规则都不产出、回落 currentColor（body 为 text-white，看起来是 100% 白线），只有这条能盯住"
+    },
+    {
       "name": "vitest",
       "cmd": ["npx", "vitest", "run", "--pool=vmForks"],
       "shard": "unit",

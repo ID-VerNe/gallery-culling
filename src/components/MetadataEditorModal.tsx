@@ -565,7 +565,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
                 className={`focus-ring flex flex-col items-center justify-center gap-1 p-2.5 rounded-xl border text-center cursor-pointer transition-colors ${
                   checked
                     ? 'border-white/60 bg-white/15 text-white font-medium'
-                    : 'border-default bg-background-surface-hover text-white/70 hover:text-white hover:bg-white/10'
+                    : 'border-border-default bg-background-surface-hover text-white/70 hover:text-white hover:bg-white/10'
                 }`}
               >
                 <input

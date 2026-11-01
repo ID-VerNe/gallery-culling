@@ -307,12 +307,12 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
       id="tonal-adjuster-panel"
       tabIndex={-1}
       onClick={(e) => e.stopPropagation()}
-      className="bg-background-base border-l border-default h-full w-full p-5 text-xs flex flex-col gap-4 overflow-y-auto"
+      className="bg-background-base border-l border-border-default h-full w-full p-5 text-xs flex flex-col gap-4 overflow-y-auto"
       role="region"
       aria-label="快速调色控制面板"
     >
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-default pb-3">
+      <div className="flex items-center justify-between border-b border-border-default pb-3">
         <div className="flex items-center gap-2 font-medium text-white">
           <Sliders className="w-4 h-4 text-white/60" aria-hidden="true" />
           <span>调色</span>
@@ -506,7 +506,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
       {/* FR-07：套用到其余选中照片。只在 ≥2 张时出现 —— 只有当前这一张时，
           套用等于什么都没做。默认只写 XMP：200 张逐张落 .lumen 工程可能几分钟。 */}
       {selectedCount >= 2 && onApplyToSelected && (
-        <div className="pt-3 mt-3 border-t border-default">
+        <div className="pt-3 mt-3 border-t border-border-default">
           <button
             onClick={() => onApplyToSelected({ writeLumen: applyWriteLumen })}
             disabled={applying || !!applyBlockedReason}
@@ -539,7 +539,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
       )}
 
       {/* Action Buttons: Auto, Reset, Save to XMP */}
-      <div className="flex items-center gap-2 pt-3 mt-auto border-t border-default">
+      <div className="flex items-center gap-2 pt-3 mt-auto border-t border-border-default">
         {/* Auto Button */}
         <button
           onClick={triggerAutoTone}

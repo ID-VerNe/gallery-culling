@@ -177,7 +177,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
         {image.loading && (
           <div
             role="status"
-            className="absolute top-3 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3 py-1 rounded-md text-[11px] font-semibold text-white/80 border border-default pointer-events-none"
+            className="absolute top-3 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3 py-1 rounded-md text-[11px] font-semibold text-white/80 border border-border-default pointer-events-none"
           >
             正在渲染 RAW…
           </div>
@@ -198,7 +198,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
 
         {/* Top title, Reference status & Pin button */}
         <div className="absolute top-3 left-3 flex items-center gap-2 select-none pointer-events-auto flex-wrap max-w-[calc(100%-1.5rem)]">
-          <div className="bg-background-base/85 backdrop-blur px-3 py-1.5 rounded-lg text-xs text-white flex items-center gap-2 border border-default select-text">
+          <div className="bg-background-base/85 backdrop-blur px-3 py-1.5 rounded-lg text-xs text-white flex items-center gap-2 border border-border-default select-text">
             <span className="font-mono font-medium">{group.baseName}</span>
             {group.exif && (
               <span className="text-[11px] text-white/70 font-mono tabular-nums">
@@ -320,7 +320,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
   return (
     <div className="flex-1 flex flex-col h-full w-full bg-background-surface relative">
       {/* Top Sync & Compare Control Bar */}
-      <div className="h-9 bg-background-base border-b border-default flex items-center justify-between gap-2 px-3 text-xs text-white/80 select-none">
+      <div className="h-9 bg-background-base border-b border-border-default flex items-center justify-between gap-2 px-3 text-xs text-white/80 select-none">
         <div className="flex items-center gap-2 font-medium min-w-0">
           <Columns2 className="w-4 h-4 text-white shrink-0" aria-hidden="true" />
           <span className="whitespace-nowrap">双图对比视图</span>

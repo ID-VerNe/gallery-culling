@@ -25,7 +25,7 @@ export const ExportModeSelector: React.FC<ExportModeSelectorProps> = ({
 }) => (
   <fieldset>
     <legend className="text-white/80 font-medium mb-1.5">导出方式</legend>
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-background-base p-2.5 rounded border border-default">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-background-base p-2.5 rounded border border-border-default">
       {MODE_ORDER.map((mode) => {
         const spec = EXPORT_MODES[mode];
         const inputId = `export-mode-${mode}`;

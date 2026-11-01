@@ -196,7 +196,7 @@ export const Modal: React.FC<ModalProps> = ({
         className={`relative bg-background-panel border border-border-default rounded-xl w-full ${maxWidth} max-h-[calc(100vh-2rem)] shadow-2xl flex flex-col overflow-hidden text-white text-xs outline-none`}
       >
         {/* Header */}
-        <div className="h-12 border-b border-default px-4 flex items-center justify-between bg-background-header shrink-0">
+        <div className="h-12 border-b border-border-default px-4 flex items-center justify-between bg-background-header shrink-0">
           <div className="flex items-center gap-2 font-semibold text-sm text-white min-w-0">
             {icon}
             <h2 id={titleId} className="truncate">
@@ -227,7 +227,7 @@ export const Modal: React.FC<ModalProps> = ({
 
         {/* Footer */}
         {footer && (
-          <div className="border-t border-default px-4 py-3 flex items-center justify-end gap-2 bg-background-header shrink-0">
+          <div className="border-t border-border-default px-4 py-3 flex items-center justify-end gap-2 bg-background-header shrink-0">
             {footer}
           </div>
         )}

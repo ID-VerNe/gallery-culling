@@ -125,7 +125,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
   return (
     <div className="flex-1 flex flex-col h-full w-full bg-background-surface relative select-none">
       {/* Top Header Control Bar */}
-      <div className="h-9 bg-background-base border-b border-default flex items-center justify-between gap-2 px-3 text-xs text-white/80">
+      <div className="h-9 bg-background-base border-b border-border-default flex items-center justify-between gap-2 px-3 text-xs text-white/80">
         <div className="flex items-center gap-2 font-medium min-w-0">
           <Columns2 className="w-4 h-4 text-amber-400 shrink-0" aria-hidden="true" />
           <span className="whitespace-nowrap">本张照片前后对照 (Before / After)</span>
@@ -196,7 +196,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
           <button
             onClick={onOpenLuminar}
             disabled={isLuminarRunning}
-            className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/20 text-white border border-default rounded text-[11px] font-semibold transition-colors active:scale-[0.96] disabled:opacity-50 disabled:cursor-not-allowed"
+            className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/20 text-white border border-border-default rounded text-[11px] font-semibold transition-colors active:scale-[0.96] disabled:opacity-50 disabled:cursor-not-allowed"
             title="Luminar AI 修图"
             aria-label="在 Luminar AI 中修图当前照片"
           >
@@ -227,7 +227,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
             className={`focus-ring flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium active:scale-[0.96] transition-colors border ${
               zoom.sync
                 ? 'bg-white/10 text-white border-white/25'
-                : 'bg-background-surface-hover text-white/60 border-default hover:text-white hover:bg-white/10'
+                : 'bg-background-surface-hover text-white/60 border-border-default hover:text-white hover:bg-white/10'
             }`}
             title={
               zoom.sync
@@ -289,7 +289,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
           {beforeImage.loading && (
             <div
               role="status"
-              className="absolute top-3 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3 py-1 rounded-md text-[11px] font-semibold text-white/80 border border-default pointer-events-none"
+              className="absolute top-3 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3 py-1 rounded-md text-[11px] font-semibold text-white/80 border border-border-default pointer-events-none"
             >
               正在渲染 RAW…
             </div>
@@ -349,7 +349,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
           {!hasLuminarEdit && !hasTone && (
             <div
               role="status"
-              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 bg-background-base/85 backdrop-blur-md px-3.5 py-1.5 rounded-md text-xs font-medium text-white/80 border border-default pointer-events-none"
+              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 bg-background-base/85 backdrop-blur-md px-3.5 py-1.5 rounded-md text-xs font-medium text-white/80 border border-border-default pointer-events-none"
             >
               尚未调色，拖动滑杆查看效果
             </div>

@@ -68,7 +68,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
     : `当前第 ${humanIndex} 张，共 ${totalCount} 张`;
 
   return (
-    <footer aria-label="状态栏：照片计数、快捷键提示与同步状态" className="h-9 bg-background-base border-t border-default flex items-center justify-between px-3 text-[11px] text-white/70 shrink-0 gap-3">
+    <footer aria-label="状态栏：照片计数、快捷键提示与同步状态" className="h-9 bg-background-base border-t border-border-default flex items-center justify-between px-3 text-[11px] text-white/70 shrink-0 gap-3">
       {/* Left: Current File Info (Selectable text) */}
       <div className="flex items-center gap-3 select-text min-w-0">
         {currentGroup ? (
@@ -196,7 +196,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         <button
           onClick={onOpenExternal}
           disabled={!currentGroup}
-          className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/15 border border-white/20 text-white active:scale-[0.96] disabled:bg-background-surface-hover disabled:border-default disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-transform"
+          className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/15 border border-white/20 text-white active:scale-[0.96] disabled:bg-background-surface-hover disabled:border-border-default disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-transform"
           aria-label="在修图或外部程序中打开当前照片"
         >
           <ExternalLink className="w-3 h-3" aria-hidden="true" />

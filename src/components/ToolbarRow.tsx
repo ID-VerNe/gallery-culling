@@ -139,7 +139,7 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
   return (
     <div className="flex items-center gap-2 flex-wrap min-w-0">
       {/* Filter */}
-      <div className="flex items-center gap-1.5 bg-background-base border border-default rounded-md px-2 py-1 text-white/80">
+      <div className="flex items-center gap-1.5 bg-background-base border border-border-default rounded-md px-2 py-1 text-white/80">
         <SlidersHorizontal className="w-3.5 h-3.5 text-white/60" aria-hidden="true" />
         <select
           value={filterMode}
@@ -162,7 +162,7 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
       </div>
 
       {/* Sort */}
-      <div className="bg-background-base border border-default rounded-md px-2 py-1 text-white/80">
+      <div className="bg-background-base border border-border-default rounded-md px-2 py-1 text-white/80">
         <select
           value={sortOrder}
           onChange={(e) => onSortChange(e.target.value as SortOrder)}

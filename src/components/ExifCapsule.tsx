@@ -14,7 +14,7 @@ export const ExifCapsule: React.FC<{ exif: ExifData | undefined }> = ({ exif }) 
   if (!exif) return null;
 
   return (
-    <div className="absolute top-3 right-3 bg-background-base/75 backdrop-blur-md px-3.5 py-2.5 rounded-lg text-xs text-white/80 flex flex-col gap-1 border border-default pointer-events-auto select-text max-w-[16rem]">
+    <div className="absolute top-3 right-3 bg-background-base/75 backdrop-blur-md px-3.5 py-2.5 rounded-lg text-xs text-white/80 flex flex-col gap-1 border border-border-default pointer-events-auto select-text max-w-[16rem]">
       <div className="font-semibold text-white truncate">
         {exif.cameraModel || exif.cameraMake || '未知相机'}
       </div>
