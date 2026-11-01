@@ -22,6 +22,14 @@ import { useLumenDetail } from '../hooks/useLumenDetail';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
 import { ExifCapsule } from './ExifCapsule';
+import {
+  BAR_BUTTON,
+  BAR_DIVIDER,
+  BAR_HIT_AREA,
+  BAR_LABEL,
+  BAR_PLATE,
+  BAR_STAR_BUTTON,
+} from './viewportBarStyles';
 
 interface PreviewViewportProps {
   group?: PhotoGroupInfo;
@@ -312,44 +320,54 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
         <ChevronRight className="w-6 h-6" aria-hidden="true" />
       </button>
 
-      {/* Floating Bottom Quick Action Bar — resting = icons only (issue #10)
+      {/* Floating Bottom Quick Action Bar — geometry frozen (issue #12)
           The bar carries the app's core culling verbs, so it must never be a
           hover-only affordance (F-02, .plan/ux-audit-2026-10-13.md:39): the
           icons are ALWAYS on screen and always focusable. What collapses is
-          the weight — no plate, no shadow, no text labels — until the pointer
-          enters the bar (`group-hover/bar`) or focus lands inside it
+          the weight — no plate, no shadow, no visible labels — until the
+          pointer enters (`group-hover/bar`) or focus lands inside it
           (`group-focus-within/bar`), so keyboard users never operate blind.
-          Hover is pure CSS: no `useState`, so a stale "left open" frame
-          (the other failure mode F-02 recorded) cannot happen. Labels fold by
-          animating their own width, NOT by clipping the bar — `overflow-hidden`
-          here would also clip the 2px `.focus-ring` outline (index.css:41-45).
-          Transitions collapse to ~0ms under prefers-reduced-motion
-          (index.css:110-118). */}
+
+          #10 got this shape right but made the outer box change size on
+          hover (px-3→px-4 / py-1→py-2 / w-0→w-auto), which measured 497px →
+          753px in a real browser. A box that grows under the cursor makes
+          `:hover` flicker: this is the bug #12 replaces. The rules that keep
+          it frozen live in `viewportBarStyles.ts` — read that first.
+
+          Two extra notes specific to this call site:
+          - Hover is pure CSS: no `useState`, so a stale "left open" frame
+            (the other failure mode F-02 recorded) cannot happen.
+          - `overflow-hidden` is deliberately absent on the plate: it would
+            clip the 2px `.focus-ring` outline (index.css focus-ring).
+            Hiding is done by opacity on the label slot, not by clipping.
+          - `pointer-events-none` on the plate + a larger child hit area
+            means the pixels around the icons do not swallow clicks meant
+            for the photo beneath, while the bar still opens on approach. */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className="group/bar absolute bottom-4 left-1/2 -translate-x-1/2 backdrop-blur-xl px-3 py-1 group-hover/bar:px-4 group-focus-within/bar:px-4 group-hover/bar:py-2 group-focus-within/bar:py-2 rounded-lg flex items-center gap-3 border border-white/0 group-hover/bar:border-white/15 group-focus-within/bar:border-white/15 group-hover/bar:bg-background-base/90 group-focus-within/bar:bg-background-base/90 pointer-events-auto group-hover/bar:shadow-2xl group-focus-within/bar:shadow-2xl transition-[background-color,border-color,box-shadow,padding] duration-150"
+        className={`${BAR_PLATE} pointer-events-none`}
       >
+        {/* Hit area: covers the plate plus a ring around it. Transparent and
+            size-constant, so it can never be the thing that changes size. */}
+        <div className={BAR_HIT_AREA} data-bar-hit-area aria-hidden="true" />
+
         {/* Rating Stars (1 to 5) */}
-        <div
-          className="flex items-center gap-1 border-r border-white/0 group-hover/bar:border-white/15 group-focus-within/bar:border-white/15 pr-0 group-hover/bar:pr-3 group-focus-within/bar:pr-3 transition-[border-color,padding] duration-150"
-          role="group"
-          aria-label="照片星级打分"
-        >
+        <div className={BAR_DIVIDER} role="group" aria-label="照片星级打分">
           {[1, 2, 3, 4, 5].map((star) => (
             <button
               key={star}
               onClick={() => onRate(group.rating === star ? 0 : star)}
-              className="focus-ring tap-target p-1 hover:scale-125 active:scale-95 rounded-sm transition-transform"
+              className={`${BAR_STAR_BUTTON} ${
+                group.rating >= star
+                  ? 'text-amber-400 hover:text-amber-300'
+                  : 'text-white/60 hover:text-white'
+              }`}
               title={`评 ${star} 星（${star}）`}
               aria-label={`评 ${star} 星`}
               aria-pressed={group.rating >= star}
             >
               <Star
-                className={`w-4 h-4 ${
-                  group.rating >= star
-                    ? 'fill-amber-400 text-amber-400'
-                    : 'text-white/60 hover:text-white'
-                }`}
+                className={`w-4 h-4 ${group.rating >= star ? 'fill-amber-400' : ''}`}
                 aria-hidden="true"
               />
             </button>
@@ -357,14 +375,10 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
         </div>
 
         {/* Pick / Reject / Unflag */}
-        <div
-          className="flex items-center gap-1.5 border-r border-white/0 group-hover/bar:border-white/15 group-focus-within/bar:border-white/15 pr-0 group-hover/bar:pr-3 group-focus-within/bar:pr-3 transition-[border-color,padding] duration-150"
-          role="group"
-          aria-label="保留或淘汰标记"
-        >
+        <div className={BAR_DIVIDER} role="group" aria-label="保留或淘汰标记">
           <button
             onClick={() => onFlag(group.flag === 'pick' ? 'none' : 'pick')}
-            className={`focus-ring flex items-center gap-1 px-2 group-hover/bar:px-3 group-focus-within/bar:px-3 py-1 rounded-md text-xs font-semibold active:scale-[0.96] transition-colors ${
+            className={`${BAR_BUTTON} ${
               group.flag === 'pick'
                 ? 'bg-emerald-600/40 text-emerald-300 border border-emerald-500/50'
                 : 'bg-white/10 text-white/80 hover:bg-white/20 border border-transparent'
@@ -374,13 +388,11 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
             aria-pressed={group.flag === 'pick'}
           >
             <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-            <span className="w-0 overflow-hidden group-hover/bar:w-auto group-focus-within/bar:w-auto transition-[width] duration-150">
-              Pick
-            </span>
+            <span className={BAR_LABEL}>Pick</span>
           </button>
           <button
             onClick={() => onFlag(group.flag === 'reject' ? 'none' : 'reject')}
-            className={`focus-ring flex items-center gap-1 px-2 group-hover/bar:px-3 group-focus-within/bar:px-3 py-1 rounded-md text-xs font-semibold active:scale-[0.96] transition-colors ${
+            className={`${BAR_BUTTON} ${
               group.flag === 'reject'
                 ? 'bg-rose-600/40 text-rose-300 border border-rose-500/50'
                 : 'bg-white/10 text-white/80 hover:bg-white/20 border border-transparent'
@@ -390,20 +402,14 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
             aria-pressed={group.flag === 'reject'}
           >
             <X className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-            <span className="w-0 overflow-hidden group-hover/bar:w-auto group-focus-within/bar:w-auto transition-[width] duration-150">
-              Reject
-            </span>
+            <span className={BAR_LABEL}>Reject</span>
           </button>
         </div>
 
         {/* Zoom: – / readout / reset / +
             Zoom used to live only on wheel and double-click, both of which
             are undiscoverable and keyboard-inaccessible (F-25). */}
-        <div
-          className="flex items-center gap-0.5 border-r border-white/0 group-hover/bar:border-white/15 group-focus-within/bar:border-white/15 pr-0 group-hover/bar:pr-3 group-focus-within/bar:pr-3 transition-[border-color,padding] duration-150"
-          role="group"
-          aria-label="缩放控制"
-        >
+        <div className={BAR_DIVIDER} role="group" aria-label="缩放控制">
           <button
             onClick={() => zoom.zoomBy(1 / ZOOM_STEP)}
             disabled={zoom.scale <= ZOOM_MIN}
@@ -413,8 +419,10 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           >
             <ZoomOut className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
+          {/* Zoom readout: same constant-width slot as the text labels, so
+              the value going 100% → 1000% cannot drag the plate wider. */}
           <span
-            className="text-[11px] font-mono tabular-nums text-white/80 w-0 overflow-hidden group-hover/bar:w-11 group-focus-within/bar:w-11 text-center select-none transition-[width] duration-150"
+            className={`${BAR_LABEL} font-mono tabular-nums text-[11px] text-white/80 select-none`}
             aria-label={`当前缩放 ${zoomLabel}`}
           >
             {zoomLabel}
@@ -442,7 +450,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
         {onToggleTonalAdjuster && (
           <button
             onClick={onToggleTonalAdjuster}
-            className="focus-ring flex items-center gap-1.5 px-2 group-hover/bar:px-3 group-focus-within/bar:px-3 py-1 bg-white/10 hover:bg-white/20 active:scale-[0.96] text-white rounded-md text-xs font-medium transition-colors"
+            className={`${BAR_BUTTON} bg-white/10 hover:bg-white/20 text-white`}
             title="调色面板 (E)"
             aria-label="调色面板"
             aria-pressed={isTonalPanelOpen}
@@ -450,9 +458,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
             aria-controls="tonal-adjuster-panel"
           >
             <Sliders className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-            <span className="w-0 overflow-hidden group-hover/bar:w-auto group-focus-within/bar:w-auto transition-[width] duration-150">
-              调色
-            </span>
+            <span className={BAR_LABEL}>调色</span>
           </button>
         )}
 
@@ -461,7 +467,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           <button
             onClick={onOpenLuminar}
             disabled={isLuminarRunning}
-            className="focus-ring flex items-center gap-1.5 px-2 group-hover/bar:px-3 group-focus-within/bar:px-3 py-1 bg-white/10 hover:bg-white/20 text-white border border-default active:scale-[0.96] disabled:opacity-50 disabled:cursor-not-allowed rounded-md text-xs font-medium transition-colors"
+            className={`${BAR_BUTTON} bg-white/10 hover:bg-white/20 text-white border border-default disabled:opacity-50 disabled:cursor-not-allowed`}
             title="Luminar AI 修图"
             aria-label="在 Luminar AI 中修图"
           >
@@ -469,8 +475,8 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
               className={`w-3.5 h-3.5 shrink-0 ${isLuminarRunning ? 'animate-spin' : ''}`}
               aria-hidden="true"
             />
-            {/* 折叠宽度随文案走：运行中变「运行中…」，不能这里写死 w-11。 */}
-            <span className="w-0 overflow-hidden group-hover/bar:w-auto group-focus-within/bar:w-auto transition-[width] duration-150">
+            {/* 槽位宽度由 .bar-label 常驻给足，「运行中…」不会把盒子撑开。 */}
+            <span className={BAR_LABEL}>
               {isLuminarRunning ? '运行中…' : 'Luminar AI'}
             </span>
           </button>
@@ -479,14 +485,12 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
         {/* Open in Photoshop / External app */}
         <button
           onClick={onOpenExternal}
-          className="focus-ring flex items-center gap-1.5 px-2 group-hover/bar:px-3.5 group-focus-within/bar:px-3.5 py-1.5 bg-white/10 hover:bg-white/20 text-white active:scale-[0.96] rounded-md font-medium transition-colors"
+          className={`${BAR_BUTTON} bg-white/10 hover:bg-white/20 text-white`}
           title="外部打开 (O)"
           aria-label="在修图或外部程序中打开"
         >
           <ExternalLink className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-          <span className="w-0 overflow-hidden group-hover/bar:w-auto group-focus-within/bar:w-auto pb-[1px] text-xs transition-[width] duration-150">
-            外部打开
-          </span>
+          <span className={BAR_LABEL}>外部打开</span>
         </button>
       </div>
     </div>

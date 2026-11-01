@@ -125,42 +125,118 @@ describe('BeforeAfterViewport —— 空态', () => {
 });
 
 /**
- * 底栏折叠态（issue #10）：与单图视口同一套形态 —— 常驻图标，悬停/聚焦才展开标签。
- * jsdom 不跑 CSS，故断言 DOM 结构契约（`w-0` 折叠容器 + `group-hover/bar:` 变体）。
+ * 底栏几何契约（issue #12）：与单图视口同一套口径 —— 悬停/聚焦**不改尺寸**。
+ *
+ * #10 的 `group-hover/bar:px-4 py-2` + `w-0 → w-auto` 让外接盒随悬停变化，
+ * 指针在边缘反复进出就会自激闪烁。jsdom 不跑 CSS，所以锁 className：
+ * 变体里出现 padding / width / height / scale 即红。
  */
-describe('BeforeAfterViewport —— 底栏常驻图标 / 悬停展开（issue #10）', () => {
+describe('BeforeAfterViewport —— 底栏几何冻结（issue #12）', () => {
+  const GEOMETRY_PREFIXES = ['group-hover/bar:', 'group-focus-within/bar:'];
+  const GEOMETRY_UTILITIES = [
+    /^px-/,
+    /^py-/,
+    /^p-/,
+    /^pl-/,
+    /^pr-/,
+    /^pt-/,
+    /^pb-/,
+    /^w-/,
+    /^h-/,
+    /^min-w-/,
+    /^min-h-/,
+    /^max-w-/,
+    /^max-h-/,
+    /^gap-/,
+    // translate/scale 走合成层、不参与布局，是标签在常驻槽位里淡入的手法；
+    // 真浏览器几何验收（静息 == 悬停）兜住例外情况。
+    /^text-/,
+    /^leading-/,
+    /^tracking-/,
+  ];
+
+  function classTokens(el: Element): string[] {
+    return (el.getAttribute('class') ?? '').split(/\s+/).filter(Boolean);
+  }
+
+  function geometryLeaks(el: Element): string[] {
+    return classTokens(el).filter((token) => {
+      const prefix = GEOMETRY_PREFIXES.find((p) => token.startsWith(p));
+      if (!prefix) return false;
+      const utility = token.slice(prefix.length);
+      return GEOMETRY_UTILITIES.some((re) => re.test(utility));
+    });
+  }
+
   function barOf(container: HTMLElement): HTMLElement {
     const anchor = container.querySelector('[aria-label="照片星级打分"]');
     expect(anchor).not.toBeNull();
-    return anchor!.parentElement as HTMLElement;
+    const bar = anchor!.closest('div[class*="group/bar"]');
+    expect(bar, '底栏应带 group/bar 命名组').not.toBeNull();
+    return bar as HTMLElement;
   }
 
-  it('静息态：Pick / Reject 标签折叠为零宽，展开态挂在悬停与聚焦变体上', () => {
+  it('底栏与其内部元素都不许用悬停变体改尺寸', () => {
+    const { container } = renderBA();
+    const bar = barOf(container);
+
+    expect(geometryLeaks(bar)).toEqual([]);
+    const leaks: string[] = [];
+    bar.querySelectorAll<HTMLElement>('*').forEach((el) => {
+      for (const token of geometryLeaks(el)) leaks.push(`${el.tagName}:${token}`);
+    });
+    expect(leaks).toEqual([]);
+  });
+
+  it('Pick / Reject 标签常驻槽位且不换行', () => {
     const { container } = renderBA();
     const bar = barOf(container);
 
     for (const label of ['Pick', 'Reject']) {
-      // 只认元素自身文本就是该标签的 <span>：<title> 里也有同名文案。
-      // 只认按钮里的可见标签（<button> 下还挂着一个同名 <title>）。
+      // 只认按钮里的可见标签（<title> 里也有同名文案）。
       const span = Array.from(bar.querySelectorAll('button > span')).find(
         (el) => el.textContent === label,
       );
       expect(span, `底栏应有「${label}」标签`).toBeDefined();
-      const wrapper = span!;
-      expect(wrapper.className).toContain('w-0');
-      expect(wrapper.className).toContain('group-hover/bar:w-auto');
-      expect(wrapper.className).toContain('group-focus-within/bar:w-auto');
+      const called = classTokens(span!);
+
+      expect(called, `「${label}」不得再用零宽折叠`).not.toContain('w-0');
+      expect(span!.className).not.toContain('group-hover/bar:w-auto');
+      expect(called, `「${label}」必须禁止换行`).toContain('whitespace-nowrap');
+      expect(called, `「${label}」应标 bar-label 槽位`).toContain('bar-label');
     }
   });
 
-  it('静息态：底板不直接生效，只在展开变体上出现', () => {
+  it('静息态无底色：底板底色只在变体上出现', () => {
     const { container } = renderBA();
-    const classes = barOf(container).className.split(/\s+/);
+    const called = classTokens(barOf(container));
 
-    expect(classes).toContain('group/bar');
-    expect(classes).not.toContain('bg-background-base/90');
-    expect(classes).not.toContain('shadow-2xl');
-    expect(classes).toContain('group-hover/bar:bg-background-base/90');
-    expect(classes).toContain('group-focus-within/bar:bg-background-base/90');
+    expect(called).toContain('group/bar');
+    expect(called).not.toContain('bg-background-base/90');
+    expect(called).not.toContain('shadow-2xl');
+    expect(called).toContain('group-hover/bar:bg-background-base/90');
+    expect(called).toContain('group-focus-within/bar:bg-background-base/90');
+  });
+
+  it('悬停热区是独立层，比底板更大且不受 hover 影响', () => {
+    const { container } = renderBA();
+    const hit = barOf(container).querySelector('[data-bar-hit-area]');
+
+    expect(hit, '底栏应有独立的透明命中层').not.toBeNull();
+    const called = classTokens(hit!);
+    expect(called).toContain('-inset-x-3');
+    expect(called).toContain('-inset-y-2');
+    expect(geometryLeaks(hit!)).toEqual([]);
+  });
+
+  it('星标不再用 hover 改尺寸', () => {
+    const { container } = renderBA();
+    const stars = barOf(container).querySelectorAll('[aria-label^="评 "]');
+
+    expect(stars).toHaveLength(5);
+    stars.forEach((star) => {
+      expect(star.className).not.toContain('hover:scale');
+      expect(star.className).toContain('tap-target');
+    });
   });
 });

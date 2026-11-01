@@ -22,6 +22,15 @@ import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import type { ViewportEmptyState } from './PreviewViewport';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
 import { ExifCapsule } from './ExifCapsule';
+import {
+  BAR_BUTTON,
+  BAR_DIVIDER,
+  BAR_GROUP,
+  BAR_HIT_AREA,
+  BAR_LABEL,
+  BAR_PLATE,
+  BAR_STAR_BUTTON,
+} from './viewportBarStyles';
 
 interface BeforeAfterViewportProps {
   group?: PhotoGroupInfo;
@@ -375,37 +384,36 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
         </div>
       </div>
 
-      {/* Bottom Floating Rating & Flag Capsule — resting = icons only (issue #10)
-          与单图视口同一套形态：图标常驻（F-02：核心动词不能是悬停专属），
-          底板与文字标签只在悬停或聚焦进入时才展开（`group-hover/bar` /
-          `group-focus-within/bar`）。纯 CSS，无显隐状态；reduced-motion 由
-          index.css:110-118 全局收敛。标签折叠走自身 width，不用 overflow 裁底栏
-          （会连 2px 的 .focus-ring 外描边一起裁掉）。 */}
+      {/* Bottom Floating Rating & Flag Capsule — geometry frozen (issue #12)
+          与单图视口同一套形态与同一套硬规则（规则正文在 `viewportBarStyles.ts`）：
+          图标常驻（F-02：核心动词不能是悬停专属），底板与文字标签只在悬停或
+          聚焦进入时淡入。**变体里只改颜色/透明度/阴影**——#10 在这里复刻了一份
+          `px-3→px-4` / `py-1→py-2` / `w-0→w-auto`，同样会让外接盒随悬停变化，
+          指针在边缘反复进出就自激闪烁。reduced-motion 由 index.css 全局收敛。 */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className="group/bar absolute bottom-4 left-1/2 -translate-x-1/2 backdrop-blur-xl px-3 py-1 group-hover/bar:px-4 group-focus-within/bar:px-4 group-hover/bar:py-2 group-focus-within/bar:py-2 rounded-lg flex items-center gap-3 border border-white/0 group-hover/bar:border-white/15 group-focus-within/bar:border-white/15 group-hover/bar:bg-background-base/90 group-focus-within/bar:bg-background-base/90 pointer-events-auto group-hover/bar:shadow-2xl group-focus-within/bar:shadow-2xl transition-[background-color,border-color,box-shadow,padding] duration-150"
+        className={`${BAR_PLATE} pointer-events-none`}
       >
+        {/* 透明命中层：比可视底板四周各外扩一圈，尺寸恒定。 */}
+        <div className={BAR_HIT_AREA} data-bar-hit-area aria-hidden="true" />
+
         {/* Rating Stars */}
-        <div
-          className="flex items-center gap-1 border-r border-white/0 group-hover/bar:border-white/15 group-focus-within/bar:border-white/15 pr-0 group-hover/bar:pr-3 group-focus-within/bar:pr-3 transition-[border-color,padding] duration-150"
-          role="group"
-          aria-label="照片星级打分"
-        >
+        <div className={BAR_DIVIDER} role="group" aria-label="照片星级打分">
           {[1, 2, 3, 4, 5].map((star) => (
             <button
               key={star}
               onClick={() => onRate(group.rating === star ? 0 : star)}
-              className="focus-ring tap-target p-1 hover:scale-125 active:scale-95 rounded-sm transition-transform"
+              className={`${BAR_STAR_BUTTON} ${
+                group.rating >= star
+                  ? 'text-amber-400 hover:text-amber-300'
+                  : 'text-white/60 hover:text-white'
+              }`}
               title={`评 ${star} 星（${star}）`}
               aria-label={`评 ${star} 星`}
               aria-pressed={group.rating >= star}
             >
               <Star
-                className={`w-4 h-4 ${
-                  group.rating >= star
-                    ? 'fill-amber-400 text-amber-400'
-                    : 'text-white/60 hover:text-white'
-                }`}
+                className={`w-4 h-4 ${group.rating >= star ? 'fill-amber-400' : ''}`}
                 aria-hidden="true"
               />
             </button>
@@ -413,42 +421,34 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
         </div>
 
         {/* Pick / Reject */}
-        <div
-          className="flex items-center gap-1.5"
-          role="group"
-          aria-label="保留或淘汰标记"
-        >
+        <div className={BAR_GROUP} role="group" aria-label="保留或淘汰标记">
           <button
             onClick={() => onFlag(group.flag === 'pick' ? 'none' : 'pick')}
-            className={`focus-ring flex items-center gap-1 px-2 group-hover/bar:px-3 group-focus-within/bar:px-3 py-1 rounded-md text-xs font-semibold active:scale-[0.96] transition-colors border ${
+            className={`${BAR_BUTTON} ${
               group.flag === 'pick'
-                ? 'bg-emerald-600/40 text-emerald-300 border-emerald-500/50'
-                : 'bg-transparent text-white/80 hover:bg-white/20 border-transparent'
+                ? 'bg-emerald-600/40 text-emerald-300 border border-emerald-500/50'
+                : 'bg-transparent text-white/80 hover:bg-white/20 border border-transparent'
             }`}
             title="保留 (P)"
             aria-label="标记保留 (Pick)"
             aria-pressed={group.flag === 'pick'}
           >
             <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-            <span className="w-0 overflow-hidden group-hover/bar:w-auto group-focus-within/bar:w-auto transition-[width] duration-150">
-              Pick
-            </span>
+            <span className={BAR_LABEL}>Pick</span>
           </button>
           <button
             onClick={() => onFlag(group.flag === 'reject' ? 'none' : 'reject')}
-            className={`focus-ring flex items-center gap-1 px-2 group-hover/bar:px-3 group-focus-within/bar:px-3 py-1 rounded-md text-xs font-semibold active:scale-[0.96] transition-colors border ${
+            className={`${BAR_BUTTON} ${
               group.flag === 'reject'
-                ? 'bg-rose-600/40 text-rose-300 border-rose-500/50'
-                : 'bg-transparent text-white/80 hover:bg-white/20 border-transparent'
+                ? 'bg-rose-600/40 text-rose-300 border border-rose-500/50'
+                : 'bg-transparent text-white/80 hover:bg-white/20 border border-transparent'
             }`}
             title="淘汰 (X)"
             aria-label="标记淘汰 (Reject)"
             aria-pressed={group.flag === 'reject'}
           >
             <X className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-            <span className="w-0 overflow-hidden group-hover/bar:w-auto group-focus-within/bar:w-auto transition-[width] duration-150">
-              Reject
-            </span>
+            <span className={BAR_LABEL}>Reject</span>
           </button>
         </div>
       </div>
