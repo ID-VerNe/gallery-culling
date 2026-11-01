@@ -431,23 +431,73 @@ describe('PreviewViewport —— 1:1 细节（FR-05）', () => {
 });
 
 /**
- * 底栏折叠态（issue #10）。
+ * 底栏几何契约（issue #12，替代 #10）。
  *
- * 底栏承载核心选片动词，注释曾写「must never be a hover-only affordance (F-02)」。
- * 但常驻 700×52 的实心面板会一直压住照片。定稿形态是**常驻图标、悬停/聚焦才展开标签**：
- * 静息态没有可见文字标签、没有底板，鼠标移入或键盘 Tab 进入后才恢复完整形态。
+ * #10 的实现全绿但不可用，原因是一个 jsdom 永远测不到的层：
+ * 底板挂 `group-hover/bar:px-4 py-2`、标签 `w-0 → w-auto`，悬停时外接盒
+ * 从 497px 跳到 753px（真浏览器实测）。盒子一变大，指针就可能「掉到盒外」
+ * → `:hover` 失效 → 收起 → 指针又落回 → 再展开，这就是用户看到的闪烁。
  *
- * jsdom 不跑 CSS 引擎（`:hover` / `:focus-within` 的层叠不会生效），所以这里**不假装
- * 模拟悬停**：断言的是 DOM 结构契约 —— 静息态标签容器必须真的零宽（`w-0`），
- * 而底板与标签的展开态必须挂在 `group-hover/bar:` / `group-focus-within/bar:` 变体上。
- * 变体名写错、或标签漏了 `w-0`，用例都会红。
+ * 所以本组断言的口径变了：**不再测「折叠成什么样」，而是测「什么不允许出现」**。
+ * jsdom 不跑 CSS 层叠，但 className 是契约的唯一载体，全部锁在类名上：
+ *
+ *  1. 底板与任何分组，className 里**不得出现** `group-hover/bar:` /
+ *     `group-focus-within/bar:` 前缀的 padding / width / height / scale 类 ——
+ *     这类变体会让外接盒尺寸随悬停变化，也就是本 issue 的根因。
+ *  2. 文字标签必须标了 `bar-label`（槽位宽度由 CSS 常驻分配）且带
+ *     `whitespace-nowrap`（否则 `w-0` 只压宽度不阻止换行，中文会被断成
+ *     竖排方块 —— 实测静息态按钮高 87px 就是这么来的）。
+ *  3. 静息态无底色：`bg-background-base/90` 只出现在变体上。
+ *  4. 悬停热区是**独立的一层**（透明命中层），不靠底板自身撑开尺寸去接指针。
  */
-describe('PreviewViewport —— 底栏常驻图标 / 悬停展开（issue #10）', () => {
+describe('PreviewViewport —— 底栏几何冻结（issue #12）', () => {
   const BAR_LABELS = ['Pick', 'Reject', '调色', 'Luminar AI', '外部打开'];
+
+  /** 会让外接盒尺寸随悬停变化的前缀（本 issue 的根因，一条都不许有）。 */
+  const GEOMETRY_PREFIXES = ['group-hover/bar:', 'group-focus-within/bar:'];
+
+  /** 变体前缀 + 这些属性 = 尺寸会动。颜色/透明度/阴影不在禁止之列。 */
+  const GEOMETRY_UTILITIES = [
+    /^px-/,
+    /^py-/,
+    /^p-/,
+    /^pl-/,
+    /^pr-/,
+    /^pt-/,
+    /^pb-/,
+    /^w-/,
+    /^h-/,
+    /^min-w-/,
+    /^min-h-/,
+    /^max-w-/,
+    /^max-h-/,
+    /^gap-/,
+    // `translate-*` / `scale-*` 是有意放行的：它们走合成层、不参与布局，
+    // 且是「标签在常驻槽位里淡入」的唯一入场手法。真正要禁的是会改变
+    // 外接盒的行内尺寸（上面这些）。万一将来改用 translate 做位移式展开，
+    // 真浏览器几何验收（静息 == 悬停，逐像素）会兜住。
+    /^text-/,
+    /^leading-/,
+    /^tracking-/,
+  ];
+
+  function classTokens(el: Element): string[] {
+    return (el.getAttribute('class') ?? '').split(/\s+/).filter(Boolean);
+  }
+
+  /** 找出 className 里所有「变体前缀 + 几何工具类」的组合。 */
+  function geometryLeaks(el: Element): string[] {
+    return classTokens(el).filter((token) => {
+      const prefix = GEOMETRY_PREFIXES.find((p) => token.startsWith(p));
+      if (!prefix) return false;
+      const utility = token.slice(prefix.length);
+      return GEOMETRY_UTILITIES.some((re) => re.test(utility));
+    });
+  }
 
   /**
    * 「调色」与「Luminar AI」只在对应回调传入时才渲染（App 里恒传，这里默认漏了）。
-   * 折叠口径必须覆盖全部五类标签，所以本组用例自己把两个回调补齐。
+   * 几何口径必须覆盖全部五类标签，所以本组用例自己把两个回调补齐。
    */
   function renderFullBar() {
     render(
@@ -465,53 +515,102 @@ describe('PreviewViewport —— 底栏常驻图标 / 悬停展开（issue #10�
     return { container: document.body };
   }
 
-  /** 底栏本体：包住「照片星级打分」分组的那一层。 */
+  /** 底栏本体：带 `group/bar` 命名组的那一层（内部第一个分组是星级打分）。 */
   function barOf(container: HTMLElement): HTMLElement {
     const anchor = container.querySelector('[aria-label="照片星级打分"]');
     expect(anchor).not.toBeNull();
-    return anchor!.parentElement as HTMLElement;
+    const bar = anchor!.closest('div[class*="group/bar"]');
+    expect(bar, '底栏应带 group/bar 命名组').not.toBeNull();
+    return bar as HTMLElement;
   }
 
-  it('静息态：每个文字标签都在零宽折叠容器里，且不存在"未折叠"的标签', () => {
+  it('底栏本体：任何悬停/聚焦变体都不改尺寸（只允许颜色、透明度、阴影）', () => {
+    const { container } = renderFullBar();
+    const bar = barOf(container);
+
+    expect(geometryLeaks(bar)).toEqual([]);
+    // 过渡属性里也不能带 padding，否则尺寸一变就有 150ms 的「拉扯」观感。
+    expect(bar.className).not.toMatch(/transition-\[[^\]]*padding[^\]]*\]/);
+  });
+
+  it('底栏内部每个元素都不得用 group-hover/bar: 改几何（含分隔线的 pr-3）', () => {
+    const { container } = renderFullBar();
+    const bar = barOf(container);
+
+    const leaks: string[] = [];
+    bar.querySelectorAll<HTMLElement>('*').forEach((el) => {
+      for (const token of geometryLeaks(el)) leaks.push(`${el.tagName}:${token}`);
+    });
+    expect(leaks).toEqual([]);
+  });
+
+  it('文字标签常驻槽位且不换行：w-0/w-auto 已消失，whitespace-nowrap 必须在', () => {
     const { container } = renderFullBar();
     const bar = barOf(container);
 
     for (const label of BAR_LABELS) {
-      // 只认按钮里的可见标签：aria-label 的兄弟元素 <title> 也是 <button> 的直接子节点，
-      // 不能用 parentElement 反推，否则量到的是按钮本身。
+      // 只认按钮里的可见标签（<title> 里也有同名文案，不能用父节点反推）。
       const span = Array.from(bar.querySelectorAll('button > span')).find(
         (el) => el.textContent === label,
       );
       expect(span, `底栏应有「${label}」标签`).toBeDefined();
-      const wrapper = span!;
-      expect(wrapper.className).toContain('w-0');
-      expect(wrapper.className).toContain('group-hover/bar:w-auto');
-      expect(wrapper.className).toContain('group-focus-within/bar:w-auto');
+      const called = classTokens(span!);
+
+      // w-0 + overflow-hidden 不阻止换行，正是静息态被撑成竖排方块的根因。
+      expect(called, `「${label}」不得再用零宽折叠`).not.toContain('w-0');
+      expect(span!.className).not.toContain('group-hover/bar:w-auto');
+      expect(called, `「${label}」必须禁止换行`).toContain('whitespace-nowrap');
+      // 槽位宽度由 CSS 常驻分配（.bar-label），折叠只动 opacity/transform。
+      expect(called, `「${label}」应标 bar-label 槽位`).toContain('bar-label');
     }
   });
 
-  it('静息态：底板（底色/边框/阴影）不直接生效，只在展开变体上出现', () => {
+  it('静息态无底色：底板底色与阴影只在变体上出现', () => {
     const { container } = renderFullBar();
-    const bar = barOf(container);
-    const classes = bar.className.split(/\s+/);
+    const called = classTokens(barOf(container));
 
-    expect(classes).toContain('group/bar');
-    expect(classes).not.toContain('bg-background-base/90');
-    expect(classes).not.toContain('shadow-2xl');
-    expect(classes).not.toContain('border-white/15');
-    expect(classes).toContain('group-hover/bar:bg-background-base/90');
-    expect(classes).toContain('group-hover/bar:border-white/15');
-    expect(classes).toContain('group-focus-within/bar:bg-background-base/90');
-    expect(classes).toContain('group-focus-within/bar:border-white/15');
+    expect(called).toContain('group/bar');
+    expect(called).not.toContain('bg-background-base/90');
+    expect(called).not.toContain('shadow-2xl');
+    expect(called).not.toContain('border-white/15');
+    expect(called).toContain('group-hover/bar:bg-background-base/90');
+    expect(called).toContain('group-focus-within/bar:bg-background-base/90');
+    expect(called).toContain('group-hover/bar:shadow-2xl');
   });
 
-  it('可访问名不依赖可见文字：折叠后仍能按 aria-label 找到全部动词', () => {
+  it('悬停热区是独立层：比底板更大且不受 hover 影响', () => {
+    const { container } = renderFullBar();
+    const bar = barOf(container);
+    const hit = bar.querySelector('[data-bar-hit-area]');
+
+    expect(hit, '底栏应有独立的透明命中层').not.toBeNull();
+    const called = classTokens(hit!);
+    // 向外扩大：指针在底板边缘附近也保持展开，阻断自激回路。
+    expect(called).toContain('-inset-x-3');
+    expect(called).toContain('-inset-y-2');
+    // 命中层自身不参与视觉，也不许有几何变体。
+    expect(geometryLeaks(hit!)).toEqual([]);
+  });
+
+  it('可访问名不依赖可见文字：折叠只影响视觉，不影响无障碍名', () => {
     renderFullBar();
-    // 标签折叠不影响无障碍名 —— 名字来自 aria-label，不来自零宽的 span。
     expect(screen.getByLabelText('标记保留 (Pick)')).toBeInTheDocument();
     expect(screen.getByLabelText('标记淘汰 (Reject)')).toBeInTheDocument();
     expect(screen.getByLabelText('调色面板')).toBeInTheDocument();
     expect(screen.getByLabelText('在 Luminar AI 中修图')).toBeInTheDocument();
     expect(screen.getByLabelText('在修图或外部程序中打开')).toBeInTheDocument();
+  });
+
+  it('星标不再用 hover 改尺寸（原来 hover:scale-125 会溢出 24px 命中盒）', () => {
+    const { container } = renderFullBar();
+    const bar = barOf(container);
+    const stars = bar.querySelectorAll('[aria-label^="评 "]');
+
+    expect(stars).toHaveLength(5);
+    stars.forEach((star) => {
+      expect(star.className, '星标不得缩放').not.toContain('hover:scale');
+      // 24×24 保底（WCAG 2.2 SC 2.5.8）要留着。
+      expect(star.className).toContain('tap-target');
+    });
   });
 });
