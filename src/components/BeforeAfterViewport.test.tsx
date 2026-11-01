@@ -123,3 +123,44 @@ describe('BeforeAfterViewport —— 空态', () => {
     expect(screen.queryByLabelText('放大')).toBeNull();
   });
 });
+
+/**
+ * 底栏折叠态（issue #10）：与单图视口同一套形态 —— 常驻图标，悬停/聚焦才展开标签。
+ * jsdom 不跑 CSS，故断言 DOM 结构契约（`w-0` 折叠容器 + `group-hover/bar:` 变体）。
+ */
+describe('BeforeAfterViewport —— 底栏常驻图标 / 悬停展开（issue #10）', () => {
+  function barOf(container: HTMLElement): HTMLElement {
+    const anchor = container.querySelector('[aria-label="照片星级打分"]');
+    expect(anchor).not.toBeNull();
+    return anchor!.parentElement as HTMLElement;
+  }
+
+  it('静息态：Pick / Reject 标签折叠为零宽，展开态挂在悬停与聚焦变体上', () => {
+    const { container } = renderBA();
+    const bar = barOf(container);
+
+    for (const label of ['Pick', 'Reject']) {
+      // 只认元素自身文本就是该标签的 <span>：<title> 里也有同名文案。
+      // 只认按钮里的可见标签（<button> 下还挂着一个同名 <title>）。
+      const span = Array.from(bar.querySelectorAll('button > span')).find(
+        (el) => el.textContent === label,
+      );
+      expect(span, `底栏应有「${label}」标签`).toBeDefined();
+      const wrapper = span!;
+      expect(wrapper.className).toContain('w-0');
+      expect(wrapper.className).toContain('group-hover/bar:w-auto');
+      expect(wrapper.className).toContain('group-focus-within/bar:w-auto');
+    }
+  });
+
+  it('静息态：底板不直接生效，只在展开变体上出现', () => {
+    const { container } = renderBA();
+    const classes = barOf(container).className.split(/\s+/);
+
+    expect(classes).toContain('group/bar');
+    expect(classes).not.toContain('bg-background-base/90');
+    expect(classes).not.toContain('shadow-2xl');
+    expect(classes).toContain('group-hover/bar:bg-background-base/90');
+    expect(classes).toContain('group-focus-within/bar:bg-background-base/90');
+  });
+});

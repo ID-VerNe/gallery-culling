@@ -429,3 +429,89 @@ describe('PreviewViewport —— 1:1 细节（FR-05）', () => {
     expect(img.src).toContain('.preview');
   });
 });
+
+/**
+ * 底栏折叠态（issue #10）。
+ *
+ * 底栏承载核心选片动词，注释曾写「must never be a hover-only affordance (F-02)」。
+ * 但常驻 700×52 的实心面板会一直压住照片。定稿形态是**常驻图标、悬停/聚焦才展开标签**：
+ * 静息态没有可见文字标签、没有底板，鼠标移入或键盘 Tab 进入后才恢复完整形态。
+ *
+ * jsdom 不跑 CSS 引擎（`:hover` / `:focus-within` 的层叠不会生效），所以这里**不假装
+ * 模拟悬停**：断言的是 DOM 结构契约 —— 静息态标签容器必须真的零宽（`w-0`），
+ * 而底板与标签的展开态必须挂在 `group-hover/bar:` / `group-focus-within/bar:` 变体上。
+ * 变体名写错、或标签漏了 `w-0`，用例都会红。
+ */
+describe('PreviewViewport —— 底栏常驻图标 / 悬停展开（issue #10）', () => {
+  const BAR_LABELS = ['Pick', 'Reject', '调色', 'Luminar AI', '外部打开'];
+
+  /**
+   * 「调色」与「Luminar AI」只在对应回调传入时才渲染（App 里恒传，这里默认漏了）。
+   * 折叠口径必须覆盖全部五类标签，所以本组用例自己把两个回调补齐。
+   */
+  function renderFullBar() {
+    render(
+      <PreviewViewport
+        group={group}
+        onPrev={vi.fn()}
+        onNext={vi.fn()}
+        onRate={vi.fn()}
+        onFlag={vi.fn()}
+        onOpenExternal={vi.fn()}
+        onOpenLuminar={vi.fn()}
+        onToggleTonalAdjuster={vi.fn()}
+      />,
+    );
+    return { container: document.body };
+  }
+
+  /** 底栏本体：包住「照片星级打分」分组的那一层。 */
+  function barOf(container: HTMLElement): HTMLElement {
+    const anchor = container.querySelector('[aria-label="照片星级打分"]');
+    expect(anchor).not.toBeNull();
+    return anchor!.parentElement as HTMLElement;
+  }
+
+  it('静息态：每个文字标签都在零宽折叠容器里，且不存在"未折叠"的标签', () => {
+    const { container } = renderFullBar();
+    const bar = barOf(container);
+
+    for (const label of BAR_LABELS) {
+      // 只认按钮里的可见标签：aria-label 的兄弟元素 <title> 也是 <button> 的直接子节点，
+      // 不能用 parentElement 反推，否则量到的是按钮本身。
+      const span = Array.from(bar.querySelectorAll('button > span')).find(
+        (el) => el.textContent === label,
+      );
+      expect(span, `底栏应有「${label}」标签`).toBeDefined();
+      const wrapper = span!;
+      expect(wrapper.className).toContain('w-0');
+      expect(wrapper.className).toContain('group-hover/bar:w-auto');
+      expect(wrapper.className).toContain('group-focus-within/bar:w-auto');
+    }
+  });
+
+  it('静息态：底板（底色/边框/阴影）不直接生效，只在展开变体上出现', () => {
+    const { container } = renderFullBar();
+    const bar = barOf(container);
+    const classes = bar.className.split(/\s+/);
+
+    expect(classes).toContain('group/bar');
+    expect(classes).not.toContain('bg-background-base/90');
+    expect(classes).not.toContain('shadow-2xl');
+    expect(classes).not.toContain('border-white/15');
+    expect(classes).toContain('group-hover/bar:bg-background-base/90');
+    expect(classes).toContain('group-hover/bar:border-white/15');
+    expect(classes).toContain('group-focus-within/bar:bg-background-base/90');
+    expect(classes).toContain('group-focus-within/bar:border-white/15');
+  });
+
+  it('可访问名不依赖可见文字：折叠后仍能按 aria-label 找到全部动词', () => {
+    renderFullBar();
+    // 标签折叠不影响无障碍名 —— 名字来自 aria-label，不来自零宽的 span。
+    expect(screen.getByLabelText('标记保留 (Pick)')).toBeInTheDocument();
+    expect(screen.getByLabelText('标记淘汰 (Reject)')).toBeInTheDocument();
+    expect(screen.getByLabelText('调色面板')).toBeInTheDocument();
+    expect(screen.getByLabelText('在 Luminar AI 中修图')).toBeInTheDocument();
+    expect(screen.getByLabelText('在修图或外部程序中打开')).toBeInTheDocument();
+  });
+});
