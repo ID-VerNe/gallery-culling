@@ -1,6 +1,56 @@
 # AGENTS.md — 本项目协作须知
 
-给在本仓库工作的任何 AI agent（以及新加入的人类）的一页式说明。改动前先读完本文，尤其是「红线」一节。
+给在本仓库工作的任何 AI agent（以及新加入的人类）的一页式说明。改动前先读完本文，尤其是「迭代流程」与「红线」两节。
+
+---
+
+## 0. 迭代流程（先读这一节）
+
+所有仓库改动（代码、文档、门禁、配置）走五步，缺一步即不合规。细则：发 issue 看 [`doc/ISSUE_GUIDE.md`](doc/ISSUE_GUIDE.md)，开 PR 看 [`doc/PR_GUIDE.md`](doc/PR_GUIDE.md)。
+
+1. **先发 issue（发现即提，不等批准）**：正文四要素齐全——现象（行为类必须带一条可直接粘贴的复现命令）/ 证据链（`文件:行号`）/ 影响面（P0–P2）/ 修复候选。给不出复现命令就贴 `needs-repro`。issue 是执行与验收的唯一依据。
+2. **写 plan 追评到 issue 下面**：探索结论（带证据）+ 方案 + **明确不做** + 验证方式，并含一行「用 issue 的复现命令复现：成功 / 失败（贴原始输出）」。复现失败说明描述与现状不符，退回补充，不进实施；定稿后只追加不改口。
+3. **开 worktree 改代码**：`git worktree add ../gallery-flask-<issue> -b type/<issue>-<slug> master`，不在主工作区切分支；分支 / PR 标题 / commit **三处都带 issue 号**。worktree 里没有 `node_modules` 与 `src-tauri/binaries`，见 PR_GUIDE「分支」一节。
+4. **开 PR**：正文分段齐全（问题 / 改动 / 测试 / 基线验证 / 门禁改动 / 影响面 / 验收对照）；`Closes` 只给纯文档与纯重构，**行为类用 `Refs`**。CI 全绿 + 无冲突才合并（merge commit，不 squash、不 rebase）。
+5. **合并后对账与回签**：修复者逐项核对「自述 vs 实际」（`git status`、文件存在性、门禁原始输出），给行为类 issue 贴 `needs-live-verify`；由发现者或**全新上下文**的会话按 PR_GUIDE 的模板回签，**回签通过才关 issue**。修复者不能给自己回签。
+
+### 0.1 门禁清单只有一个事实来源
+
+本地与 CI 跑同一份清单 [`scripts/gates.json`](scripts/gates.json)，执行器是 `scripts/run-gates.mjs`：
+
+```bash
+npm run gates                              # 全量（tsc + vitest + cargo test，按清单顺序）
+npm run gates:static                       # 只跑最便宜的一档（pre-push 用这个）
+node scripts/run-gates.mjs ci --fail-fast  # 本机快速试错：见到红就停
+node scripts/run-gates.mjs --list          # 看档位、分片与执行顺序
+```
+
+- **新增门禁只改清单**，然后跑 `node scripts/check-gates-manifest.mjs --write` 重写下面这段；手改会被元门禁打红（磁盘脚本、清单、本节、`ci.yml` 分片矩阵四者必须一致）。
+- 片内**串行**执行：并发跑会让 App 级集成用例在 5s 超时上假红（见 §0.2）。
+- 真窗口 e2e（`npm run e2e:render` / `e2e:preset`）在 `manual` 档，CI 跑不了（WebView2 CDP 只服务第一个请求）。
+- 钩子靠本地配置生效：`git config core.hooksPath .githooks`（换机器后重设一次）。`commit-msg` 拦文案格式与 `Co-Authored-By:`，`pre-push` 跑 static 分片（`SKIP_GATES=1` 可跳过并留痕）。
+
+<!-- gates:ci:begin -->
+> 本节由 `node scripts/check-gates-manifest.mjs --write` 从 `scripts/gates.json` 生成，**不要手改**；顺序即本机全量执行顺序，`分片` 列即 CI matrix 分片（同片串行、片间并行）。
+
+| # | 分片 | 门禁 | 防什么 |
+|---|---|---|---|
+| 1 | `static` | `check-gates-manifest.mjs` | 元门禁：磁盘 check-*.mjs、本清单、AGENTS.md 生成段、ci.yml 分片矩阵四者零漂移 |
+| 2 | `static` | `check-fmt-baseline.mjs` | `cargo fmt --check` 差异处数不得超过 gates.json 的 fmtBaseline（防裸跑 fmt 重排整个 crate） |
+| 3 | `static` | `tsc --noEmit` | TypeScript 类型检查（tsconfig 只覆盖 src，scripts 是纯 JS 不参与） |
+| 4 | `unit` | `vitest` | 前端全量用例；--pool=vmForks 见 vitest.config.ts 的 pool 说明（Windows 上的既定跑法） |
+| 5 | `rust` | `cargo test --lib` | 后端全量单测（真 tmpdir，不 mock fs）；7 例真机冒烟默认 ignored |
+
+共 5 个 CI 门禁，分 3 个分片（static 3、unit 1、rust 1）；manual 2、support 0 见 `scripts/gates.json`。
+<!-- gates:ci:end -->
+
+### 0.2 证据与验证纪律
+
+- **无证据不修复**：任何 finding 必须带可直接粘贴的 `文件:行号` 证据才进入修复；没有证据的视为虚构。
+- **完成声明以磁盘为准**：任何「已完成」都要独立用 `git status`、文件存在性、门禁原始输出复核，不采信转述。
+- **门禁安静窗口 solo 执行**：测试按序单独跑，不在并发写窗口内跑。红了先判断是代码问题还是环境问题——用 pristine HEAD 的 worktree 对照跑一遍；同族失败即既有抖动，记录在案，不要盲目「修复」。
+- 已知抖动：满负荷跑全量时 `App.scanProgress` / `App.taskMutex` / `App.toneSave` 曾因默认 5s 超时假红（master 基线同条件复跑同样失败，单独复跑全绿）。2026-11-01 起 `vitest.config.ts` 的 `testTimeout` 放宽到 15s，只影响「卡住多久算挂」，不放松断言。
+- **变异验证**：见红线 6。
 
 ---
 
@@ -13,17 +63,13 @@
 | 目录名 | `gallery-flask`（**与包名不一致，别被目录名误导**） |
 | 技术栈 | Tauri 2.x + React 19 + TypeScript + Tailwind CSS |
 | 包管理器 | **npm**（已从 pnpm 迁移，仓库里没有 pnpm-lock.yaml） |
-| 主开发线 | `master`（直接提交或 fix 分支 + PR 均可） |
+| 主开发线 | `master`（改动走 issue → worktree → PR → 合并，见 §0；不再直接提交） |
 | 平台 | 仅 Windows（WebView2），发版只出 NSIS setup.exe |
 
 ## 2. 红线（违反任何一条都不算完成任务）
 
-1. **不留红 commit**。每一步改动完成即跑：
-   - `npx tsc --noEmit`
-   - `npx vitest run --pool=vmForks`（全量）
-   - `cargo test --lib`（在 `src-tauri/` 下）
-   - 涉及渲染/端到端行为时另跑 `npm run e2e:render`
-2. **`cargo fmt` 不裸跑**。基线里刻意保留约 120 处格式差异（2026-10-19 复核 123 处，会随新代码增长），裸跑会重排整个 crate、污染 diff。要格式化只针对自己新写的段落手工对齐；**新文件可以单独 `rustfmt --edition 2021 <file>`**（只碰它自己），但跑完 `cargo fmt --check` 要确认基线处数没变。
+1. **不留红 commit**。每一步改动完成即跑 `npm run gates`（= 清单里的 tsc + vitest + cargo test，见 §0.1）；涉及渲染/端到端行为时另跑 `npm run e2e:render`。
+2. **`cargo fmt` 不裸跑**。基线里刻意保留 122 处格式差异（`scripts/gates.json` 的 `fmtBaseline`，会随新代码增长），裸跑会重排整个 crate、污染 diff。要格式化只针对自己新写的段落手工对齐；**新文件可以单独 `rustfmt --edition 2021 <file>`**（只碰它自己）。这条已由 `check-fmt-baseline.mjs` 门禁执行：差异处数超过基线即红。
 3. **不动 `stash@{0}`**（历史遗留，内容未知）。
 4. **不新建仓库内 CLAUDE.md**（本文件 AGENTS.md 是唯一协作说明）。
 5. **批量删 Rust 顶层 item 的方法**：一次性读全文 → 切两段 → 拼回写盘。不要做两次独立的字符串切片，会撕破文件。
@@ -47,7 +93,7 @@
   - `src/utils/lensPresets.ts` + `src/hooks/useLensPresets.ts` —— 镜头快捷预设（ADR-013）：**纯逻辑与 IO 分开**；`sanitizeLensPresets([])` 返回空数组，删空后**不复种**出厂 6 条
 - `src-tauri/src/watermark.rs` —— 边框水印（ADR-012）：宿主自绘、只对 JPEG、挂点在导出临时文件上；4 预设 + 字号 8–35；运行时读系统字体链（msyh.ttc 优先，**不打包**）
 - hooks 内部直接调 `useToast()` 是既定模式，不要往上传回调。
-- 测试规模（2026-10-19）：Rust 346 个测试函数（339 通过 + 7 例真机冒烟 ignored）/ 前端 812 用例。
+- 测试规模（2026-11-01）：Rust 352 个测试函数（345 通过 + 7 例真机冒烟 ignored）/ 前端 835 用例。
 
 ### 导出域规则（2026-10 UX 审计后固化，见 `.plan/export-ux-audit-2026-10-17.md`）
 
@@ -60,6 +106,22 @@
 - **清单兼容**：`ExportManifest` 新增字段一律配 `skip_serializing_if`（bool 用自写的 `is_false`，`std::ops::Not::not` 收值不收引用会类型不匹配）。`EXPORT_MANIFEST_NAME = ".gallery-export.json"` 前后端两处定义必须一致。
 - **水印契约（ADR-012，2026-10-19）**：水印只对 JPEG 生效（`formatUsesWatermark`）；manifest 的 `watermark: Option<bool>` + `warning: Option<String>` 是**可省字段**——没要求水印的批次两个键整个不出现，`Some(false)` 才是「要求了但没加上」，**刻意不复用 `error`**（那意味着导出失败，而水印只是装饰）；`api.batchRenderExport` 第九参 `watermark` 没勾 / `enabled:false` 都**不传键**（「键不存在」正是清单要记录的状态，`src/services/api.test.ts` 锁着）；水印 EXIF 走 `read_exif_preferring_jpg`（配对 JPG 优先，0.14ms vs RAW 11.1ms，全项目唯一顺序）。
 - **打开目录用 `open_folder_cmd`（opener 插件）**，不要走 `cmd /c start "" <path>`——路径含 `&` / `^` 会被 cmd 重新解析。
+
+### 单一归属（新增代码的落脚点）
+
+复制粘贴前先查下表；新代码收敛到既有归属，而不是再造副本（同 IdleJot 的 §2.5，本仓版）：
+
+| 关注点 | 唯一归属 |
+|---|---|
+| 视口缩放几何 | `src/utils/viewportZoom.ts` |
+| RAW-only 的 `src` 规则 | `src/utils/viewportImage.ts`（无 JPG 的 RAW 分组 `src` 必须为 `null`，不回落 `.NEF`） |
+| 拖拽 / 缩放交互 | `src/hooks/useZoomPan` / `useDualZoomPan` |
+| 导出文件数口径 | `src/hooks/useExportForm` 的 `expectedFileCount`（后端 `export.rs` 的 `exported` 必须同口径） |
+| 导出清单字段兼容 | `src-tauri/src/export.rs` 的 `ExportManifest`（新字段一律 `skip_serializing_if`） |
+| 边框水印 | `src-tauri/src/watermark.rs`（ADR-012，只对 JPEG） |
+| 镜头快捷预设 | `src/utils/lensPresets.ts`（纯逻辑）+ `src/hooks/useLensPresets.ts`（IO） |
+| 门禁清单 / 执行器 | `scripts/gates.json` + `scripts/run-gates.mjs`（**不要在别处再写一份命令数组**） |
+| 迭代流程细则 | `doc/ISSUE_GUIDE.md` / `doc/PR_GUIDE.md` |
 
 ## 4. 环境坑（每个都真实踩过）
 
@@ -78,9 +140,9 @@
 
 ### Commit message
 
-- 格式 `type(scope): 中文摘要` + 正文。正文实际沿用仓库习惯：中文要点列表（`- ` 起头），说清**为什么这么改**与实测数字，不要只列改了哪些文件；参考 `git log` 里 `feat(album)` / `docs(album)` 那几篇。
-- **逐个 `git add <file>`**，禁止 `git add .` / `-A` / 目录批量；提交前全量验证（见红线 1），push 前确认 `git status` 干净。
-- Commit message 里**禁止** `Co-Authored-By:` 行。
+- 格式 `type(scope): 中文摘要（issue #NN）` + 正文。**三处带 issue 号**：分支名、PR 标题、commit。正文实际沿用仓库习惯：中文要点列表（`- ` 起头），说清**为什么这么改**与实测数字，不要只列改了哪些文件；参考 `git log` 里 `feat(album)` / `docs(album)` 那几篇。
+- **逐个 `git add <file>`**，禁止 `git add .` / `-A` / 目录批量；提交前跑 `npm run gates`（见红线 1），push 前确认 `git status` 干净。
+- Commit message 里**禁止** `Co-Authored-By:` 行——`.githooks/commit-msg` 会直接拦下；同一钩子也校验首行格式。
 
 ### 发布流程（v2.0.1/v2.0.3 实证）
 
@@ -106,6 +168,10 @@
 
 | 文件 | 内容 |
 |---|---|
+| `doc/ISSUE_GUIDE.md` | 怎么发 issue：正文四要素、复现命令与 `needs-repro`、关闭方式、模板 |
+| `doc/PR_GUIDE.md` | 怎么开 PR：拆分命名、正文分段、基线验证、门禁改动与独立复核、合并条件、对账与回签 |
+| `scripts/gates.json` | 门禁清单**唯一事实来源**（§0.1 的生成段由它渲染） |
+| `.plan/iteration-workflow-2026-11-01.md` | issue #6 的实施方案（移植对照表、门禁契约、测试计划） |
 | `.plan/export-ux-audit-2026-10-17.md` | 导出 UX 审计：14 条 finding、评分 6/10、修复依据 |
 | `.plan/execution-log-2026-10-14.md` | 16-18 节是 FE-03b/FE-06/FE-07 全程记录 |
 | `.plan/remediation-verification-ledger-2026-10-13.md` | 62 项逐条裁决台账 |

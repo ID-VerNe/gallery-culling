@@ -1,0 +1,3 @@
+# Git hooks 走 sh：CRLF 的 shebang 在 Windows 检出上会直接报错
+# （`#!/bin/sh\r` 找不到解释器，钩子静默失效）。所以强制 LF。
+.githooks/* text eol=lf

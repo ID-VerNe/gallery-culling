@@ -1,0 +1,83 @@
+name: 门禁
+
+# 本地与 CI 跑的是同一份清单（scripts/gates.json），CI 只负责按分片调起执行器。
+# 新增门禁只改清单，然后 `node scripts/check-gates-manifest.mjs --write` 同步
+# AGENTS.md 的生成段；这里的分片矩阵由元门禁钉住，不手改。
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 同一分支/PR 的新推送取消旧运行，不让上一轮白烧 runner。
+concurrency:
+  group: gates-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    # 本仓仅 Windows（WebView2 + NSIS），没有第二条平台链要验。
+    name: gates (${{ matrix.shard }})
+    runs-on: windows-latest
+    timeout-minutes: 40
+    strategy:
+      # 分片互不影响：一片红不取消其余片，一次红灯看全貌。
+      fail-fast: false
+      matrix:
+        shard: [static, unit, rust]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # rust 分片不跑前端门禁，省一次 npm ci。
+      - name: 安装前端依赖
+        if: matrix.shard != 'rust'
+        run: npm ci
+
+      # static 分片也要 rustfmt（check-fmt-baseline.mjs 数的是 cargo fmt 的差异处数），
+      # 所以只装工具链、不编译；rust 分片才需要缓存与编译。
+      - uses: dtolnay/rust-toolchain@stable
+        if: matrix.shard != 'unit'
+        with:
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        if: matrix.shard == 'rust'
+        with:
+          workspaces: src-tauri
+
+      # src-tauri/binaries/ 被 gitignore（184MB sidecar），但 tauri 构建脚本要求
+      # `resources` 的 glob 至少命中一个文件，否则 build script 直接失败。
+      - name: 占位 sidecar 资源
+        if: matrix.shard == 'rust'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force src-tauri/binaries/lumen-cli | Out-Null
+          New-Item -ItemType File -Force src-tauri/binaries/lumen-cli/ci-placeholder.txt | Out-Null
+
+      - name: 门禁（scripts/gates.json）
+        run: node scripts/run-gates.mjs ci --shard ${{ matrix.shard }}
+
+  checks:
+    # 分支保护要求的必需上下文就是这个汇总 job：matrix 的检查名是
+    # `gates (static)` 之类，任一色分片没绿即失败。
+    name: checks
+    needs: gates
+    if: always()
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - name: 汇总分片结果
+        shell: pwsh
+        env:
+          MATRIX_RESULT: ${{ needs.gates.result }}
+        run: |
+          "分片矩阵结果：$env:MATRIX_RESULT" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          if ($env:MATRIX_RESULT -ne 'success') { exit 1 }
