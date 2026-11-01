@@ -168,12 +168,25 @@ describe('BeforeAfterViewport —— 底栏几何冻结（issue #12）', () => {
     });
   }
 
-  function barOf(container: HTMLElement): HTMLElement {
+  /**
+   * 底栏分组宿主：带 `group/bar` 命名组的那一层。它是**包裹层**而非底板
+   * （issue #14 根因），几何断言瞄准的仍是底板。
+   */
+  function groupHostOf(container: HTMLElement): HTMLElement {
     const anchor = container.querySelector('[aria-label="照片星级打分"]');
     expect(anchor).not.toBeNull();
-    const bar = anchor!.closest('div[class*="group/bar"]');
-    expect(bar, '底栏应带 group/bar 命名组').not.toBeNull();
-    return bar as HTMLElement;
+    const host = anchor!.closest('div[class*="group/bar"]');
+    expect(host, '底栏应带 group/bar 命名组').not.toBeNull();
+    return host as HTMLElement;
+  }
+
+  /** 底栏底板：分组宿主的直接子层（命中层所在的那一层）。 */
+  function barOf(container: HTMLElement): HTMLElement {
+    const host = groupHostOf(container);
+    const plate = host.querySelector('[data-bar-hit-area]')?.parentElement;
+    expect(plate, '底栏底板应为分组宿主的子层').toBeTruthy();
+    expect(plate).not.toBe(host);
+    return plate as HTMLElement;
   }
 
   it('底栏与其内部元素都不许用悬停变体改尺寸', () => {
@@ -211,7 +224,9 @@ describe('BeforeAfterViewport —— 底栏几何冻结（issue #12）', () => {
     const { container } = renderBA();
     const called = classTokens(barOf(container));
 
-    expect(called).toContain('group/bar');
+    // `group/bar` 现在挂在外层宿主上（issue #14），底板只剩变体类。
+    expect(classTokens(groupHostOf(container))).toContain('group/bar');
+    expect(called).not.toContain('group/bar');
     expect(called).not.toContain('bg-background-base/90');
     expect(called).not.toContain('shadow-2xl');
     expect(called).toContain('group-hover/bar:bg-background-base/90');
@@ -238,5 +253,74 @@ describe('BeforeAfterViewport —— 底栏几何冻结（issue #12）', () => {
       expect(star.className).not.toContain('hover:scale');
       expect(star.className).toContain('tap-target');
     });
+  });
+});
+
+/** 底栏视觉层级（issue #14）：与单图视口同形，共享 `viewportBarStyles.ts`。 */
+describe('BeforeAfterViewport —— 底栏视觉层级（issue #14）', () => {
+  function tokens(el: Element): string[] {
+    return (el.getAttribute('class') ?? '').split(/\s+/).filter(Boolean);
+  }
+
+  function groupHostOf(container: HTMLElement): HTMLElement {
+    const anchor = container.querySelector('[aria-label="照片星级打分"]');
+    const host = anchor?.closest('div[class*="group/bar"]');
+    expect(host, '底栏应带 group/bar 命名组').toBeTruthy();
+    return host as HTMLElement;
+  }
+
+  function barOf(container: HTMLElement): HTMLElement {
+    const host = groupHostOf(container);
+    const plate = host.querySelector('[data-bar-hit-area]')?.parentElement;
+    expect(plate, '底栏底板应为分组宿主的子层').toBeTruthy();
+    return plate as HTMLElement;
+  }
+
+  /**
+   * 根因防回归（issue #14）：Tailwind 把 `group-hover/bar:x` 编译成**后代
+   * 选择器**，元素不可能是自己的祖先。`group/bar` 一旦和变体类同元素，
+   * 那批规则全部静默失效，而 jsdom 与 className 断言都看不出来。
+   */
+  it('group/bar 必须是变体元素的严格祖先', () => {
+    const { container } = renderBA();
+    const host = groupHostOf(container as HTMLElement);
+    const variantEls = Array.from(
+      container.querySelectorAll('[class*="group-hover/bar:"], [class*="group-focus-within/bar:"]'),
+    );
+
+    expect(variantEls.length).toBeGreaterThan(0);
+    for (const el of variantEls) {
+      expect(el.matches('[class*="group/bar"]')).toBe(false);
+      expect(host !== el && host.contains(el)).toBe(true);
+    }
+    expect(barOf(container as HTMLElement).parentElement).toBe(host);
+  });
+
+  it('整条 bar 静息下沉、悬停回正（只用 translate）', () => {
+    const { container } = renderBA();
+    const bar = barOf(container as HTMLElement);
+    const called = tokens(bar);
+
+    expect(called).toContain('translate-y-1');
+    expect(called).toContain('group-hover/bar:translate-y-0');
+    expect(called).toContain('group-focus-within/bar:translate-y-0');
+    expect(bar.className).not.toMatch(/group-(hover|focus-within)\/bar:scale-/);
+  });
+
+  it('图标静息半透明（.bar-icons），不是全隐', () => {
+    const { container } = renderBA();
+    const bar = barOf(container as HTMLElement);
+    const star = bar.querySelector('[aria-label="评 1 星"]')!;
+
+    expect(tokens(star)).toContain('bar-icons');
+    expect(star.className).not.toContain('opacity-0');
+    expect(bar.querySelectorAll('[class*="bar-icons"]').length).toBeGreaterThanOrEqual(7);
+  });
+
+  it('命中层纯透明，悬停不自绘背景', () => {
+    const { container } = renderBA();
+    const hit = barOf(container as HTMLElement).querySelector('[data-bar-hit-area]')!;
+
+    expect(hit.className).not.toMatch(/group-(hover|focus-within)\/bar:bg-/);
   });
 });

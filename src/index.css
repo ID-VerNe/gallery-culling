@@ -202,6 +202,47 @@
     text-align: center;
     display: inline-block;
   }
+
+  /* ---------------------------------------------------------------
+     主视口底栏的图标不透明度（issue #14）。
+
+     #12 只把**文字**收起来，图标与底板盒子仍常驻绘制 —— 用户看到的是
+     「一条永远在的工具条」，等于没隐藏。这里把静息态压到 45%，
+     悬停/聚焦回到全亮。
+
+     为什么不是 0：F-02 的结论是核心动词必须可发现，整条隐掉会让用户
+     找不到这就是当初 `opacity-0` 方案被否掉的原因。
+
+     为什么写成组件类而不是十几个 `group-hover/bar:opacity-100`：
+     两个视口共 20+ 个图标按钮，散写必然漂移；这个类由
+     `viewportBarStyles.ts` 的 `BAR_ICONS` 统一引用。
+     --------------------------------------------------------------- */
+  .bar-icons {
+    opacity: 0.45;
+    transition: opacity 200ms ease-out;
+  }
+
+  /* 用属性选择器而不是 `.group\/bar`：类名里带 `/` 的变体在 CSS 里手写转义
+     容易被后续编辑改坏，属性写法不依赖转义，语义也更直白。 */
+  [class~="group/bar"]:hover .bar-icons,
+  [class~="group/bar"]:focus-within .bar-icons {
+    opacity: 1;
+  }
+}
+
+/* 减少动态效果（issue #14）：去掉位移，只保留透明度过渡。 */
+@media (prefers-reduced-motion: reduce) {
+  /* 底栏整条的浮起位移在这里取消（Tailwind 的 translate-y-* 走 CSS 变量）。
+     用属性选择器而不是 `.group\/bar`：类名里带 `/` 的变体手写转义容易失效，
+     属性写法不依赖转义。 */
+  [class~="group/bar"] > [class*="translate-y"] {
+    transform: translate(var(--tw-translate-x, 0), 0) !important;
+  }
+
+  .bar-icons,
+  .bar-label {
+    transition-duration: 0ms;
+  }
 }
 
 /* 提高对比度偏好（E8）：在既有令牌基础上进一步抬高结构性边框与次要分隔线。 */

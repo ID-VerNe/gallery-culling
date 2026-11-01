@@ -515,13 +515,27 @@ describe('PreviewViewport —— 底栏几何冻结（issue #12）', () => {
     return { container: document.body };
   }
 
-  /** 底栏本体：带 `group/bar` 命名组的那一层（内部第一个分组是星级打分）。 */
-  function barOf(container: HTMLElement): HTMLElement {
+  /**
+   * 底栏分组宿主：带 `group/bar` 命名组的那一层。
+   *
+   * 注意它现在是**包裹层**而不是底板本身（issue #14 根因）—— 见下面的
+   * 「group/bar 必须是变体元素的祖先」用例。几何断言瞄准的仍是底板。
+   */
+  function groupHostOf(container: HTMLElement): HTMLElement {
     const anchor = container.querySelector('[aria-label="照片星级打分"]');
     expect(anchor).not.toBeNull();
-    const bar = anchor!.closest('div[class*="group/bar"]');
-    expect(bar, '底栏应带 group/bar 命名组').not.toBeNull();
-    return bar as HTMLElement;
+    const host = anchor!.closest('div[class*="group/bar"]');
+    expect(host, '底栏应带 group/bar 命名组').not.toBeNull();
+    return host as HTMLElement;
+  }
+
+  /** 底栏本体（底板）：分组宿主的直接子层，命中层所在的这一层。 */
+  function barOf(container: HTMLElement): HTMLElement {
+    const host = groupHostOf(container);
+    const plate = host.querySelector('[data-bar-hit-area]')?.parentElement;
+    expect(plate, '底栏底板应为分组宿主的子层').toBeTruthy();
+    expect(plate).not.toBe(host);
+    return plate as HTMLElement;
   }
 
   it('底栏本体：任何悬停/聚焦变体都不改尺寸（只允许颜色、透明度、阴影）', () => {
@@ -569,7 +583,9 @@ describe('PreviewViewport —— 底栏几何冻结（issue #12）', () => {
     const { container } = renderFullBar();
     const called = classTokens(barOf(container));
 
-    expect(called).toContain('group/bar');
+    // `group/bar` 现在挂在外层宿主上（issue #14），底板只剩变体类。
+    expect(classTokens(groupHostOf(container))).toContain('group/bar');
+    expect(called).not.toContain('group/bar');
     expect(called).not.toContain('bg-background-base/90');
     expect(called).not.toContain('shadow-2xl');
     expect(called).not.toContain('border-white/15');
@@ -612,5 +628,119 @@ describe('PreviewViewport —— 底栏几何冻结（issue #12）', () => {
       // 24×24 保底（WCAG 2.2 SC 2.5.8）要留着。
       expect(star.className).toContain('tap-target');
     });
+  });
+});
+
+/**
+ * 底栏视觉层级（issue #14）。
+ *
+ * #12 只把**文字**收了起来，图标与底板盒子都还是常驻绘制，用户看到的是
+ * 「一条永远在的工具条」，等于没隐藏。本组钉住三件事：
+ *
+ * 1. 整条 bar 静息时下沉 4px、悬停回到 0 —— 位移走 `translate`，不重排，
+ *    所以 #12 的几何冻结不受影响（上一组用例仍在跑，是交叉验证）；
+ * 2. 图标静息压到半透明（不是 0：F-02 要求核心动词可发现）；
+ * 3. 命中层纯透明，不再自绘 3% 白（那是悬停瞬间多出来的一层「闪」）。
+ */
+describe('PreviewViewport —— 底栏视觉层级（issue #14）', () => {
+  function renderFullBar() {
+    render(
+      <PreviewViewport
+        group={group}
+        onPrev={vi.fn()}
+        onNext={vi.fn()}
+        onRate={vi.fn()}
+        onFlag={vi.fn()}
+        onOpenExternal={vi.fn()}
+        onOpenLuminar={vi.fn()}
+        onToggleTonalAdjuster={vi.fn()}
+      />,
+    );
+    return { container: document.body };
+  }
+
+  function groupHostOf(container: HTMLElement): HTMLElement {
+    const anchor = container.querySelector('[aria-label="照片星级打分"]');
+    const host = anchor?.closest('div[class*="group/bar"]');
+    expect(host, '底栏应带 group/bar 命名组').toBeTruthy();
+    return host as HTMLElement;
+  }
+
+  function barOf(container: HTMLElement): HTMLElement {
+    const host = groupHostOf(container);
+    const plate = host.querySelector('[data-bar-hit-area]')?.parentElement;
+    expect(plate, '底栏底板应为分组宿主的子层').toBeTruthy();
+    return plate as HTMLElement;
+  }
+
+  function tokens(el: Element): string[] {
+    return (el.getAttribute('class') ?? '').split(/\s+/).filter(Boolean);
+  }
+
+  /**
+   * 根因防回归（issue #14）。
+   *
+   * Tailwind 把 `group-hover/bar:x` 编译成**后代选择器**
+   * `.group\/bar:hover .group-hover\/bar\:x`。元素不可能是自己的祖先，
+   * 所以只要 `group/bar` 和变体类挂在同一个元素上，那 8 条规则**一条都不
+   * 命中** —— 而 jsdom 不跑层叠、原先的 className 断言也照样全绿。
+   *
+   * 这条用例不测「长什么样」，只测「结构与选择器语义一致」：带 `group/bar`
+   * 的元素必须是带 `group-hover/bar:` 变体的那个元素的**严格祖先**。
+   */
+  it('group/bar 必须是变体元素的严格祖先（后代选择器不会把自身当祖先）', () => {
+    const { container } = renderFullBar();
+    const host = groupHostOf(container);
+    const variantEls = Array.from(
+      container.querySelectorAll('[class*="group-hover/bar:"], [class*="group-focus-within/bar:"]'),
+    );
+
+    expect(variantEls.length, '底栏应存在悬停/聚焦变体').toBeGreaterThan(0);
+
+    for (const el of variantEls) {
+      expect(
+        el.matches('[class*="group/bar"]'),
+        `${(el.getAttribute('class') ?? '').slice(0, 60)} 不得同时挂 group/bar`,
+      ).toBe(false);
+      expect(
+        host.contains(el) && host !== el,
+        '带变体的元素必须落在 group/bar 宿主的子树内',
+      ).toBe(true);
+    }
+
+    // 宿主自己就是那个严格的祖先：底板是它的子层。
+    expect(barOf(container).parentElement).toBe(host);
+  });
+
+  it('整条 bar 静息下沉、悬停回正：位移只用 translate，且不进几何', () => {
+    const { container } = renderFullBar();
+    const called = tokens(barOf(container));
+
+    expect(called, '静息应有上浮量').toContain('translate-y-1');
+    expect(called, '悬停应回到原位').toContain('group-hover/bar:translate-y-0');
+    expect(called, '聚焦也应回到原位').toContain('group-focus-within/bar:translate-y-0');
+    // 位移式浮现绝不能用 scale：它会连动命中层并放大像素边界。
+    expect(barOf(container).className).not.toMatch(/group-(hover|focus-within)\/bar:scale-/);
+  });
+
+  it('图标静息半透明、悬停全亮：用 .bar-icons 统一承载，不是 0（可发现性）', () => {
+    const { container } = renderFullBar();
+    const bar = barOf(container);
+    const star = bar.querySelector('[aria-label="评 1 星"]')!;
+
+    expect(tokens(star), '星标应挂 bar-icons').toContain('bar-icons');
+    // 半透明而非全隐：静息态仍要能看出「这里有一排控件」。
+    expect(star.className).not.toContain('opacity-0');
+    // 取样足够多的按钮，确认不是只给星标挂了。
+    const withIcons = bar.querySelectorAll('[class*="bar-icons"]');
+    expect(withIcons.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it('命中层纯透明：悬停不得自绘背景（去掉 3% 白的那层「闪」）', () => {
+    const { container } = renderFullBar();
+    const hit = barOf(container).querySelector('[data-bar-hit-area]')!;
+
+    expect(hit.className).not.toContain('group-hover/bar:bg-white/[0.03]');
+    expect(hit.className).not.toMatch(/group-(hover|focus-within)\/bar:bg-/);
   });
 });

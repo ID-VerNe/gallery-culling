@@ -25,7 +25,10 @@ import { ExifCapsule } from './ExifCapsule';
 import {
   BAR_BUTTON,
   BAR_DIVIDER,
+  BAR_GROUP_HOST,
   BAR_HIT_AREA,
+  BAR_ICONS,
+  BAR_ICON_BUTTON,
   BAR_LABEL,
   BAR_PLATE,
   BAR_STAR_BUTTON,
@@ -342,156 +345,162 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
             Hiding is done by opacity on the label slot, not by clipping.
           - `pointer-events-none` on the plate + a larger child hit area
             means the pixels around the icons do not swallow clicks meant
-            for the photo beneath, while the bar still opens on approach. */}
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className={`${BAR_PLATE} pointer-events-none`}
-      >
-        {/* Hit area: covers the plate plus a ring around it. Transparent and
-            size-constant, so it can never be the thing that changes size. */}
-        <div className={BAR_HIT_AREA} data-bar-hit-area aria-hidden="true" />
+            for the photo beneath, while the bar still opens on approach.
+          - The `group/bar` host is a separate wrapper (issue #14): Tailwind
+            compiles `group-hover/bar:x` to a DESCENDANT selector, so an
+            element can never be its own group ancestor. See the root-cause
+            note in `viewportBarStyles.ts`. */}
+      <div className={BAR_GROUP_HOST}>
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className={`${BAR_PLATE} pointer-events-none`}
+        >
+          {/* Hit area: covers the plate plus a ring around it. Transparent and
+              size-constant, so it can never be the thing that changes size. */}
+          <div className={BAR_HIT_AREA} data-bar-hit-area aria-hidden="true" />
 
-        {/* Rating Stars (1 to 5) */}
-        <div className={BAR_DIVIDER} role="group" aria-label="照片星级打分">
-          {[1, 2, 3, 4, 5].map((star) => (
+          {/* Rating Stars (1 to 5) */}
+          <div className={BAR_DIVIDER} role="group" aria-label="照片星级打分">
+            {[1, 2, 3, 4, 5].map((star) => (
+              <button
+                key={star}
+                onClick={() => onRate(group.rating === star ? 0 : star)}
+                className={`${BAR_STAR_BUTTON} ${BAR_ICONS} ${
+                  group.rating >= star
+                    ? 'text-amber-400 hover:text-amber-300'
+                    : 'text-white/60 hover:text-white'
+                }`}
+                title={`评 ${star} 星（${star}）`}
+                aria-label={`评 ${star} 星`}
+                aria-pressed={group.rating >= star}
+              >
+                <Star
+                  className={`w-4 h-4 ${group.rating >= star ? 'fill-amber-400' : ''}`}
+                  aria-hidden="true"
+                />
+              </button>
+            ))}
+          </div>
+
+          {/* Pick / Reject / Unflag */}
+          <div className={BAR_DIVIDER} role="group" aria-label="保留或淘汰标记">
             <button
-              key={star}
-              onClick={() => onRate(group.rating === star ? 0 : star)}
-              className={`${BAR_STAR_BUTTON} ${
-                group.rating >= star
-                  ? 'text-amber-400 hover:text-amber-300'
-                  : 'text-white/60 hover:text-white'
+              onClick={() => onFlag(group.flag === 'pick' ? 'none' : 'pick')}
+              className={`${BAR_BUTTON} ${BAR_ICONS} ${
+                group.flag === 'pick'
+                  ? 'bg-emerald-600/40 text-emerald-300 border border-emerald-500/50'
+                  : 'bg-white/10 text-white/80 hover:bg-white/20 border border-transparent'
               }`}
-              title={`评 ${star} 星（${star}）`}
-              aria-label={`评 ${star} 星`}
-              aria-pressed={group.rating >= star}
+              title="保留 (P)"
+              aria-label="标记保留 (Pick)"
+              aria-pressed={group.flag === 'pick'}
             >
-              <Star
-                className={`w-4 h-4 ${group.rating >= star ? 'fill-amber-400' : ''}`}
+              <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span className={BAR_LABEL}>Pick</span>
+            </button>
+            <button
+              onClick={() => onFlag(group.flag === 'reject' ? 'none' : 'reject')}
+              className={`${BAR_BUTTON} ${BAR_ICONS} ${
+                group.flag === 'reject'
+                  ? 'bg-rose-600/40 text-rose-300 border border-rose-500/50'
+                  : 'bg-white/10 text-white/80 hover:bg-white/20 border border-transparent'
+              }`}
+              title="淘汰 (X)"
+              aria-label="标记淘汰 (Reject)"
+              aria-pressed={group.flag === 'reject'}
+            >
+              <X className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span className={BAR_LABEL}>Reject</span>
+            </button>
+          </div>
+
+          {/* Zoom: – / readout / reset / +
+              Zoom used to live only on wheel and double-click, both of which
+              are undiscoverable and keyboard-inaccessible (F-25). */}
+          <div className={BAR_DIVIDER} role="group" aria-label="缩放控制">
+            <button
+              onClick={() => zoom.zoomBy(1 / ZOOM_STEP)}
+              disabled={zoom.scale <= ZOOM_MIN}
+              className={`${BAR_ICON_BUTTON} ${BAR_ICONS}`}
+              title="缩小"
+              aria-label="缩小"
+            >
+              <ZoomOut className="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+            {/* Zoom readout: same constant-width slot as the text labels, so
+                the value going 100% → 1000% cannot drag the plate wider. */}
+            <span
+              className={`${BAR_LABEL} font-mono tabular-nums text-[11px] text-white/80 select-none`}
+              aria-label={`当前缩放 ${zoomLabel}`}
+            >
+              {zoomLabel}
+            </span>
+            <button
+              onClick={() => zoom.zoomBy(ZOOM_STEP)}
+              disabled={zoom.scale >= ZOOM_MAX}
+              className={`${BAR_ICON_BUTTON} ${BAR_ICONS}`}
+              title="放大"
+              aria-label="放大"
+            >
+              <ZoomIn className="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+            <button
+              onClick={zoom.reset}
+              className={`${BAR_ICON_BUTTON} ${BAR_ICONS}`}
+              title={`重置缩放与平移（当前 ${zoomLabel}）`}
+              aria-label={`重置缩放与平移，当前 ${zoomLabel}`}
+            >
+              <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+          </div>
+
+          {/* Tonal Adjuster Toggle */}
+          {onToggleTonalAdjuster && (
+            <button
+              onClick={onToggleTonalAdjuster}
+              className={`${BAR_BUTTON} bg-white/10 hover:bg-white/20 text-white`}
+              title="调色面板 (E)"
+              aria-label="调色面板"
+              aria-pressed={isTonalPanelOpen}
+              aria-expanded={isTonalPanelOpen}
+              aria-controls="tonal-adjuster-panel"
+            >
+              <Sliders className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span className={BAR_LABEL}>调色</span>
+            </button>
+          )}
+
+          {/* Luminar AI Roundtrip */}
+          {onOpenLuminar && (
+            <button
+              onClick={onOpenLuminar}
+              disabled={isLuminarRunning}
+              className={`${BAR_BUTTON} bg-white/10 hover:bg-white/20 text-white border border-default disabled:opacity-50 disabled:cursor-not-allowed`}
+              title="Luminar AI 修图"
+              aria-label="在 Luminar AI 中修图"
+            >
+              <Sparkles
+                className={`w-3.5 h-3.5 shrink-0 ${isLuminarRunning ? 'animate-spin' : ''}`}
                 aria-hidden="true"
               />
+              {/* 槽位宽度由 .bar-label 常驻给足，「运行中…」不会把盒子撑开。 */}
+              <span className={BAR_LABEL}>
+                {isLuminarRunning ? '运行中…' : 'Luminar AI'}
+              </span>
             </button>
-          ))}
-        </div>
+          )}
 
-        {/* Pick / Reject / Unflag */}
-        <div className={BAR_DIVIDER} role="group" aria-label="保留或淘汰标记">
+          {/* Open in Photoshop / External app */}
           <button
-            onClick={() => onFlag(group.flag === 'pick' ? 'none' : 'pick')}
-            className={`${BAR_BUTTON} ${
-              group.flag === 'pick'
-                ? 'bg-emerald-600/40 text-emerald-300 border border-emerald-500/50'
-                : 'bg-white/10 text-white/80 hover:bg-white/20 border border-transparent'
-            }`}
-            title="保留 (P)"
-            aria-label="标记保留 (Pick)"
-            aria-pressed={group.flag === 'pick'}
-          >
-            <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-            <span className={BAR_LABEL}>Pick</span>
-          </button>
-          <button
-            onClick={() => onFlag(group.flag === 'reject' ? 'none' : 'reject')}
-            className={`${BAR_BUTTON} ${
-              group.flag === 'reject'
-                ? 'bg-rose-600/40 text-rose-300 border border-rose-500/50'
-                : 'bg-white/10 text-white/80 hover:bg-white/20 border border-transparent'
-            }`}
-            title="淘汰 (X)"
-            aria-label="标记淘汰 (Reject)"
-            aria-pressed={group.flag === 'reject'}
-          >
-            <X className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-            <span className={BAR_LABEL}>Reject</span>
-          </button>
-        </div>
-
-        {/* Zoom: – / readout / reset / +
-            Zoom used to live only on wheel and double-click, both of which
-            are undiscoverable and keyboard-inaccessible (F-25). */}
-        <div className={BAR_DIVIDER} role="group" aria-label="缩放控制">
-          <button
-            onClick={() => zoom.zoomBy(1 / ZOOM_STEP)}
-            disabled={zoom.scale <= ZOOM_MIN}
-            className="focus-ring tap-target p-1.5 text-white/60 hover:text-white hover:bg-white/10 active:scale-[0.96] disabled:opacity-40 disabled:cursor-not-allowed rounded-md transition-colors"
-            title="缩小"
-            aria-label="缩小"
-          >
-            <ZoomOut className="w-3.5 h-3.5" aria-hidden="true" />
-          </button>
-          {/* Zoom readout: same constant-width slot as the text labels, so
-              the value going 100% → 1000% cannot drag the plate wider. */}
-          <span
-            className={`${BAR_LABEL} font-mono tabular-nums text-[11px] text-white/80 select-none`}
-            aria-label={`当前缩放 ${zoomLabel}`}
-          >
-            {zoomLabel}
-          </span>
-          <button
-            onClick={() => zoom.zoomBy(ZOOM_STEP)}
-            disabled={zoom.scale >= ZOOM_MAX}
-            className="focus-ring tap-target p-1.5 text-white/60 hover:text-white hover:bg-white/10 active:scale-[0.96] disabled:opacity-40 disabled:cursor-not-allowed rounded-md transition-colors"
-            title="放大"
-            aria-label="放大"
-          >
-            <ZoomIn className="w-3.5 h-3.5" aria-hidden="true" />
-          </button>
-          <button
-            onClick={zoom.reset}
-            className="focus-ring tap-target p-1.5 text-white/60 hover:text-white hover:bg-white/10 active:scale-[0.96] rounded-md transition-colors"
-            title={`重置缩放与平移（当前 ${zoomLabel}）`}
-            aria-label={`重置缩放与平移，当前 ${zoomLabel}`}
-          >
-            <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
-          </button>
-        </div>
-
-        {/* Tonal Adjuster Toggle */}
-        {onToggleTonalAdjuster && (
-          <button
-            onClick={onToggleTonalAdjuster}
+            onClick={onOpenExternal}
             className={`${BAR_BUTTON} bg-white/10 hover:bg-white/20 text-white`}
-            title="调色面板 (E)"
-            aria-label="调色面板"
-            aria-pressed={isTonalPanelOpen}
-            aria-expanded={isTonalPanelOpen}
-            aria-controls="tonal-adjuster-panel"
+            title="外部打开 (O)"
+            aria-label="在修图或外部程序中打开"
           >
-            <Sliders className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-            <span className={BAR_LABEL}>调色</span>
+            <ExternalLink className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+            <span className={BAR_LABEL}>外部打开</span>
           </button>
-        )}
-
-        {/* Luminar AI Roundtrip */}
-        {onOpenLuminar && (
-          <button
-            onClick={onOpenLuminar}
-            disabled={isLuminarRunning}
-            className={`${BAR_BUTTON} bg-white/10 hover:bg-white/20 text-white border border-default disabled:opacity-50 disabled:cursor-not-allowed`}
-            title="Luminar AI 修图"
-            aria-label="在 Luminar AI 中修图"
-          >
-            <Sparkles
-              className={`w-3.5 h-3.5 shrink-0 ${isLuminarRunning ? 'animate-spin' : ''}`}
-              aria-hidden="true"
-            />
-            {/* 槽位宽度由 .bar-label 常驻给足，「运行中…」不会把盒子撑开。 */}
-            <span className={BAR_LABEL}>
-              {isLuminarRunning ? '运行中…' : 'Luminar AI'}
-            </span>
-          </button>
-        )}
-
-        {/* Open in Photoshop / External app */}
-        <button
-          onClick={onOpenExternal}
-          className={`${BAR_BUTTON} bg-white/10 hover:bg-white/20 text-white`}
-          title="外部打开 (O)"
-          aria-label="在修图或外部程序中打开"
-        >
-          <ExternalLink className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-          <span className={BAR_LABEL}>外部打开</span>
-        </button>
+        </div>
       </div>
     </div>
   );
