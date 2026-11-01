@@ -26,7 +26,9 @@ import {
   BAR_BUTTON,
   BAR_DIVIDER,
   BAR_GROUP,
+  BAR_GROUP_HOST,
   BAR_HIT_AREA,
+  BAR_ICONS,
   BAR_LABEL,
   BAR_PLATE,
   BAR_STAR_BUTTON,
@@ -389,67 +391,73 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
           图标常驻（F-02：核心动词不能是悬停专属），底板与文字标签只在悬停或
           聚焦进入时淡入。**变体里只改颜色/透明度/阴影**——#10 在这里复刻了一份
           `px-3→px-4` / `py-1→py-2` / `w-0→w-auto`，同样会让外接盒随悬停变化，
-          指针在边缘反复进出就自激闪烁。reduced-motion 由 index.css 全局收敛。 */}
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className={`${BAR_PLATE} pointer-events-none`}
-      >
-        {/* 透明命中层：比可视底板四周各外扩一圈，尺寸恒定。 */}
-        <div className={BAR_HIT_AREA} data-bar-hit-area aria-hidden="true" />
+          指针在边缘反复进出就自激闪烁。reduced-motion 由 index.css 全局收敛。
 
-        {/* Rating Stars */}
-        <div className={BAR_DIVIDER} role="group" aria-label="照片星级打分">
-          {[1, 2, 3, 4, 5].map((star) => (
+          `group/bar` 由外层 `BAR_GROUP_HOST` 持有：Tailwind 把
+          `group-hover/bar:x` 编译成后代选择器，挂在自己身上永远不命中
+          （issue #14 根因，详见 viewportBarStyles.ts）。 */}
+      <div className={BAR_GROUP_HOST}>
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className={`${BAR_PLATE} pointer-events-none`}
+        >
+          {/* 透明命中层：比可视底板四周各外扩一圈，尺寸恒定。 */}
+          <div className={BAR_HIT_AREA} data-bar-hit-area aria-hidden="true" />
+
+          {/* Rating Stars */}
+          <div className={BAR_DIVIDER} role="group" aria-label="照片星级打分">
+            {[1, 2, 3, 4, 5].map((star) => (
+              <button
+                key={star}
+                onClick={() => onRate(group.rating === star ? 0 : star)}
+                className={`${BAR_STAR_BUTTON} ${BAR_ICONS} ${
+                  group.rating >= star
+                    ? 'text-amber-400 hover:text-amber-300'
+                    : 'text-white/60 hover:text-white'
+                }`}
+                title={`评 ${star} 星（${star}）`}
+                aria-label={`评 ${star} 星`}
+                aria-pressed={group.rating >= star}
+              >
+                <Star
+                  className={`w-4 h-4 ${group.rating >= star ? 'fill-amber-400' : ''}`}
+                  aria-hidden="true"
+                />
+              </button>
+            ))}
+          </div>
+
+          {/* Pick / Reject */}
+          <div className={BAR_GROUP} role="group" aria-label="保留或淘汰标记">
             <button
-              key={star}
-              onClick={() => onRate(group.rating === star ? 0 : star)}
-              className={`${BAR_STAR_BUTTON} ${
-                group.rating >= star
-                  ? 'text-amber-400 hover:text-amber-300'
-                  : 'text-white/60 hover:text-white'
+              onClick={() => onFlag(group.flag === 'pick' ? 'none' : 'pick')}
+              className={`${BAR_BUTTON} ${BAR_ICONS} ${
+                group.flag === 'pick'
+                  ? 'bg-emerald-600/40 text-emerald-300 border border-emerald-500/50'
+                  : 'bg-transparent text-white/80 hover:bg-white/20 border border-transparent'
               }`}
-              title={`评 ${star} 星（${star}）`}
-              aria-label={`评 ${star} 星`}
-              aria-pressed={group.rating >= star}
+              title="保留 (P)"
+              aria-label="标记保留 (Pick)"
+              aria-pressed={group.flag === 'pick'}
             >
-              <Star
-                className={`w-4 h-4 ${group.rating >= star ? 'fill-amber-400' : ''}`}
-                aria-hidden="true"
-              />
+              <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span className={BAR_LABEL}>Pick</span>
             </button>
-          ))}
-        </div>
-
-        {/* Pick / Reject */}
-        <div className={BAR_GROUP} role="group" aria-label="保留或淘汰标记">
-          <button
-            onClick={() => onFlag(group.flag === 'pick' ? 'none' : 'pick')}
-            className={`${BAR_BUTTON} ${
-              group.flag === 'pick'
-                ? 'bg-emerald-600/40 text-emerald-300 border border-emerald-500/50'
-                : 'bg-transparent text-white/80 hover:bg-white/20 border border-transparent'
-            }`}
-            title="保留 (P)"
-            aria-label="标记保留 (Pick)"
-            aria-pressed={group.flag === 'pick'}
-          >
-            <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-            <span className={BAR_LABEL}>Pick</span>
-          </button>
-          <button
-            onClick={() => onFlag(group.flag === 'reject' ? 'none' : 'reject')}
-            className={`${BAR_BUTTON} ${
-              group.flag === 'reject'
-                ? 'bg-rose-600/40 text-rose-300 border border-rose-500/50'
-                : 'bg-transparent text-white/80 hover:bg-white/20 border border-transparent'
-            }`}
-            title="淘汰 (X)"
-            aria-label="标记淘汰 (Reject)"
-            aria-pressed={group.flag === 'reject'}
-          >
-            <X className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-            <span className={BAR_LABEL}>Reject</span>
-          </button>
+            <button
+              onClick={() => onFlag(group.flag === 'reject' ? 'none' : 'reject')}
+              className={`${BAR_BUTTON} ${BAR_ICONS} ${
+                group.flag === 'reject'
+                  ? 'bg-rose-600/40 text-rose-300 border border-rose-500/50'
+                  : 'bg-transparent text-white/80 hover:bg-white/20 border border-transparent'
+              }`}
+              title="淘汰 (X)"
+              aria-label="标记淘汰 (Reject)"
+              aria-pressed={group.flag === 'reject'}
+            >
+              <X className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span className={BAR_LABEL}>Reject</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>
