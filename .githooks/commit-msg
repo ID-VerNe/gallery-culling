@@ -1,0 +1,30 @@
+#!/bin/sh
+# commit 文案规范（issue #6，AGENTS 红线）：
+#   1. 首行必须是 `type(scope): 摘要`；merge / revert 提交豁免。
+#   2. 禁止 `Co-Authored-By:` 行。
+#
+# 钩子靠本地配置生效：`git config core.hooksPath .githooks`（换机器后重设一次）。
+msg_file="$1"
+[ -n "$msg_file" ] || exit 0
+first=$(head -n 1 "$msg_file")
+
+case "$first" in
+  "Merge "*|"Revert "*|"fixup! "*|"squash! "*) exit 0 ;;
+esac
+
+if ! printf '%s' "$first" | grep -Eq '^(feat|fix|docs|style|refactor|perf|test|chore|build|ci)(\([a-z0-9-]+\))?: .+'; then
+  {
+    echo "commit-msg: 首行必须是 type(scope): 摘要"
+    echo "  type ∈ feat/fix/docs/style/refactor/perf/test/chore/build/ci"
+    echo "  当前：$first"
+    echo "  规范见 AGENTS.md §「Commit 与发布」。"
+  } >&2
+  exit 1
+fi
+
+if grep -qi '^Co-Authored-By:' "$msg_file"; then
+  echo "commit-msg: 禁止 Co-Authored-By: 行（AGENTS 红线）。" >&2
+  exit 1
+fi
+
+exit 0

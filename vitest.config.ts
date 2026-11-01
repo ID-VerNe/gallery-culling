@@ -34,12 +34,23 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: 'jsdom',
+    /**
+     * 默认 5s 对「挂载整个 App」的集成用例太紧：`App.scanProgress` /
+     * `App.taskMutex` / `App.toneSave` 单跑一条要 1.2–1.5s，而全量 84 个文件并行、
+     * 机器上同时还在编译 Rust 时，同一条会顶到 5s 以上——**报的是超时，不是断言失败**，
+     * 于是红灯说的不是代码坏了（2026-11-01 实测：master 基线同条件复跑也红，单独复跑全绿）。
+     *
+     * 放宽到 15s 只影响「卡住多久算挂」，不放松任何断言；真正的死循环照样红。
+     * 这条是让 `npm run gates` 的 unit 分片可用的前提，别改回默认值。
+     */
+    testTimeout: 15000,
     // describe/it/expect 走全局，测试文件顶部不必重复 import；
     // tsconfig.json 已注入 `vitest/globals` + `@testing-library/jest-dom` 类型。
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
-    include: ['src/**/*.{test,spec}.{ts,tsx}'],
-    // 套件只覆盖 `src`，src-tauri / scripts 不进 jsdom 环境。
+    include: ['src/**/*.{test,spec}.{ts,tsx}', 'scripts/**/*.test.mjs'],
+    // 应用用例只覆盖 `src`；`scripts/**/*.test.mjs` 是门禁自身的单测（issue #6）——
+    // 元门禁坏了是静默放行，它必须被自己的用例盯住。src-tauri 不进 jsdom 环境。
     exclude: ['node_modules/**', 'dist/**', 'src-tauri/**', '.venv/**'],
     restoreMocks: true,
     unstubEnvs: true,

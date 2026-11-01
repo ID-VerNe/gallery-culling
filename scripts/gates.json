@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "note": "门禁清单的唯一事实来源（issue #6）。每条脚本恰好属于 ci / manual / support 之一；ci 的顺序就是本机全量执行顺序，ci 条目上的 shard 决定 CI 走哪个 matrix 分片。改完清单跑 `node scripts/check-gates-manifest.mjs --write` 重写 AGENTS.md 的生成段，否则元门禁会红。",
+  "fmtBaseline": 122,
+  "fmtBaselineWhy": "基线里刻意保留的 `cargo fmt` 差异处数（AGENTS 红线 2）。裸跑 cargo fmt 会重排整个 crate、污染 diff，所以这里只许减少不许增加；减少时同步下调本值。",
+  "shards": [
+    {
+      "name": "static",
+      "why": "类型检查、清单一致性、格式基线——最便宜的一档，红灯最先可见，pre-push 也只跑这一档"
+    },
+    {
+      "name": "unit",
+      "why": "前端用例（jsdom，不需要真窗口；--pool=vmForks 是 Windows 上的既定跑法）"
+    },
+    {
+      "name": "rust",
+      "why": "后端用例（真 tmpdir，不需要 WebView2 运行时；cwd=src-tauri）"
+    }
+  ],
+  "ci": [
+    {
+      "name": "check-gates-manifest.mjs",
+      "cmd": ["node", "scripts/check-gates-manifest.mjs"],
+      "shard": "static",
+      "why": "元门禁：磁盘 check-*.mjs、本清单、AGENTS.md 生成段、ci.yml 分片矩阵四者零漂移"
+    },
+    {
+      "name": "check-fmt-baseline.mjs",
+      "cmd": ["node", "scripts/check-fmt-baseline.mjs"],
+      "shard": "static",
+      "why": "`cargo fmt --check` 差异处数不得超过 gates.json 的 fmtBaseline（防裸跑 fmt 重排整个 crate）"
+    },
+    {
+      "name": "tsc --noEmit",
+      "cmd": ["npx", "tsc", "--noEmit"],
+      "shard": "static",
+      "why": "TypeScript 类型检查（tsconfig 只覆盖 src，scripts 是纯 JS 不参与）"
+    },
+    {
+      "name": "vitest",
+      "cmd": ["npx", "vitest", "run", "--pool=vmForks"],
+      "shard": "unit",
+      "why": "前端全量用例；--pool=vmForks 见 vitest.config.ts 的 pool 说明（Windows 上的既定跑法）"
+    },
+    {
+      "name": "cargo test --lib",
+      "cmd": ["cargo", "test", "--lib"],
+      "cwd": "src-tauri",
+      "shard": "rust",
+      "why": "后端全量单测（真 tmpdir，不 mock fs）；7 例真机冒烟默认 ignored"
+    }
+  ],
+  "manual": [
+    {
+      "name": "e2e:render",
+      "cmd": ["npm", "run", "e2e:render"],
+      "why": "成片导出的真窗口用例：本机 WebView2 CDP 只服务第一个请求，只能应用内驱动，CI 上跑不了"
+    },
+    {
+      "name": "e2e:preset",
+      "cmd": ["npm", "run", "e2e:preset"],
+      "why": "LUMEN 预设真窗口用例：同上，需要真实桌面会话"
+    }
+  ],
+  "support": []
+}

@@ -1,0 +1,28 @@
+#!/bin/sh
+# 推送前跑 static 分片（issue #6）：清单一致性 + fmt 基线 + tsc。
+#
+# 为什么只跑 static：全量（vitest 约 60s、cargo test 冷编 10 分钟）不适合每次推送；
+# static 是「最便宜、最先红」的一档，挡得住绝大多数低级错误。全量留给 `npm run gates`
+# 与 CI。
+#
+# 逃生口：SKIP_GATES=1 git push（会留痕），或 worktree 里没装依赖时自动跳过（会警告）。
+root=$(git rev-parse --show-toplevel) || exit 1
+cd "$root" || exit 1
+
+if [ "$SKIP_GATES" = "1" ]; then
+  echo "pre-push: SKIP_GATES=1，跳过 static 门禁（$(date -u '+%Y-%m-%dT%H:%M:%SZ')）" >&2
+  exit 0
+fi
+
+# worktree 里没有 node_modules（被 gitignore），tsc 跑不起来。与其红得莫名其妙，
+# 不如说清「这一档被跳过了」——静默跳过才是真危险。
+if [ ! -x node_modules/.bin/tsc ] && [ ! -f node_modules/.bin/tsc ]; then
+  {
+    echo "pre-push: 警告——当前目录没有 node_modules，static 门禁被跳过。"
+    echo "  修法：在本 worktree 里 npm ci，或到主工作区推送。"
+    echo "  这不是绿：tsc 与清单校验都没有跑过。"
+  } >&2
+  exit 0
+fi
+
+node scripts/run-gates.mjs ci --shard static --fail-fast

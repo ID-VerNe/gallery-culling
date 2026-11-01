@@ -1,0 +1,10 @@
+# Git hooks 走 sh：CRLF 的 shebang 在 Windows 检出上会直接报错
+# （`#!/bin/sh\r` 找不到解释器，钩子静默失效）。所以强制 LF。
+.githooks/* text eol=lf
+
+# Node 脚本同样强制 LF：autocrlf 检出成 CRLF 时，带 shebang 的 .mjs 会让
+# vitest 的模块管线吐出 `SyntaxError: Invalid or unexpected token`
+# （node --check / esbuild / 原生 import 都能过，只有 vitest 不行——
+# 2026-11-01 首次 CI 实证，三个 scripts/*.mjs 全中招）。scripts 下已去掉
+# shebang（调用点全是显式 `node scripts/x.mjs`），这里兜底防以后再犯。
+*.mjs text eol=lf
