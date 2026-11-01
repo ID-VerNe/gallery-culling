@@ -72,7 +72,7 @@ npm run parity                             # CI 等价复跑：在被推送 sha 
 ## 2. 红线（违反任何一条都不算完成任务）
 
 1. **不留红 commit**。每一步改动完成即跑 `npm run gates`（= 清单里的 tsc + vitest + cargo test，见 §0.1）；涉及渲染/端到端行为时另跑 `npm run e2e:render`。
-2. **`cargo fmt` 不裸跑**。基线里刻意保留 122 处格式差异（`scripts/gates.json` 的 `fmtBaseline`，会随新代码增长），裸跑会重排整个 crate、污染 diff。要格式化只针对自己新写的段落手工对齐；**新文件可以单独 `rustfmt --edition 2021 <file>`**（只碰它自己）。这条已由 `check-fmt-baseline.mjs` 门禁执行：差异处数超过基线即红。
+2. **`cargo fmt` 不裸跑**。基线里刻意保留 121 处格式差异（`scripts/gates.json` 的 `fmtBaseline`，会随新代码增长），裸跑会重排整个 crate、污染 diff。要格式化只针对自己新写的段落手工对齐；**新文件可以单独 `rustfmt --edition 2021 <file>`**（只碰它自己）。这条已由 `check-fmt-baseline.mjs` 门禁执行：差异处数超过基线即红。
 3. **不动 `stash@{0}`**（历史遗留，内容未知）。
 4. **不新建仓库内 CLAUDE.md**（本文件 AGENTS.md 是唯一协作说明）。
 5. **批量删 Rust 顶层 item 的方法**：一次性读全文 → 切两段 → 拼回写盘。不要做两次独立的字符串切片，会撕破文件。
