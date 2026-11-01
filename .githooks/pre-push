@@ -6,6 +6,8 @@
 # 与 CI。
 #
 # 逃生口：SKIP_GATES=1 git push（会留痕），或 worktree 里没装依赖时自动跳过（会警告）。
+# 此外每个被推送的 sha 还会做一次 parity（issue #8）：在被推送 sha 的干净检出里复跑同一份清单，
+# SKIP_PARITY=1 可跳过并留痕。
 root=$(git rev-parse --show-toplevel) || exit 1
 cd "$root" || exit 1
 
@@ -26,3 +28,33 @@ if [ ! -x node_modules/.bin/tsc ] && [ ! -f node_modules/.bin/tsc ]; then
 fi
 
 node scripts/run-gates.mjs ci --shard static --fail-fast
+static_rc=$?
+if [ "$static_rc" -ne 0 ]; then
+  echo "pre-push: static 分片未通过，parity 不再执行（先在当前检修复，再看干净检出）" >&2
+  exit "$static_rc"
+fi
+
+# parity（issue #8）：把「本地绿」挪到被推送 sha 的干净检出里复跑，证明它不只在本机成立。
+# 为什么放在 static 之后：干净检出里没装依赖时它需要 npm ci，比 static 更贵；先让最便宜的
+# 一档挡掉低级错误。为什么只跑 static 分片：cargo 冷编 10 分钟不适合每次推送，全量留给 CI。
+if [ "$SKIP_PARITY" = "1" ]; then
+  echo "pre-push: SKIP_PARITY=1，跳过 CI 等价复跑（$(date -u '+%Y-%m-%dT%H:%M:%SZ')）" >&2
+  exit 0
+fi
+
+parity_rc=0
+# 逐 sha 复跑：`origin/master..HEAD` 覆盖本分支上所有尚未进 master 的提交。
+# 注意别写 `git rev-list --remotes=origin..HEAD`——`--remotes` 的值是按**引用名**做 glob 的，
+# 后面再跟 `..` 会被当成引用名的一部分，静默返回空集，整个循环一次都不跑（等于 parity 从未生效）。
+for sha in $(git rev-list origin/master..HEAD); do
+  node scripts/check-pr-parity.mjs --ref "$sha" --shard static || parity_rc=$?
+  [ "$parity_rc" -ne 0 ] && break
+done
+
+if [ "$parity_rc" -eq 2 ]; then
+  {
+    echo "pre-push: parity 环境问题（退出 2），没有完成 CI 等价复跑——这不是绿。"
+    echo "  修法：确认 git 历史完整（git fetch origin master），或 SKIP_PARITY=1 git push（会留痕）。"
+  } >&2
+fi
+exit "$parity_rc"

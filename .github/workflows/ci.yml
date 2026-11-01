@@ -30,6 +30,10 @@ jobs:
         shard: [static, unit, rust]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # issue #8：check-gate-change-review.mjs 要算 `base...HEAD` 的改动集，
+          # 浅克隆里 merge-base 不存在，diff 会退化成空集——那正是闸门最怕的「静默放行」。
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -63,6 +67,14 @@ jobs:
           New-Item -ItemType File -Force src-tauri/binaries/lumen-cli/ci-placeholder.txt | Out-Null
 
       - name: 门禁（scripts/gates.json）
+        # issue #8：check-gate-change-review.mjs 需要 PR 上下文。
+        # pull_request 事件下 PR_BASE_SHA 是 base 分支的 sha（merge-base 可算到）；
+        # push 事件没有 PR_NUMBER / PR_BODY，基线上界由 GATE_CHANGES + github.event.before 兜住。
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GATE_CHANGES: ${{ github.event_name == 'push' && '1' || '' }}
         run: node scripts/run-gates.mjs ci --shard ${{ matrix.shard }}
 
   checks:

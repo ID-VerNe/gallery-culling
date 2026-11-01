@@ -1,7 +1,7 @@
 {
   "version": 1,
   "note": "门禁清单的唯一事实来源（issue #6）。每条脚本恰好属于 ci / manual / support 之一；ci 的顺序就是本机全量执行顺序，ci 条目上的 shard 决定 CI 走哪个 matrix 分片。改完清单跑 `node scripts/check-gates-manifest.mjs --write` 重写 AGENTS.md 的生成段，否则元门禁会红。",
-  "fmtBaseline": 122,
+  "fmtBaseline": 121,
   "fmtBaselineWhy": "基线里刻意保留的 `cargo fmt` 差异处数（AGENTS 红线 2）。裸跑 cargo fmt 会重排整个 crate、污染 diff，所以这里只许减少不许增加；减少时同步下调本值。",
   "shards": [
     {
@@ -23,6 +23,12 @@
       "cmd": ["node", "scripts/check-gates-manifest.mjs"],
       "shard": "static",
       "why": "元门禁：磁盘 check-*.mjs、本清单、AGENTS.md 生成段、ci.yml 分片矩阵四者零漂移"
+    },
+    {
+      "name": "check-gate-change-review.mjs",
+      "cmd": ["node", "scripts/check-gate-change-review.mjs"],
+      "shard": "static",
+      "why": "PR 改动触及门禁链时，正文必须有 `## 门禁改动` 段逐个交代 + 段末独立复核结论（issue #8）；无 PR 上下文 SKIP，显式声明改动却无 base 时 fail-closed"
     },
     {
       "name": "check-fmt-baseline.mjs",
@@ -62,5 +68,11 @@
       "why": "LUMEN 预设真窗口用例：同上，需要真实桌面会话"
     }
   ],
-  "support": []
+  "support": [
+    {
+      "name": "check-pr-parity.mjs",
+      "cmd": ["node", "scripts/check-pr-parity.mjs", "--shard", "static"],
+      "why": "CI 等价复跑：在临时 detached worktree 里跑同一份清单（issue #8）。**不进 ci 档**——它要在仓库里再开一个 worktree，在 CI 的 job workspace 里属于嵌套 worktree，风险大于收益；CI 自己就是那个干净环境。pre-push 对每个被推送 sha 跑一次，`npm run parity` 手动跑"
+    }
+  ]
 }
