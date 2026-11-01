@@ -2,6 +2,11 @@
   :root {
     /* Backgrounds */
     --color-bg-base: #0A0A0A;
+    /* 通道三元组版本（issue #15）：Tailwind 的 `/NN` 需要能解析出通道才能拼
+       rgb(... / a)，`#0A0A0A` 解析不了，导致 bg-background-base/90 等 26 处
+       规则被静默丢弃。这里存裸通道值，与上面的纯色令牌指向同一个颜色。
+       改底色时两处必须同步（check-theme-alpha.test.mjs 盯着这层一致性）。 */
+    --color-bg-base-rgb: 10 10 10;
     --color-bg-surface: rgb(255 255 255 / 2%);
     --color-bg-surface-hover: rgb(255 255 255 / 5%);
     --color-bg-header: rgb(255 255 255 / 3%);
