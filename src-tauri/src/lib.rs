@@ -71,6 +71,8 @@ pub fn run() {
             commands::batch_update_metadata_cmd,
             commands::get_settings_cmd,
             commands::save_settings_cmd,
+            commands::get_lens_presets_cmd,
+            commands::save_lens_presets_cmd,
             commands::save_session_cmd,
             commands::load_session_cmd,
             open_in_luminar_roundtrip_cmd,

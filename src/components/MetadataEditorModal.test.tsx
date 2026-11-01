@@ -51,6 +51,9 @@ const ALL_GROUPS = [GROUP_1, GROUP_2, GROUP_3];
 function setup() {
   // 后端返回「已写入张数」；这里给足，组件只把它拼进成功文案。
   mockInvokeCommand(BATCH_CMD, ALL_GROUPS.length);
+  // 镜头预设是另一条独立命令（ADR-013）。本文件只关心同步范围，
+  // 显式声明成空列表 —— 否则未注册命令的告警会淹掉真实失败。
+  mockInvokeCommand('get_lens_presets_cmd', []);
 
   const onClose = vi.fn();
   const onError = vi.fn();

@@ -24,11 +24,13 @@ mod settings;
 mod thumbnail;
 
 pub use settings::{
-    __cmd__get_settings_cmd, __cmd__load_session_cmd, __cmd__save_session_cmd,
-    __cmd__save_settings_cmd,
-    __tauri_command_name_get_settings_cmd, __tauri_command_name_load_session_cmd,
+    __cmd__get_lens_presets_cmd, __cmd__get_settings_cmd, __cmd__load_session_cmd,
+    __cmd__save_lens_presets_cmd, __cmd__save_session_cmd, __cmd__save_settings_cmd,
+    __tauri_command_name_get_lens_presets_cmd, __tauri_command_name_get_settings_cmd,
+    __tauri_command_name_load_session_cmd, __tauri_command_name_save_lens_presets_cmd,
     __tauri_command_name_save_session_cmd, __tauri_command_name_save_settings_cmd,
-    get_settings_cmd, load_session_cmd, save_session_cmd, save_settings_cmd,
+    get_lens_presets_cmd, get_settings_cmd, load_session_cmd, save_lens_presets_cmd,
+    save_session_cmd, save_settings_cmd,
 };
 
 pub use thumbnail::{

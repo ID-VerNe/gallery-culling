@@ -1,10 +1,34 @@
-use crate::models::AppSettings;
+use crate::models::{builtin_lens_presets, AppSettings, LensPreset};
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 pub struct Database {
     conn: std::sync::Arc<Mutex<Connection>>,
+}
+
+/// 「常用手动镜头」预设的存储键（ADR-013）。
+///
+/// 刻意**不**并进 `AppSettings`：设置弹窗的保存是「打开时读全量 → 用户改 →
+/// 整体写回」，而预设是在元数据弹窗里改的。两条写路径共用一份结构体，就会出现
+/// 「设置页开着 → 去改预设 → 回来点保存 → 预设被旧值覆盖」的静默丢数据。
+/// 独立键 + 独立命令之后，`save_settings` 只写它自己那 9 个键，永远碰不到这里。
+pub const LENS_PRESETS_KEY: &str = "lens_presets";
+
+/// 保存前的清洗（纯函数，save 与单测共用）：去首尾空白、丢掉没有名字的项。
+///
+/// 前端已经校验过一遍，这里再洗一次是因为后端不信任前端 —— 预设点一下会直接
+/// 灌进「镜头型号」输入框，一条空名字的预设只会把用户已经填好的型号清空。
+pub(crate) fn sanitize_lens_presets(presets: &[LensPreset]) -> Vec<LensPreset> {
+    presets
+        .iter()
+        .map(|p| LensPreset {
+            name: p.name.trim().to_string(),
+            focal: p.focal.trim().to_string(),
+            aperture: p.aperture.trim().to_string(),
+        })
+        .filter(|p| !p.name.is_empty())
+        .collect()
 }
 
 /// 设置键值对（纯函数，供 save/load 与单测共用）。
@@ -209,6 +233,47 @@ impl Database {
             )
             .map_err(|e| format!("保存设置 '{}' 失败: {}", k, e))?;
         }
+
+        Ok(())
+    }
+
+    /// 读取用户自定义的镜头预设（ADR-013）。
+    ///
+    /// 三种状态的区分就是这段代码的全部意义：
+    /// - **键不存在** = 从没自定义过 → 出厂 6 条（老库升级零感知）；
+    /// - **键存在**（含 `[]`）= 用户维护过 → 原样返回。删空就是空，
+    ///   绝不能「顺手补回默认值」，否则删了又自己长出来；
+    /// - **JSON 损坏** → 出厂 6 条，且**不回写**：坏值留在库里等下次保存覆盖。
+    ///   读路径只读，是「一次读失败不能把用户数据抹掉」的底线。
+    pub fn load_lens_presets(&self) -> Result<Vec<LensPreset>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT value FROM settings WHERE key = ?1")
+            .map_err(|e| e.to_string())?;
+        let raw = stmt
+            .query_row(params![LENS_PRESETS_KEY], |row| row.get::<_, String>(0))
+            .ok();
+
+        Ok(match raw {
+            None => builtin_lens_presets(),
+            Some(json) => serde_json::from_str::<Vec<LensPreset>>(&json)
+                .unwrap_or_else(|_| builtin_lens_presets()),
+        })
+    }
+
+    /// 覆盖写入镜头预设（ADR-013）。空切片是合法值：那代表用户把列表删空了。
+    pub fn save_lens_presets(&self, presets: &[LensPreset]) -> Result<(), String> {
+        let clean = sanitize_lens_presets(presets);
+        let json =
+            serde_json::to_string(&clean).map_err(|e| format!("序列化镜头预设失败: {}", e))?;
+
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = ?2",
+            params![LENS_PRESETS_KEY, json],
+        )
+        .map_err(|e| format!("保存镜头预设失败: {}", e))?;
 
         Ok(())
     }
@@ -826,6 +891,144 @@ mod tests {
 
         assert!(db.lookup_pending("C:/p/c.JPG").unwrap().is_none());
 
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /* ---------------- 镜头快捷预设（ADR-013） ---------------- */
+
+    fn preset(name: &str, focal: &str, aperture: &str) -> LensPreset {
+        LensPreset {
+            name: name.to_string(),
+            focal: focal.to_string(),
+            aperture: aperture.to_string(),
+        }
+    }
+
+    /// 直接读库里的原始值（绕过 load），用来断言「读路径不改写用户数据」。
+    fn raw_presets_value(db: &Database) -> Option<String> {
+        let conn = db.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            params![LENS_PRESETS_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+    }
+
+    /// 老库升级：从来没有 `lens_presets` 键 → 出厂 6 条。
+    #[test]
+    fn lens_presets_default_when_key_absent() {
+        let (db, path) = temp_db("lens_default");
+
+        let got = db.load_lens_presets().unwrap();
+        assert_eq!(got.len(), 6, "出厂预设应为 6 条");
+        assert_eq!(got[0].name, "Voigtlander APO-LANTHAR 50mm F2");
+        assert_eq!(got[0].focal, "50mm");
+        assert_eq!(got[0].aperture, "f/2.0");
+        // 读不能产生副作用：库里依然没有这个键。
+        assert!(raw_presets_value(&db).is_none());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 存进去什么读回来什么：顺序、大小写、空格、中文都要原样。
+    #[test]
+    fn lens_presets_roundtrip_keeps_order() {
+        let (db, path) = temp_db("lens_roundtrip");
+        let mine = vec![
+            preset("Voigtlander VM 21mm F3.5", "21mm", "f/3.5"),
+            preset("Zeiss ZM 35mm F2", "35mm", "f/2.0"),
+            preset("七工匠 50mm F1.1", "50mm", "f/1.1"),
+        ];
+
+        db.save_lens_presets(&mine).unwrap();
+        assert_eq!(db.load_lens_presets().unwrap(), mine);
+
+        // 再存一次覆盖，不追加
+        db.save_lens_presets(&mine[..1]).unwrap();
+        assert_eq!(db.load_lens_presets().unwrap(), mine[..1].to_vec());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 用户把列表删空 → 读回空。**绝不能**再补回出厂 6 条。
+    ///
+    /// 这是「缺键」与「空数组」必须分开处理的唯一理由，也是最容易写错的一处。
+    #[test]
+    fn lens_presets_empty_list_is_not_reseeded() {
+        let (db, path) = temp_db("lens_empty");
+
+        db.save_lens_presets(&[]).unwrap();
+        assert_eq!(
+            db.load_lens_presets().unwrap(),
+            Vec::<LensPreset>::new(),
+            "删空后必须保持为空，不能复种默认值"
+        );
+        assert_eq!(raw_presets_value(&db).as_deref(), Some("[]"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 库里的 JSON 坏了 → 退回出厂 6 条，且**不覆盖**坏值（读路径只读）。
+    #[test]
+    fn lens_presets_corrupt_json_falls_back_without_rewriting() {
+        let (db, path) = temp_db("lens_corrupt");
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)",
+                params![LENS_PRESETS_KEY, "{not json"],
+            )
+            .unwrap();
+        }
+
+        let got = db.load_lens_presets().unwrap();
+        assert_eq!(got.len(), 6);
+        assert_eq!(
+            raw_presets_value(&db).as_deref(),
+            Some("{not json"),
+            "读失败不能顺手把用户的原始数据抹掉"
+        );
+
+        // 下次保存才覆盖坏值
+        db.save_lens_presets(&[preset("X 50mm F2", "50mm", "f/2.0")])
+            .unwrap();
+        assert_eq!(db.load_lens_presets().unwrap().len(), 1);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 后端不信任前端：保存时 trim，没有名字的项直接丢掉。
+    #[test]
+    fn lens_presets_saved_sanitized() {
+        let (db, path) = temp_db("lens_sanitize");
+        let dirty = vec![
+            preset("  VM 21mm F3.5  ", " 21mm ", " f/3.5 "),
+            preset("   ", "50mm", "f/1.4"),
+            preset("", "35mm", "f/2.0"),
+        ];
+
+        db.save_lens_presets(&dirty).unwrap();
+        assert_eq!(
+            db.load_lens_presets().unwrap(),
+            vec![preset("VM 21mm F3.5", "21mm", "f/3.5")]
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 设置弹窗保存（整体写回 9 个键）不能把预设冲掉。
+    ///
+    /// 这条锁住 ADR-013 的选型：预设用**独立键**，两条写路径互不干扰。
+    #[test]
+    fn save_settings_does_not_clobber_lens_presets() {
+        let (db, path) = temp_db("lens_no_clobber");
+        let mine = vec![preset("VM 21mm F3.5", "21mm", "f/3.5")];
+        db.save_lens_presets(&mine).unwrap();
+
+        db.save_settings(&AppSettings::default()).unwrap();
+
+        assert_eq!(db.load_lens_presets().unwrap(), mine);
         let _ = std::fs::remove_file(&path);
     }
 }

@@ -87,6 +87,19 @@ export interface AppSettings {
   lumenExpectAi: boolean;
 }
 
+/**
+ * 一条「常用手动镜头」快捷预设（ADR-013）。
+ *
+ * 三个字段都是自由文本：镜头型号的大小写各家不统一（`APO-LANTHAR` / `Nokton`），
+ * 焦段有 `50mm` 也有 `50`，光圈有 `f/2.0` 也有 `F2`。它们最终直接写进 XMP，
+ * 所以这里**不做格式校验**，只做「名字不能为空」这类最低限度的约束。
+ */
+export interface LensPreset {
+  name: string;
+  focal: string;
+  aperture: string;
+}
+
 /** lumen_preview_cmd 返回：previewPath = null 表示引擎不可用（前端静默降级） */
 export interface LumenPreviewResult {
   previewPath: string | null;

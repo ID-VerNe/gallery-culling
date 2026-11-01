@@ -2,13 +2,29 @@
 
 use tauri::State;
 
-use crate::models::AppSettings;
+use crate::models::{AppSettings, LensPreset};
 
 use super::AppState;
 
 #[tauri::command]
 pub fn get_settings_cmd(state: State<'_, AppState>) -> Result<AppSettings, String> {
     state.db.load_settings()
+}
+
+/// 读用户自定义的镜头快捷预设（ADR-013）。缺键时返回出厂 6 条。
+#[tauri::command]
+pub fn get_lens_presets_cmd(state: State<'_, AppState>) -> Result<Vec<LensPreset>, String> {
+    state.db.load_lens_presets()
+}
+
+/// 覆盖写入镜头快捷预设。空数组是合法输入（= 用户主动删空），不当错误。
+#[tauri::command]
+pub fn save_lens_presets_cmd(
+    presets: Vec<LensPreset>,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    state.db.save_lens_presets(&presets)?;
+    Ok(true)
 }
 
 #[tauri::command]

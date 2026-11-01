@@ -17,6 +17,7 @@ import {
   LumenRecipe,
   LumenStatus,
   LrcatReadResult,
+  LensPreset,
   MaskAdjustments,
   RenderFormat,
   ToneAdjustments,
@@ -265,6 +266,23 @@ export const api = {
    */
   saveSettings: async (settings: AppSettings): Promise<boolean> => {
     return await invoke<boolean>('save_settings_cmd', { settings });
+  },
+
+  /**
+   * 读用户自定义的镜头快捷预设（ADR-013）。
+   *
+   * 与 `getSettings` 分开是刻意的：设置弹窗是「读全量 → 改 → 整体写回」，
+   * 预设如果挂在 `AppSettings` 上，会被设置页的保存动作用旧值覆盖。
+   */
+  getLensPresets: async (): Promise<LensPreset[]> => {
+    return await invoke<LensPreset[]>('get_lens_presets_cmd');
+  },
+
+  /**
+   * 覆盖写入镜头快捷预设。空数组合法（= 用户把列表删空了）。
+   */
+  saveLensPresets: async (presets: LensPreset[]): Promise<boolean> => {
+    return await invoke<boolean>('save_lens_presets_cmd', { presets });
   },
 
   /**
