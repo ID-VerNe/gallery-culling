@@ -9,9 +9,9 @@
 所有仓库改动（代码、文档、门禁、配置）走五步，缺一步即不合规。细则：发 issue 看 [`doc/ISSUE_GUIDE.md`](doc/ISSUE_GUIDE.md)，开 PR 看 [`doc/PR_GUIDE.md`](doc/PR_GUIDE.md)。
 
 1. **先发 issue（发现即提，不等批准）**：正文四要素齐全——现象（行为类必须带一条可直接粘贴的复现命令）/ 证据链（`文件:行号`）/ 影响面（P0–P2）/ 修复候选。给不出复现命令就贴 `needs-repro`。issue 是执行与验收的唯一依据。
-2. **写 plan 追评到 issue 下面**：探索结论（带证据）+ 方案 + **明确不做** + 验证方式，并含一行「用 issue 的复现命令复现：成功 / 失败（贴原始输出）」。复现失败说明描述与现状不符，退回补充，不进实施；定稿后只追加不改口。
+2. **写 plan 追评到 issue 下面**：探索结论（带证据）+ 方案 + **明确不做** + 验证方式，并含一行「用 issue 的复现命令复现：成功 / 失败（贴原始输出）」。复现失败说明描述与现状不符，退回补充，不进实施；定稿后只追加不改口。模板见 [`doc/ISSUE_GUIDE.md`](doc/ISSUE_GUIDE.md)「写 plan：追评到 issue 下面」。
 3. **开 worktree 改代码**：`git worktree add ../gallery-flask-<issue> -b type/<issue>-<slug> master`，不在主工作区切分支；分支 / PR 标题 / commit **三处都带 issue 号**。worktree 里没有 `node_modules` 与 `src-tauri/binaries`，见 PR_GUIDE「分支」一节。
-4. **开 PR**：正文分段齐全（问题 / 改动 / 测试 / 基线验证 / 门禁改动 / 影响面 / 验收对照）；`Closes` 只给纯文档与纯重构，**行为类用 `Refs`**。CI 全绿 + 无冲突才合并（merge commit，不 squash、不 rebase）。
+4. **开 PR**：正文分段齐全（问题 / 改动 / 测试 / 基线验证 / 门禁改动 / 影响面 / 验收对照）；`Closes` 只给纯文档与纯重构，**行为类用 `Refs`**。**门禁链改动有机器闸门**：diff 触及 `scripts/check-*.mjs` / `gates.json` / `run-gates.mjs` / `ci.yml` / `.githooks/` 时，`## 门禁改动` 段要逐个交代并在**段末**贴独立复核结论（`scripts/check-gate-change-review.mjs` 判定，`<PENDING>` 或结论排在证据前都红）。推之前用 `node scripts/check-pr-parity.mjs --shard static` 证明本地绿在干净检出里也成立。CI 全绿 + 无冲突才合并（merge commit，不 squash、不 rebase）。
 5. **合并后对账与回签**：修复者逐项核对「自述 vs 实际」（`git status`、文件存在性、门禁原始输出），给行为类 issue 贴 `needs-live-verify`；由发现者或**全新上下文**的会话按 PR_GUIDE 的模板回签，**回签通过才关 issue**。修复者不能给自己回签。
 
 ### 0.1 门禁清单只有一个事实来源
@@ -23,12 +23,14 @@ npm run gates                              # 全量（tsc + vitest + cargo test�
 npm run gates:static                       # 只跑最便宜的一档（pre-push 用这个）
 node scripts/run-gates.mjs ci --fail-fast  # 本机快速试错：见到红就停
 node scripts/run-gates.mjs --list          # 看档位、分片与执行顺序
+npm run parity                             # CI 等价复跑：在被推送 sha 的干净检出里跑同一份清单
 ```
 
 - **新增门禁只改清单**，然后跑 `node scripts/check-gates-manifest.mjs --write` 重写下面这段；手改会被元门禁打红（磁盘脚本、清单、本节、`ci.yml` 分片矩阵四者必须一致）。
 - 片内**串行**执行：并发跑会让 App 级集成用例在 5s 超时上假红（见 §0.2）。
 - 真窗口 e2e（`npm run e2e:render` / `e2e:preset`）在 `manual` 档，CI 跑不了（WebView2 CDP 只服务第一个请求）。
-- 钩子靠本地配置生效：`git config core.hooksPath .githooks`（换机器后重设一次）。`commit-msg` 拦文案格式与 `Co-Authored-By:`，`pre-push` 跑 static 分片（`SKIP_GATES=1` 可跳过并留痕）。
+- `check-pr-parity.mjs` 在 `support` 档**不进 CI**：它要在仓库里再开一个临时 worktree，在 CI job 里属于嵌套 worktree，风险大于收益——CI 本身就是那个干净环境。
+- 钩子靠本地配置生效：`git config core.hooksPath .githooks`（换机器后重设一次）。`commit-msg` 拦文案格式与 `Co-Authored-By:`，`pre-push` 跑 static 分片再跑 parity（`SKIP_GATES=1` / `SKIP_PARITY=1` 可分别跳过并留痕）。
 
 <!-- gates:ci:begin -->
 > 本节由 `node scripts/check-gates-manifest.mjs --write` 从 `scripts/gates.json` 生成，**不要手改**；顺序即本机全量执行顺序，`分片` 列即 CI matrix 分片（同片串行、片间并行）。
@@ -36,12 +38,13 @@ node scripts/run-gates.mjs --list          # 看档位、分片与执行顺序
 | # | 分片 | 门禁 | 防什么 |
 |---|---|---|---|
 | 1 | `static` | `check-gates-manifest.mjs` | 元门禁：磁盘 check-*.mjs、本清单、AGENTS.md 生成段、ci.yml 分片矩阵四者零漂移 |
-| 2 | `static` | `check-fmt-baseline.mjs` | `cargo fmt --check` 差异处数不得超过 gates.json 的 fmtBaseline（防裸跑 fmt 重排整个 crate） |
-| 3 | `static` | `tsc --noEmit` | TypeScript 类型检查（tsconfig 只覆盖 src，scripts 是纯 JS 不参与） |
-| 4 | `unit` | `vitest` | 前端全量用例；--pool=vmForks 见 vitest.config.ts 的 pool 说明（Windows 上的既定跑法） |
-| 5 | `rust` | `cargo test --lib` | 后端全量单测（真 tmpdir，不 mock fs）；7 例真机冒烟默认 ignored |
+| 2 | `static` | `check-gate-change-review.mjs` | PR 改动触及门禁链时，正文必须有 `## 门禁改动` 段逐个交代 + 段末独立复核结论（issue #8）；无 PR 上下文 SKIP，显式声明改动却无 base 时 fail-closed |
+| 3 | `static` | `check-fmt-baseline.mjs` | `cargo fmt --check` 差异处数不得超过 gates.json 的 fmtBaseline（防裸跑 fmt 重排整个 crate） |
+| 4 | `static` | `tsc --noEmit` | TypeScript 类型检查（tsconfig 只覆盖 src，scripts 是纯 JS 不参与） |
+| 5 | `unit` | `vitest` | 前端全量用例；--pool=vmForks 见 vitest.config.ts 的 pool 说明（Windows 上的既定跑法） |
+| 6 | `rust` | `cargo test --lib` | 后端全量单测（真 tmpdir，不 mock fs）；7 例真机冒烟默认 ignored |
 
-共 5 个 CI 门禁，分 3 个分片（static 3、unit 1、rust 1）；manual 2、support 0 见 `scripts/gates.json`。
+共 6 个 CI 门禁，分 3 个分片（static 4、unit 1、rust 1）；manual 2、support 1 见 `scripts/gates.json`。
 <!-- gates:ci:end -->
 
 ### 0.2 证据与验证纪律
@@ -172,7 +175,10 @@ node scripts/run-gates.mjs --list          # 看档位、分片与执行顺序
 | `doc/ISSUE_GUIDE.md` | 怎么发 issue：正文四要素、复现命令与 `needs-repro`、关闭方式、模板 |
 | `doc/PR_GUIDE.md` | 怎么开 PR：拆分命名、正文分段、基线验证、门禁改动与独立复核、合并条件、对账与回签 |
 | `scripts/gates.json` | 门禁清单**唯一事实来源**（§0.1 的生成段由它渲染） |
+| `scripts/check-gate-change-review.mjs` | 门禁链改动披露闸门：PR 改动命中门禁链时，正文必须有 `## 门禁改动` 段 + 段末独立复核结论（issue #8） |
+| `scripts/check-pr-parity.mjs` | CI 等价复跑：在被推送 sha 的干净检出里跑同一份清单（issue #8） |
 | `.plan/iteration-workflow-2026-11-01.md` | issue #6 的实施方案（移植对照表、门禁契约、测试计划） |
+| `.plan/iteration-workflow-gates-2026-11-01.md` | issue #8 的实施方案（披露闸门、parity、时点边界） |
 | `.plan/export-ux-audit-2026-10-17.md` | 导出 UX 审计：14 条 finding、评分 6/10、修复依据 |
 | `.plan/execution-log-2026-10-14.md` | 16-18 节是 FE-03b/FE-06/FE-07 全程记录 |
 | `.plan/remediation-verification-ledger-2026-10-13.md` | 62 项逐条裁决台账 |

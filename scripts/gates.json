@@ -25,6 +25,12 @@
       "why": "元门禁：磁盘 check-*.mjs、本清单、AGENTS.md 生成段、ci.yml 分片矩阵四者零漂移"
     },
     {
+      "name": "check-gate-change-review.mjs",
+      "cmd": ["node", "scripts/check-gate-change-review.mjs"],
+      "shard": "static",
+      "why": "PR 改动触及门禁链时，正文必须有 `## 门禁改动` 段逐个交代 + 段末独立复核结论（issue #8）；无 PR 上下文 SKIP，显式声明改动却无 base 时 fail-closed"
+    },
+    {
       "name": "check-fmt-baseline.mjs",
       "cmd": ["node", "scripts/check-fmt-baseline.mjs"],
       "shard": "static",
@@ -62,5 +68,11 @@
       "why": "LUMEN 预设真窗口用例：同上，需要真实桌面会话"
     }
   ],
-  "support": []
+  "support": [
+    {
+      "name": "check-pr-parity.mjs",
+      "cmd": ["node", "scripts/check-pr-parity.mjs", "--shard", "static"],
+      "why": "CI 等价复跑：在临时 detached worktree 里跑同一份清单（issue #8）。**不进 ci 档**——它要在仓库里再开一个 worktree，在 CI 的 job workspace 里属于嵌套 worktree，风险大于收益；CI 自己就是那个干净环境。pre-push 对每个被推送 sha 跑一次，`npm run parity` 手动跑"
+    }
+  ]
 }

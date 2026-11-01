@@ -13,6 +13,7 @@
     "gates": "node scripts/run-gates.mjs ci",
     "gates:static": "node scripts/run-gates.mjs ci --shard static",
     "gates:list": "node scripts/run-gates.mjs --list",
+    "parity": "node scripts/check-pr-parity.mjs",
     "tauri": "tauri",
     "release": "node scripts/release.mjs",
     "e2e:unit": "vitest run",

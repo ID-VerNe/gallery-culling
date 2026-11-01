@@ -99,16 +99,43 @@ type/<issue 号>-p<字母>-<slug>             # 多分节，如 feat/6-pb-gates-
 门禁是这套协作里唯一的第三方校验，**被测方却可以在同一个 PR 里改门禁**。所以 diff 触及门禁执行链时，验收标准加两条——触发范围（任一命中）：`scripts/check-*.mjs`、`scripts/gates.json`、`scripts/run-gates.mjs`、`.github/workflows/ci.yml`、`.githooks/` 下全部钩子。
 
 1. **正文必须有 `## 门禁改动` 段**，逐个文件交代：断言改了什么（改前/改后）、为什么必须改（原始症状如何要求这条改动，不能是「为了变绿」）、三种组合的红绿证据（未打补丁 base / 打补丁 / 只改门禁——**只改门禁必须仍红在原症状上**）、是否同步改了清单与 `AGENTS.md` 生成段。
-2. **独立复核**：由**不同上下文**的复核会话只读 PR diff + 本地复跑门禁，结论（`APPROVE` / `REQUEST_CHANGES`）与证据贴进 PR 评论。修复者不能给自己复核。
+2. **独立复核**：由**不同上下文**的复核会话只读 PR diff + 本地复跑门禁，结论（`APPROVE` / `REQUEST_CHANGES`）与证据写进 `## 门禁改动` 段**末尾**。修复者不能给自己复核。
 
 清单至少覆盖：门禁是否仍能钉住原症状（而不是改成「怎么跑都绿」）；是否删弱或跳过了断言、放宽了阈值；基线是否真红；是否漏改清单 / 生成段 / `ci.yml`。
+
+**这两条是机器门禁**（`scripts/check-gate-change-review.mjs`，registry 见 `scripts/gates.json` 的 `static` 档）——不再靠人眼：
+
+- CI 在 PR 上读 `base...HEAD` 改动集与正文：命中门禁链却没有段、段内漏列文件、段末没有复核结论、或复核结论排在证据之前（**自审形状**）→ 红。
+- 结论只认 `APPROVE` / `APPROVED` / `REQUEST_CHANGES`；`<PENDING>` 与空白不算复核。`REQUEST_CHANGES` 本身**能通过**这条门禁——它校验的是「结论已贴且顺序正确」，结论内容由评审人判断。
+- 红灯的语义是「复核还没贴」，不是「CI 坏了」：作者补完结论后重跑即绿。
+- 生效边界：`APPROVED_AT`（`2026-11-02`）之前开的 PR 只提示不判红。
+
+本机先自查一遍（推送前就能发现漏列）：
+
+```bash
+node scripts/check-gate-change-review.mjs --base origin/master --body-file pr.md
+```
+
+### CI 等价复跑（parity）
+
+「本地绿」与「CI 绿」不是同一件事：worktree 里有 `node_modules`，主工作区还有被 gitignore 的 `src-tauri/binaries`（184MB sidecar，CI 只造 1 个占位文件）。PR 里写的「全绿」如果只在开发机成立，到 CI 才翻红——那时归因成本已经很高。
+
+```bash
+node scripts/check-pr-parity.mjs --shard static   # 快速：只跑最便宜的一档
+node scripts/check-pr-parity.mjs                  # 全量三片
+```
+
+它把复跑挪到**被推送 sha 的临时 detached worktree**（只有已跟踪文件），用该 sha 自己的 `run-gates.mjs` + `gates.json` 执行；`node_modules` 链接进来（同一份 lockfile 的产物），`src-tauri/binaries` **不注入**（正是与 CI 分叉处，依赖它的用例就该在这里红）。退出码：`0` 绿 / `1` 有门禁红 / `2` 环境问题（ref 解析不了、worktree 建不起、未知分片）。
+
+`.githooks/pre-push` 对每个被推送的 sha 自动跑一次（static 片）；`SKIP_PARITY=1 git push` 跳过并留痕。
 
 ## 开 PR 前自查
 
 1. `npm run gates`（= `node scripts/run-gates.mjs ci`）全绿；只改文档时可只跑 `npm run gates:static`，但 PR 里要说明。
 2. **本机红线先跑基线**：门禁红了先判断是代码问题还是环境问题——用 `git worktree` 开一个 pristine HEAD 对照跑一遍，同族失败就是既有环境抖动（已知：满负荷下 App 级集成用例会 5s 超时假红，master 基线同条件也能复现），记录在案，不要盲目「修复」。
 3. 确认分支基于最新 `master`：`git fetch origin master` 后无落后。
-4. 门禁链改动先自查：确认 `## 门禁改动` 段每个被改文件都被列出。
+4. 门禁链改动先自查：`node scripts/check-gate-change-review.mjs --base origin/master --body-file pr.md`——它会直接告出漏列哪个文件。
+5. 做过 CI 等价复跑：`node scripts/check-pr-parity.mjs --shard static`（pre-push 也会自动跑），PR 的「测试」段贴它的 PASS 行。
 
 ## 合并条件（三条全满足才合）
 
@@ -166,7 +193,9 @@ type/<issue 号>-p<字母>-<slug>             # 多分节，如 feat/6-pb-gates-
 
 ## 门禁改动
 
-仅当 diff 触及门禁链时保留；逐个文件写清改了什么、为什么必须改、三种组合的红绿证据，并贴独立复核结论。
+仅当 diff 触及门禁链时保留；逐个文件写清改了什么、为什么必须改、三种组合的红绿证据。
+
+**独立复核**：<APPROVE / REQUEST_CHANGES> + 复核证据（必须放在本段最末）
 
 ## 影响面
 
