@@ -43,6 +43,12 @@
       "why": "TypeScript 类型检查（tsconfig 只覆盖 src，scripts 是纯 JS 不参与）"
     },
     {
+      "name": "check-theme-alpha.mjs",
+      "cmd": ["node", "scripts/check-theme-alpha.mjs"],
+      "shard": "static",
+      "why": "扫 src 里实际用到的「主题色+透明度」组合，逐个去 Tailwind 产物里核对有没有规则（issue #15）。配色写成 var(--color-*) 时 /NN 会被**静默丢弃**，不报错不警告，只有这条能盯住"
+    },
+    {
       "name": "vitest",
       "cmd": ["npx", "vitest", "run", "--pool=vmForks"],
       "shard": "unit",

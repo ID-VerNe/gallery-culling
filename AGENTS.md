@@ -41,10 +41,11 @@ npm run parity                             # CI 等价复跑：在被推送 sha 
 | 2 | `static` | `check-gate-change-review.mjs` | PR 改动触及门禁链时，正文必须有 `## 门禁改动` 段逐个交代 + 段末独立复核结论（issue #8）；无 PR 上下文 SKIP，显式声明改动却无 base 时 fail-closed |
 | 3 | `static` | `check-fmt-baseline.mjs` | `cargo fmt --check` 差异处数不得超过 gates.json 的 fmtBaseline（防裸跑 fmt 重排整个 crate） |
 | 4 | `static` | `tsc --noEmit` | TypeScript 类型检查（tsconfig 只覆盖 src，scripts 是纯 JS 不参与） |
-| 5 | `unit` | `vitest` | 前端全量用例；--pool=vmForks 见 vitest.config.ts 的 pool 说明（Windows 上的既定跑法） |
-| 6 | `rust` | `cargo test --lib` | 后端全量单测（真 tmpdir，不 mock fs）；7 例真机冒烟默认 ignored |
+| 5 | `static` | `check-theme-alpha.mjs` | 扫 src 里实际用到的「主题色+透明度」组合，逐个去 Tailwind 产物里核对有没有规则（issue #15）。配色写成 var(--color-*) 时 /NN 会被**静默丢弃**，不报错不警告，只有这条能盯住 |
+| 6 | `unit` | `vitest` | 前端全量用例；--pool=vmForks 见 vitest.config.ts 的 pool 说明（Windows 上的既定跑法） |
+| 7 | `rust` | `cargo test --lib` | 后端全量单测（真 tmpdir，不 mock fs）；7 例真机冒烟默认 ignored |
 
-共 6 个 CI 门禁，分 3 个分片（static 4、unit 1、rust 1）；manual 2、support 1 见 `scripts/gates.json`。
+共 7 个 CI 门禁，分 3 个分片（static 5、unit 1、rust 1）；manual 2、support 1 见 `scripts/gates.json`。
 <!-- gates:ci:end -->
 
 ### 0.2 证据与验证纪律
