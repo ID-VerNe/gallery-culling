@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * `cargo fmt` 基线守卫（issue #6，对应 AGENTS 红线 2）。
  *

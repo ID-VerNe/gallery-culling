@@ -156,3 +156,19 @@ describe('run-gates 清单读取', () => {
     expect(shardRows(manifest, 'nope')).toEqual([]);
   });
 });
+
+describe('scripts 下的 .mjs 不带 shebang', () => {
+  // 2026-11-01 首次 CI 实证的坑：shebang + CRLF（autocrlf 检出）会让 vitest
+  // 的模块管线吐 `SyntaxError: Invalid or unexpected token`，且不带任何栈——
+  // node --check、esbuild、原生 import 都能过，唯独 vitest 不行。
+  // 调用点全是显式 `node scripts/x.mjs`，shebang 没有存在价值；.gitattributes
+  // 的 `*.mjs text eol=lf` 是第二道防线，这里锁第一道。
+  it('每个 scripts/*.mjs 首行都不是 #!', () => {
+    const files = readdirSync(join(ROOT, 'scripts')).filter((n) => n.endsWith('.mjs'));
+    expect(files.length).toBeGreaterThan(0);
+    for (const name of files) {
+      const first = readFileSync(join(ROOT, 'scripts', name), 'utf8').split('\n', 1)[0];
+      expect(first, `${name} 首行不应是 shebang`).not.toMatch(/^#!/);
+    }
+  });
+});

@@ -128,6 +128,7 @@ node scripts/run-gates.mjs --list          # 看档位、分片与执行顺序
 - **WebView2 崩溃红线（踩过两次：10-15、10-17）**：`main.rs` 只在 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` **未设置**时才写 `--in-process-gpu`。任何地方裸 set 这个变量都会把它抹掉 → GPU 子进程 STATIC_INIT 连崩 → 浏览器进程自杀 → 白屏 + `msedgewebview2 has stopped working`。加参数**必须**走 `e2e/lib/app.mjs` 的 `webviewArgs()`（显式前置 `--in-process-gpu`）。
 - **e2e 只有应用内驱动这条路能跑**：本机 WebView2 CDP 只服务第一个请求，`e2e/run.mjs`（Playwright）的 `appPageReady()` 永远 false，只会白等超时。真窗口用例走 `npm run e2e:render` / `e2e:preset`（`e2e/run-inapp.mjs` + `src/devtools/e2eRunner.ts` + Vite `/__e2e_log`）。
 - **vitest Windows pool 竞态**：必须 `--pool=vmForks`（`vitest.config.ts` 有注释）。
+- **shebang + CRLF 会让 vitest 炸出无栈 SyntaxError（2026-11-01 首次 CI 实证）**：`autocrlf` 检出的 `.mjs` 若首行是 `#!...`，vitest 模块管线吐 `SyntaxError: Invalid or unexpected token`（不带任何栈），而 `node --check`、esbuild、原生 import 全都能过——极易误判为文件损坏。对策两条：`scripts/*.mjs` 一律不带 shebang（调用点全是显式 `node`）；`.gitattributes` 强制 `*.mjs text eol=lf`。用例锁在 `scripts/gates.test.mjs`。
 - **clippy 的 "error deleting lock file 拒绝访问 (os error 5)" 是 incremental 锁环境噪音**，不是 lint。判断干净要先 grep 掉它，再看有无源码告警。
 - **性能结论必须 release 口径**：`image` crate 内置 JPEG 编码器对优化级别极敏感——同一条 24MP 水印路径 debug 10.9s vs release **616ms**（差 18 倍）。任何写进文档的耗时数字都要 `cargo test --release` 实测，debug 数字只在调试时看。
 - **`cargo test` 并发全量时 `syncqueue::burst_writes_once_with_latest_value`（400ms 合并窗口计时）会假红**，单独重跑即过。判断测试真假先隔离复跑，别急着改实现。

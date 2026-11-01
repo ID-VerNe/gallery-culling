@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * 元门禁：门禁清单、磁盘脚本、AGENTS.md 生成段、CI 分片矩阵，四者零漂移（issue #6）。
  *

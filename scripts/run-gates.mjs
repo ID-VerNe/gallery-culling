@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * 按 `scripts/gates.json` 执行门禁（issue #6）。
  *
