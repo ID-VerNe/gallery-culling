@@ -130,6 +130,61 @@ impl Default for AppSettings {
     }
 }
 
+/// 一条「常用手动镜头」快捷预设（ADR-013）。
+///
+/// 原先这 6 条是写死在前端的常量，用户既改不了也用不上自己的镜头；现在由用户
+/// 自己维护，存在 `settings` 表的 `lens_presets` 键里。
+///
+/// 三个字段都是**自由文本**：镜头型号本来就千奇百怪（`APO-LANTHAR`、`NOKTON`
+/// 的大小写都不统一），焦段有 `50mm` 也有 `50`，光圈有 `f/2.0` 也有 `F2`。
+/// 这里不做任何格式校验 —— 它们最终是写进 XMP 的字符串，用户想写什么就写什么。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LensPreset {
+    pub name: String,
+    pub focal: String,
+    pub aperture: String,
+}
+
+/// 出厂预设：升级用户第一次打开弹窗看到的就是这 6 条（零迁移）。
+///
+/// **只在「键不存在」时使用**。用户把列表删空（存成 `[]`）之后不能再塞回来，
+/// 否则「删了又自己长出来」是比没有这个功能更糟的体验。
+pub fn builtin_lens_presets() -> Vec<LensPreset> {
+    vec![
+        LensPreset {
+            name: "Voigtlander APO-LANTHAR 50mm F2".to_string(),
+            focal: "50mm".to_string(),
+            aperture: "f/2.0".to_string(),
+        },
+        LensPreset {
+            name: "Voigtlander NOKTON 35mm F1.2".to_string(),
+            focal: "35mm".to_string(),
+            aperture: "f/1.2".to_string(),
+        },
+        LensPreset {
+            name: "TTArtisan 28mm F5.6".to_string(),
+            focal: "28mm".to_string(),
+            aperture: "f/5.6".to_string(),
+        },
+        LensPreset {
+            name: "7Artisans 35mm F0.95".to_string(),
+            focal: "35mm".to_string(),
+            aperture: "f/0.95".to_string(),
+        },
+        LensPreset {
+            name: "Leica Summicron-M 50mm f/2".to_string(),
+            focal: "50mm".to_string(),
+            aperture: "f/2.0".to_string(),
+        },
+        LensPreset {
+            name: "Zeiss Planar T* 50mm f/1.4".to_string(),
+            focal: "50mm".to_string(),
+            aperture: "f/1.4".to_string(),
+        },
+    ]
+}
+
 /// `lumen_preview_cmd` 返回：preview_path = None 表示引擎不可用（前端静默降级）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

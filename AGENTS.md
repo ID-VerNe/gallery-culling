@@ -44,6 +44,7 @@
   - `src/utils/viewportImage.ts` —— C2 RAW-only 规则：无 JPG 的 RAW 分组 `src` 必须为 `null`，**不回落 `.NEF`**
   - `src/hooks/useZoomPan` / `useDualZoomPan` —— 绝对系拖拽，抓取偏移存 ref
   - `src/hooks/useViewportImage`
+  - `src/utils/lensPresets.ts` + `src/hooks/useLensPresets.ts` —— 镜头快捷预设（ADR-013）：**纯逻辑与 IO 分开**；`sanitizeLensPresets([])` 返回空数组，删空后**不复种**出厂 6 条
 - `src-tauri/src/watermark.rs` —— 边框水印（ADR-012）：宿主自绘、只对 JPEG、挂点在导出临时文件上；4 预设 + 字号 8–35；运行时读系统字体链（msyh.ttc 优先，**不打包**）
 - hooks 内部直接调 `useToast()` 是既定模式，不要往上传回调。
 - 测试规模（2026-10-19）：Rust 346 个测试函数（339 通过 + 7 例真机冒烟 ignored）/ 前端 812 用例。
@@ -108,7 +109,8 @@
 | `.plan/export-ux-audit-2026-10-17.md` | 导出 UX 审计：14 条 finding、评分 6/10、修复依据 |
 | `.plan/execution-log-2026-10-14.md` | 16-18 节是 FE-03b/FE-06/FE-07 全程记录 |
 | `.plan/remediation-verification-ledger-2026-10-13.md` | 62 项逐条裁决台账 |
-| `.plan/adr-001` – `adr-012` | 十二份 ADR（旗标存储 / 写盘合并 / 色标 / 撤销栈 / 查询筛选 / 套用调色 / 任务互斥 / XMP 增量 / RAW 1:1 / 选片集 / LR 导入 / 宿主水印），每份含「代价与风险」 |
+| `.plan/adr-001` – `adr-013` | 十三份 ADR（旗标存储 / 写盘合并 / 色标 / 撤销栈 / 查询筛选 / 套用调色 / 任务互斥 / XMP 增量 / RAW 1:1 / 选片集 / LR 导入 / 宿主水印 / 镜头预设自定义），每份含「代价与风险」 |
+| `.plan/lens-presets-custom-2026-11-01.md` | issue #4 的实施方案（存储选型对比、契约、测试计划） |
 | `.plan/rendered-export-design-2026-10-17.md`、`rendered-export-ux-ui-plan-2026-10-17.md` | 成片导出设计与 UX 方案 |
 | `docs/lumen-benchmark-2026-10-18.md` | 与 LUMEN 的 26 项能力对照矩阵（含「读法」与 10-19 更新行） |
 | `.handoffs/` | 交接文档 |
