@@ -43,7 +43,10 @@ if [ "$SKIP_PARITY" = "1" ]; then
 fi
 
 parity_rc=0
-for sha in $(git rev-list --remotes=origin..HEAD); do
+# 逐 sha 复跑：`origin/master..HEAD` 覆盖本分支上所有尚未进 master 的提交。
+# 注意别写 `git rev-list --remotes=origin..HEAD`——`--remotes` 的值是按**引用名**做 glob 的，
+# 后面再跟 `..` 会被当成引用名的一部分，静默返回空集，整个循环一次都不跑（等于 parity 从未生效）。
+for sha in $(git rev-list origin/master..HEAD); do
   node scripts/check-pr-parity.mjs --ref "$sha" --shard static || parity_rc=$?
   [ "$parity_rc" -ne 0 ] && break
 done
