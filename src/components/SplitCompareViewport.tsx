@@ -165,7 +165,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             onError={image.markBroken}
             style={{
               transform,
-              transition: zoom.isDragging ? 'none' : 'transform 0.05s ease-out',
+              transition: zoom.transition,
               imageOrientation: 'from-image',
               filter: toneFilter,
             }}

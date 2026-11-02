@@ -589,17 +589,33 @@ function scaleOf(img: HTMLImageElement): number {
 }
 
 /**
+ * 「正在生成 1:1 细节」提示在不在 —— 按 `role="status"` 节点判定。
+ *
+ * 不能用 `body.innerText.includes(...)`：视口底栏的提示文字同样在 DOM 里，
+ * 全局文本搜索会把「别处的字」当成「这条提示还在」。
+ */
+function detailLoadingVisible(): boolean {
+  return Array.from(document.querySelectorAll<HTMLElement>('[role="status"]')).some((n) =>
+    (n.textContent || '').includes('正在生成 1:1 细节'),
+  );
+}
+
+/**
  * 场景：RAW-only 1:1 细节（FR-05）。
  *
  * 为什么必须用**真实 ARW**：夹具里的 RAW 是「JPEG 字节 + .ARW 后缀」，
  * `photo.export` 解不出图，1:1 永远走不到 —— 那样测出来的「通过」毫无意义。
  *
- * 四段，每段都在验一件 jsdom 测不到的事：
+ * 五段，每段都在验一件 jsdom 测不到的事：
  *   A. 首次 1:1：真耗时（≤10s 的出口标准）、换的是全分辨率图、`scale` 真的是
  *      `naturalWidth / offsetWidth`（jsdom 不布局，只能给这两个值打桩，
  *      打桩等于假设结论成立）；
  *   B. 再按 Z 回适应窗口；
- *   C. 切走再切回 → 重新请求走**缓存命中**（≤2s，而不是再等 6–8s）；
+ *   C1. **离开 1:1 之后按 Z 必须重新进 1:1**（issue #18 · PB-10）：滚轮是真
+ *      窗口里唯一能把比例推离 1:1 的手势（双击本身就是 Z 同构的开关，拖拽
+ *      在 1:1 时被夹紧、比例不变）。jsdom 里这条只能靠打桩，这里读的是真
+ *      布局出来的 `offsetWidth`；
+ *   C2. 切走再切回 → 重新请求走**缓存命中**（≤2s，而不是再等 6–8s）；
  *   D. 另一张上取消 → 提示消失、仍停在预览；再按 Z 能重新认领那次在飞的结果
  *      （不能静默失效，否则「取消」等于把 Z 键弄坏）。
  */
@@ -649,10 +665,13 @@ async function scenarioDetailOneToOne(
 
   const tFirst = Date.now();
   pressKey('z');
+  // 渲染提示只在 URL 还没落、且 hook 的 loading 为真时出现。缓存命中时
+  // `lumen_detail_cmd` 100ms 内就返回（实测 101–109ms），提示根本来不及被
+  // 采样到 —— 先轮询等它出现，再判 false，否则是拿「采样太粗」当「没提示」。
   const banner = await waitFor(
-    () => (document.body.innerText.includes('正在生成 1:1 细节') ? true : null),
-    5_000,
-    100,
+    () => (detailLoadingVisible() ? true : null),
+    3_000,
+    50,
   );
   raw(`[${el()}] >>> 断言D3 渲染中有明确提示 = ${!!banner}`);
 
@@ -700,8 +719,43 @@ async function scenarioDetailOneToOne(
     `[${el()}] >>> 断言D7 回到适应窗口 = ${Math.abs(backScale - 1) < 0.01}（${backScale.toFixed(3)}）`,
   );
 
-  // ── C. 切走再切回 → 缓存命中 ──────────────────────────
-  raw('===== 场景 C：切走再切回（缓存命中）=====');
+  // ── C1. 离开 1:1 → 再按 Z 仍要落回 1:1（PB-10）─────────
+  raw('===== 场景 C1：滚轮离开 1:1 后再按 Z（PB-10）=====');
+  const wheelHost = viewportImg(nameA)?.parentElement;
+  if (wheelHost) {
+    // deltaY<0 即放大一格。1:1 已经是 7.6 倍，再放大就到图片真实像素之外 ——
+    // 比例必须真的变了，这一条才有意义。
+    wheelHost.dispatchEvent(
+      new WheelEvent('wheel', { deltaY: -100, clientX: 400, clientY: 300, bubbles: true }),
+    );
+  }
+  await sleep(600);
+  const afterWheel = viewportImg(nameA);
+  const wheelScale = afterWheel ? scaleOf(afterWheel) : -1;
+  const oneToOneScale = afterWheel ? afterWheel.naturalWidth / afterWheel.offsetWidth : -1;
+  raw(`[${el()}] 滚一格后 scale=${wheelScale.toFixed(3)}（1:1 应为 ${oneToOneScale.toFixed(3)}）`);
+  raw(`[${el()}] >>> 断言C-1 滚轮真的离开了 1:1 = ${Math.abs(wheelScale - oneToOneScale) > 0.5}`);
+
+  pressKey('z');
+  // 缓存已在场景 A 落盘，重新进入是命中路径，不需要再等 6–8s。
+  await waitFor(
+    () => {
+      const img = viewportImg(nameA);
+      return img && /_detail_lumen/.test(img.src) && img.complete ? img : null;
+    },
+    20_000,
+    100,
+  );
+  await sleep(600);
+  const reEntered = viewportImg(nameA);
+  const reScale = reEntered ? scaleOf(reEntered) : -1;
+  const reExpected = reEntered ? reEntered.naturalWidth / reEntered.offsetWidth : -1;
+  raw(`[${el()}] 再按 Z 后 scale=${reScale.toFixed(3)} 期望=${reExpected.toFixed(3)}`);
+  const reEnteredOk = reScale > 1 && Math.abs(reScale - reExpected) < 0.05;
+  raw(`[${el()}] >>> 断言C-2 离开 1:1 后按 Z 重新进 1:1 = ${reEnteredOk}`);
+
+  // ── C2. 切走再切回 → 缓存命中 ─────────────────────────
+  raw('===== 场景 C2：切走再切回（缓存命中）=====');
   pressKey('ArrowRight');
   await sleep(1500);
   pressKey('ArrowLeft');
@@ -737,16 +791,15 @@ async function scenarioDetailOneToOne(
   raw(`[${el()}] B 预览就绪 = ${!!imgB}（naturalWidth=${imgB?.naturalWidth ?? 0}）`);
   if (!imgB) return;
 
-  const tB = Date.now();
   pressKey('z');
   const bannerB = await waitFor(
-    () => (document.body.innerText.includes('正在生成 1:1 细节') ? true : null),
-    5_000,
-    100,
+    () => (detailLoadingVisible() ? true : null),
+    3_000,
+    50,
   );
   raw(`[${el()}] >>> 断言D9 B 上出现渲染提示 = ${!!bannerB}`);
 
-  // 只在「正在生成」那条横幅里找按钮 —— 设置弹窗等别处也有「取消」
+  // 横幅里的「取消」按钮 —— 只在「正在生成」那条横幅里找，设置弹窗等别处也有「取消」
   const bannerNode = Array.from(document.querySelectorAll<HTMLElement>('[role="status"]')).find(
     (n) => (n.textContent || '').includes('正在生成 1:1 细节'),
   );
@@ -754,19 +807,35 @@ async function scenarioDetailOneToOne(
   raw(`[${el()}] 横幅上的「取消」按钮 = ${!!cancelBtn}`);
   cancelBtn?.click();
 
-  const bannerGone = await waitFor(
-    () => (document.body.innerText.includes('正在生成 1:1 细节') ? null : true),
-    3_000,
-    100,
+  // 先等 loading 真的落下，再要求横幅消失。原先直接等「横幅不在」，而
+  // 100ms 快速轮询下点击后那一帧本就还没重渲染 —— 断言在 0ms 处就判真，
+  // 什么都没验到（2026-11-02 两次连跑：点没点到都是 true）。
+  const loadingGone = await waitFor(
+    () => (detailLoadingVisible() ? null : true),
+    5_000,
+    50,
   );
-  raw(`[${el()}] >>> 断言D10 取消后提示消失 = ${!!bannerGone}`);
+  raw(`[${el()}] >>> 断言D10 取消后渲染中提示落下 = ${!!loadingGone}`);
   raw(
     `[${el()}] >>> 断言D11 取消不弹「渲染失败」 = ${!document.body.innerText.includes('细节渲染失败')}`,
   );
   raw(`[${el()}] >>> 断言D12 取消后仍停在预览 = ${!!imgB && !/_detail_lumen/.test(imgB.src)}`);
 
   // 反悔：同一张再按 Z。后端那次渲染还在飞，必须「重新认领」而不是静默无效。
+  //
+  // 计时从**这一下**开始，不包住上面被取消的那段：D14 问的是「重按之后有没有
+  // 从头再渲一遍」，被取消的那次渲染本来就该算在等待里（真机实测它可能长达
+  // 一分钟），把它算进窗口只会让这条断言量的是机器的快慢。
+  const tB = Date.now();
   pressKey('z');
+  // 认领后 3s 看一眼挂载源：分不清「认领没生效」与「认领了但落点没算出来」，
+  // 下面两条无论怎么红都指不到原因（2026-11-02 实测就红在这里）。
+  await sleep(3_000);
+  const afterReclaim = viewportImg(nameB);
+  raw(
+    `[${el()}] 再按 Z 后 3s：${/_detail_lumen/.test(afterReclaim?.src ?? '') ? '已挂细节' : '仍是预览'}` +
+      ` scale=${afterReclaim ? scaleOf(afterReclaim).toFixed(3) : '-'}`,
+  );
   const reclaimedB = await waitFor(
     () => {
       const img = viewportImg(nameB);
@@ -776,10 +845,10 @@ async function scenarioDetailOneToOne(
     200,
   );
   const reclaimMs = Date.now() - tB;
-  raw(`[${el()}] 取消后重新认领 ${reclaimMs}ms（含被取消的那段渲染）`);
+  raw(`[${el()}] 重按后到细节就绪 ${reclaimMs}ms（不含被取消的那段渲染）`);
   raw(`[${el()}] >>> 断言D13 取消后再按 Z 仍能出图 = ${!!reclaimedB}`);
   raw(
-    `[${el()}] >>> 断言D14 没有从头重渲（总耗时 < 12s） = ${!!reclaimedB && reclaimMs < 12_000}（${reclaimMs}ms）`,
+    `[${el()}] >>> 断言D14 重按后没有从头重渲（< 12s） = ${!!reclaimedB && reclaimMs < 12_000}（${reclaimMs}ms）`,
   );
 
   raw(`[${el()}] 场景 D 结束`);

@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
 import { getToneFilterString } from '../utils/autoTone';
-import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from '../utils/viewportZoom';
+import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, isFitScale, scaleLabel } from '../utils/viewportZoom';
 import { useZoomPan } from '../hooks/useZoomPan';
 import { useViewportImage } from '../hooks/useViewportImage';
 import { useLumenDetail } from '../hooks/useLumenDetail';
@@ -106,32 +106,158 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
 
   // FR-05：RAW-only 的全分辨率细节（按 Z 才请求，6–8 秒/张）。
   const detail = useLumenDetail(group, lumenStatus ?? LUMEN_UNAVAILABLE);
-  /** 上一次 1:1 的比例（用于「再按一次回适应」的判定）。 */
-  const oneToOneScaleRef = useRef<number | null>(null);
-  /** 按 Z 时细节还没就绪 → 等 img onLoad 再切，不能立刻用预览宽度算。 */
+  /**
+   * PB-10：上一次按 Z 的落点是 1:1 还是适应（同一个键来回切）。
+   *
+   * 不能记下 1:1 的比例再拿当前 scale 跟它比 —— 固定窗口（`|差| < 0.02`）
+   * 会把「离开了一格又落回窗口内」读成「还在 1:1」，精确相等又会让 1:1
+   * 只在当前值恰好等于它时成立，而重算 1:1 与「已经在 1:1」在数值上不可区分。
+   * 记模式是唯一自洽的：1:1 的落点就是 `zoom.oneToOne()`，离开 1:1 的
+   * 每个入口（滚轮 / 拖拽 / 双击 / 复位 / 换图）都会把模式打回适应。
+   */
+  const oneToOneModeRef = useRef(false);
+
+  /**
+   * 等在飞的细节图时，「这次请求是不是为了进 1:1」。
+   *
+   * 请求与模式是两件事：等图的 6–8 秒里用户可能滚轮 / 拖拽 / 换图离开，
+   * 也可能按 Z 放弃（PB-10 的 C1 场景）。图加载完时若不再是要进 1:1，
+   * **什么都不做**——直接 `zoom.oneToOne()` 会把用户已经调好的画面掰回去。
+   */
   const pendingOneToOneRef = useRef(false);
+  /**
+   * 上面那个「等细节到位再切」的意图，**这一次请求**还算不算数。
+   *
+   * `pendingOneToOneRef` 只回答「按过 Z 还没有结果」，会被「再按一次收回」
+   * 与离开 1:1 清掉；`wantOneToOneRef` 只在「按 Z 请求」时置位、在结果到达时
+   * 消费。两者分开是因为 `src` 从预览换成细节时 React 复用同一个 `<img>`
+   * 节点，**不保证**再送一次 `onLoad`：到达结算走的是结果到达的 effect，
+   * 而 onLoad 那条路可能根本不来。`want` 回答「这次请求还算不算数」，模式位
+   * 回答「画面现在是不是 1:1」—— 混成一个的话，图到了、也切到了 1:1，下一次
+   * 按 Z 却会当成「再进一次 1:1」。
+   */
+  const wantOneToOneRef = useRef(false);
+
+  // 等图期间「撤销进 1:1」的唯一出口：取消（按钮与再按 Z 都落到这里）、
+  // 判失败。
+  //
+  // 它同时也退出 1:1：进 1:1 时画面**当场**就切成细节的落点（图还没到，
+  // 先按预览算），所以取消之后画面仍停在放大状态。不把模式一起打回去的话，
+  // 下一次按 Z 走的是「已在 1:1 → 复位」，`enterOneToOne` 根本不执行、在飞
+  // 的那次不会被认领，图到了也没有人采用（真机 e2e 的 D13/D14）。
+  //
+  // 反过来，**结果到达时不能调它**：那时模式刚被置成真，进来就是一次
+  // `zoomReset()`，等于在到达的当帧把刚切上的 1:1 撤掉。
+  const zoomReset = zoom.reset;
+  const zoomOneToOne = zoom.oneToOne;
+  const zoomLeave = zoom.setOneToOneLeaveListener;
+
+  const abandonPendingOneToOne = useCallback(() => {
+    if (oneToOneModeRef.current) zoomReset();
+    oneToOneModeRef.current = false;
+    pendingOneToOneRef.current = false;
+    wantOneToOneRef.current = false;
+  }, [zoomReset]);
+
+  /**
+   * 进 1:1 的唯一入口：按 Z 与双击都落在这里。
+   * JPG 分组原图就是全分辨率，不需要（也不该）花 6–8 秒渲染。
+   *
+   * `fallback` 只在算不出 1:1（预览还没布局）时兜底，见 `zoom.oneToOne`。
+   */
+  const enterOneToOne = useCallback(
+    (fallback?: number) => {
+      const showDetail = () => {
+        if (zoomOneToOne(fallback) !== null) oneToOneModeRef.current = true;
+      };
+      if (group?.jpg?.path || detail.url) {
+        showDetail();
+        return;
+      }
+      // RAW-only 且还没细节：先请求，等图真正加载完再切（onLoad 里接手）。
+      pendingOneToOneRef.current = true;
+      wantOneToOneRef.current = true;
+      // 先请求**再**结算落点：`detail.request()` 是同步的，取消后马上再按 Z
+      // 会让 hook 重新认领在飞的那张 —— 复用它上面已经拿到的一次 setLoading
+      // 重渲染。顺序反过来的话，这一帧的渲染可能带着 cancel() 留下的
+      // `loading=false` 落到 DOM 上（15ms 真实计时器静默吞掉一次 setState）。
+      detail.request();
+      // 一张照片可能早就被别处请求过（缓存在飞）。这时 onLoad 也会来，
+      // 但不能把「这一帧什么都不做」当成默认 —— 算得出落点就先切过去，
+      // 等到手的也只是同一个落点。算不出来（预览还没布局）才交给 onLoad。
+      showDetail();
+    },
+    [zoomOneToOne, group, detail],
+  );
 
   const toggleOneToOne = useCallback(() => {
     // 已在 1:1 → 回适应（同一个键来回切，与双击的「适应 ↔ 放大」同构）。
-    const known = oneToOneScaleRef.current;
-    if (known !== null && Math.abs(zoom.scale - known) < 0.02) {
-      zoom.reset();
-      oneToOneScaleRef.current = null;
+    if (oneToOneModeRef.current) {
+      // 回适应同样是一次「不再等」：放着 pending 的话，图一到，结果到达的
+      // effect 会把画面从适应拽回细节落点 —— 用户刚按了「退出 1:1」，画面
+      // 却在 6–8 秒后自己放大。
+      pendingOneToOneRef.current = false;
+      wantOneToOneRef.current = false;
+      zoomReset();
+      oneToOneModeRef.current = false;
       return;
     }
 
-    // JPG 分组：原图就是全分辨率，不需要（也不该）花 6–8 秒渲染。
-    const hasJpg = Boolean(group?.jpg?.path);
-    if (!hasJpg && !detail.url) {
-      // 还没细节：先请求，等图真正加载完再切（onLoad 里接手）。
-      pendingOneToOneRef.current = true;
-      detail.request();
+    // 正在等这次请求的图：再按一次 = 收回请求，图到了也不要再切过去。
+    if (pendingOneToOneRef.current) {
+      abandonPendingOneToOne();
       return;
     }
 
-    const s = zoom.oneToOne();
-    if (s !== null) oneToOneScaleRef.current = s;
-  }, [zoom, group, detail]);
+    enterOneToOne();
+  }, [enterOneToOne, abandonPendingOneToOne]);
+
+  // 任何非 Z 的离开 1:1 都会让模式打回适应，否则下一次按 Z 会复位到一个
+  // 用户早就离开的画面；等图的请求同样作废。
+  useEffect(() => {
+    zoomLeave(() => {
+      oneToOneModeRef.current = false;
+      pendingOneToOneRef.current = false;
+      wantOneToOneRef.current = false;
+    });
+  }, [zoomLeave]);
+
+  // 换图：`resetKey` 变化已经把画面复位了（并在离开 1:1 的监听里清掉了
+  // 等图标志），这里只补模式位。不能调 `abandonPendingOneToOne`：它会顺手
+  // `zoom.reset()`，等于在复位效果里再 set 一次同样的值，多一轮渲染。
+  useEffect(() => {
+    oneToOneModeRef.current = false;
+    pendingOneToOneRef.current = false;
+    wantOneToOneRef.current = false;
+  }, [group?.id]);
+
+
+  // 结果到达就切：不能只指望 `src` 换成细节时 `<img onLoad>` 会再来一次。
+  // 布局还没起来（真机上早于 onLoad）时算不出落点，那就**什么都别消费**，
+  // 留给 onLoad 接手 —— 先清标志再算落点，会让 onLoad 看到一个「没人等」的
+  // pending，图到了却停在适应。
+  useEffect(() => {
+    if (!wantOneToOneRef.current || !detail.url) return;
+    const land = zoomOneToOne();
+    if (land === null) return;
+    // 落点已经结算，这里**只**清两个等图标志，绝不能走
+    // `abandonPendingOneToOne` —— 它见到模式为真就会 `zoom.reset()`，等于
+    // 在结果到达的当帧把刚切上的 1:1 撤掉。模式标记也不能跟着 `want` 一起
+    // 清：`want` 回答的是「这次请求还算不算数」，模式回答的是「画面现在是
+    // 不是 1:1」；混成一个的话，图到了、也确实切到了 1:1，下一次按 Z 却会
+    // 当成「再进一次 1:1」。
+    oneToOneModeRef.current = true;
+    pendingOneToOneRef.current = false;
+    wantOneToOneRef.current = false;
+    // 刻意不依赖 `abandonPendingOneToOne`：它的身份随 `zoom` 变化，而
+    // `zoom.reset()` 会换掉 `zoom.scale` 的对象身份 —— 依赖它等于让这个
+    // 「结果到了」的 effect 在每次复位后重跑。
+  }, [detail.url, zoomOneToOne]);
+
+  useEffect(() => {
+    if (!detail.failed) return;
+    abandonPendingOneToOne();
+  }, [detail.failed, abandonPendingOneToOne]);
 
   // 把 toggle 注册给全局快捷键（Z）。视口不在时（双栏 / 前后对照）清空，
   // 避免 `Z` 打到已经卸载的视口上。
@@ -142,6 +268,20 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
       oneToOneRef.current = () => {};
     };
   }, [oneToOneRef, toggleOneToOne]);
+
+  // 双击与 Z 同构：适应 → 1:1（必要时先请求细节），1:1 → 适应。落点走同一组
+  // 入口，读数才一致；否则双击在 RAW 上会跳到一个「适应 × 2.5」的假放大。
+  // 算不出 1:1（预览还没布局）时退到「适应 × DOUBLE_CLICK_SCALE」，仍是放大。
+  const zoomDoubleClickScale = zoom.bind.doubleClickScale;
+  const handleDoubleClick = useCallback(() => {
+    const target = zoomDoubleClickScale();
+    if (isFitScale(target)) {
+      zoom.reset();
+      oneToOneModeRef.current = false;
+      return;
+    }
+    enterOneToOne(target);
+  }, [zoomDoubleClickScale, zoom, enterOneToOne]);
 
   if (!group) {
     return <ViewportEmptyStateView emptyState={emptyState} />;
@@ -189,7 +329,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
       onPointerMove={zoom.bind.onPointerMove}
       onPointerUp={zoom.bind.onPointerUp}
       onPointerCancel={zoom.bind.onPointerUp}
-      onDoubleClick={zoom.bind.onDoubleClick}
+      onDoubleClick={handleDoubleClick}
       className={`relative flex-1 bg-background-base overflow-hidden flex items-center justify-center select-none ${
         zoom.isDragging ? 'cursor-grabbing' : 'cursor-grab'
       }`}
@@ -211,10 +351,14 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           className="absolute top-14 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-background-base/90 backdrop-blur-md pl-3.5 pr-1.5 py-1 rounded-md text-xs font-semibold text-sky-300 border border-sky-500/40 pointer-events-none"
         >
           正在生成 1:1 细节…（6–8 秒，可继续浏览其它照片）
-          {/* 出口标准要求「渲染中可取消」：取消只让提示消失，渲染会跑完并落缓存。 */}
+          {/* 出口标准要求「渲染中可取消」：取消只让提示消失，渲染会跑完并落缓存。
+              不再等待 = 这一次按 Z 的意图作废，结果到了也不切 1:1。 */}
           <button
             type="button"
-            onClick={detail.cancel}
+            onClick={() => {
+              detail.cancel();
+              abandonPendingOneToOne();
+            }}
             title="只是不再等待；渲染会继续跑完并落缓存，下次按 Z 直接命中"
             className="pointer-events-auto px-2 py-0.5 rounded text-[11px] font-semibold text-white/70 hover:text-white hover:bg-white/10 transition-colors"
           >
@@ -253,10 +397,12 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           crossOrigin="anonymous"
           onLoad={() => {
             // 细节图加载完才知道真实像素宽：此刻才能算 1:1。
+            // 结果到达的 effect 已经先试过一次（缓存命中时比布局早），到这里
+            // 只剩「那次没算出来」与「还没到」两种。两条路径共用同一个出口，
+            // 否则 onLoad 不来的那一次会让 pending 永远挂住。
             if (!pendingOneToOneRef.current) return;
-            pendingOneToOneRef.current = false;
-            const s = zoom.oneToOne();
-            if (s !== null) oneToOneScaleRef.current = s;
+            abandonPendingOneToOne();
+            if (zoom.oneToOne() !== null) oneToOneModeRef.current = true;
           }}
           onError={() => {
             // 细节图加载失败（缓存被删/写坏）与预览图加载失败是两条路径：
@@ -266,7 +412,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           }}
           style={{
             transform: zoom.transform,
-            transition: zoom.isDragging ? 'none' : 'transform 0.08s ease-out',
+            transition: zoom.transition,
             imageOrientation: 'from-image',
             filter: toneFilter,
           }}

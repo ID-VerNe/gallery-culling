@@ -37,6 +37,15 @@ export function clampScale(s: number): number {
 }
 
 /**
+ * 一格滚轮/± 的落点。夹紧规则与 `zoomAtPoint` 相同，单独抽出来是因为
+ * 「不经过指针的连乘」也需要同一条量程 —— 判定容差的用例靠它复现
+ * 连滚出来的比例。
+ */
+export function chainScale(s: number, factor: number): number {
+  return clampScale(s * factor);
+}
+
+/**
  * 真 1:1 的缩放倍数：`naturalWidth / displayedWidth`。
  *
  * `scale` 的语义是「相对适应窗口的倍数」，所以 1:1 的倍数取决于原图尺寸与
@@ -54,7 +63,24 @@ export function oneToOneScale(naturalWidth: number, displayedWidth: number): num
  * 不说误导性的 100%。三视口的读数与重置 tooltip 必须同一措辞。
  */
 export function scaleLabel(s: number): string {
-  return Math.abs(s - 1) < 0.001 ? '适应' : `${Math.round(s * 100)}%`;
+  return isFitScale(s) ? '适应' : `${Math.round(s * 100)}%`;
+}
+
+/**
+ * PB-10：「当前是否处于适应窗口」的唯一判据，双击 / Z 键都走它。
+ *
+ * 不能用 `s === 1`。`scale` 是浮点连乘的产物 —— 滚轮一格乘 `ZOOM_STEP`、
+ * 往回一格乘 `1 / ZOOM_STEP`（`zoomAtPoint` 用的正是这个式子）。当前
+ * `ZOOM_STEP = 1.25` 的一次往返在 IEEE754 下**恰好精确**回到 1，所以这个
+ * 缺陷现在不可见；但「一整档步长算出整数」是步长的巧合，不是判据可以写死
+ * 的依据 —— 换成 1.4，连滚三格再连退三格落到 0.999…98，读数仍写「适应」、
+ * `=== 1` 却判成已放大，用户双击以为会放大，画面反而缩回适应。
+ *
+ * 容差与 `scaleLabel` 共用同一条：读数写「适应」的那一段，行为上就必须是
+ * 适应，两者不许各说各话。
+ */
+export function isFitScale(s: number): boolean {
+  return Math.abs(s - 1) < 0.001;
 }
 
 /**

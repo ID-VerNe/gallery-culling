@@ -152,9 +152,13 @@ describe('WP5 集成 —— 扫描进度与取消 (M-05)', () => {
 
     await waitFor(() => expect(screen.getByText(/已取消扫描/)).toBeInTheDocument());
     expect(screen.queryByText(/扫描失败/)).toBeNull();
-    // 取消后进度条收起，按钮回到可用
-    await waitFor(() => expect(screen.queryByRole('progressbar')).toBeNull());
-    expect(scanButton()).toBeEnabled();
+    // 取消后进度条收起，按钮回到可用。
+    // 按钮禁用读的是 `isLoading`，进度条读的是扫描任务的进度状态 —— 两者在
+    // `handleScan` 的 finally 里先后落位。只等进度条收起会在满负载下偶发读到
+    // 按钮还没恢复的那一帧（2026-11-02 全量跑出现一次，单跑两次不复现），
+    // 所以等的是按钮本身。
+    await waitFor(() => expect(scanButton()).toBeEnabled());
+    expect(screen.queryByRole('progressbar')).toBeNull();
   });
 
   it('点过取消但错误是真实失败 → 仍报「扫描失败」，不能用取消文案掩盖真错误', async () => {
