@@ -14,7 +14,9 @@
  *  3. 同一条门禁不能同时出现在两个档位；
  *  4. `AGENTS.md` 的 `<!-- gates:ci:begin -->` 段与清单渲染结果逐字一致；
  *  5. `ci.yml` 的 `matrix.shard` 与清单的 `shards` 完全一致（顺序也要一致：
- *     GitHub 上分片是并行跑，但顺序漂移说明有人在两边分别手改过）。
+ *     GitHub 上分片是并行跑，但顺序漂移说明有人在两边分别手改过）；
+ *  6. 每个 `scripts/*.mjs` 的外部 import（`postcss`、`tailwindcss` 这类）都被某条
+ *     **ci 门禁**加载 —— 见 `depProblems` 的注释（issue #24）。
  */
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -142,6 +144,60 @@ export function diffManifest({ diskCheckScripts, manifest, agentsSection, ciShar
   return problems;
 }
 
+/** 扫出一段源码里的外部 import（跳过 `node:` 内置与相对路径）。scoped 包保留 `@scope/name`。 */
+export function externalImports(source) {
+  const names = new Set();
+  for (const matched of source.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)) {
+    const specifier = matched[1];
+    if (specifier.startsWith('node:') || specifier.startsWith('.')) continue;
+    names.add(
+      specifier.startsWith('@')
+        ? specifier.split('/').slice(0, 2).join('/')
+        : specifier.split('/')[0],
+    );
+  }
+  return [...names].sort();
+}
+
+/**
+ * 每个 `scripts/check-*.mjs` 的外部 import 都必须被某条 **ci 门禁**加载。
+ *
+ * ## 防的是什么
+ *
+ * `check-theme-alpha.mjs` / `check-borders-emitted.mjs` 在内存里跑 Tailwind，要 import
+ * `postcss` 与 `tailwindcss`。缺了它们，脚本以 `ERR_MODULE_NOT_FOUND` 崩掉，门禁红 ——
+ * 这正是我们想要的 fail-closed。在本地有 node_modules 时看不出任何问题。
+ *
+ * 问题是 `check-pr-parity.mjs` 的干净检出可能落在「`node_modules` 在、内容空」的状态：
+ * `linkModules` 只判目录存在，而 runner 的 `missingTools` 只查**单个文件**在不在。
+ * 两者都绿，真正缺的是包内容。此时若清单里恰好没有会 import 这两个包的脚本，
+ * parity 会报 PASS —— 它验的是一个产品里根本不存在的东西（issue #24 排查记录）。
+ *
+ * 这条约束不预先知道缺哪个包：它保证清单里每一行都有人去 import，于是缺依赖时
+ * **一定**有门禁先撞上 `MODULE_NOT_FOUND`，而不是静默通过。
+ *
+ * 只查 `check-*.mjs`：`release.mjs` 这类工具脚本不在清单的管辖范围里（它们不进
+ * 任何一个档位，也没有「跑门禁时会加载它」的承诺）。`*.test.mjs` 由 unit 分片的
+ * `vitest` 一行加载，名字对不上清单里的 `check-*.mjs` 形态，故按后缀排除。
+ */
+export function depProblems(scripts, manifest) {
+  const sources = new Map(scripts.map((script) => [script.name, script.source]));
+  const ciScripts = (manifest.ci ?? []).filter((row) => SCRIPT_NAME.test(row.name));
+  const loaded = new Set(ciScripts.flatMap((row) => externalImports(sources.get(row.name) ?? '')));
+  const problems = [];
+  for (const script of scripts) {
+    if (!SCRIPT_NAME.test(script.name)) continue;
+    for (const name of externalImports(script.source)) {
+      if (loaded.has(name)) continue;
+      problems.push(
+        `scripts/${script.name} import 了 \`${name}\`，但清单里没有 ci 门禁会加载它` +
+          '（缺依赖时没人撞上 MODULE_NOT_FOUND，parity 会静默通过）',
+      );
+    }
+  }
+  return problems;
+}
+
 function diskCheckScripts() {
   return readdirSync(join(ROOT, 'scripts')).filter((name) => SCRIPT_NAME.test(name));
 }
@@ -172,6 +228,14 @@ function main(argv) {
     agentsSection: extractAgentsSection(agents),
     ciShards: parseShardMatrix(readFileSync(CI_PATH, 'utf8')),
   });
+  for (const name of readdirSync(join(ROOT, 'scripts')).filter((n) => SCRIPT_NAME.test(n))) {
+    problems.push(
+      ...depProblems(
+        [{ name, source: readFileSync(join(ROOT, 'scripts', name), 'utf8') }],
+        manifest,
+      ),
+    );
+  }
 
   if (problems.length > 0) {
     console.error(`FAIL: 门禁清单漂移 ${problems.length} 处`);
