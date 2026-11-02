@@ -305,14 +305,15 @@ describe('PreviewViewport —— 1:1 细节（FR-05）', () => {
 
     act(() => ref.current());
 
+    // 细节到达那一帧（`src` 换掉之前）真实像素宽就已经可知：结果到达的
+    // effect 在此时结算落点。jsdom 不加载资源，`onLoad` 也就不保证会来 ——
+    // 这条用例正是钉住「不靠 onLoad 也能切到 1:1」。
+    stubMetrics(img, 6024, 1200);
+
     // 细节返回 → src 换成 detail（不再是预览）
     await waitFor(() => expect(img.src).toContain('raw1_detail_lumen.jpg'));
 
-    // 浏览器加载完真实尺寸的图后 onLoad 才触发；jsdom 不会自己加载。
-    stubMetrics(img, 6024, 1200);
-    fireEvent.load(img);
-
-    expect(img.style.transform).toContain('scale(5.02)');
+    await waitFor(() => expect(img.style.transform).toContain('scale(5.02)'));
     expect(invokeCount('lumen_detail_cmd')).toBe(1);
   });
 
@@ -427,6 +428,181 @@ describe('PreviewViewport —— 1:1 细节（FR-05）', () => {
     // 取消 ≠ 失败：不能顺手弹出「渲染失败」吓人
     expect(screen.queryByText(/细节渲染失败/)).toBeNull();
     expect(img.src).toContain('.preview');
+  });
+
+  /**
+   * 取消 → 再按 Z，而后端那次渲**还在飞**：这是真机上的那一下（取消与重按
+   * 只隔 21ms，63s 的那张图就是它）。三件事必须一起成立：
+   *
+   *   1. 重新认领而不是重发 —— 后端并发上限 1，重发只会换来 E_BUSY；
+   *   2. 结果到达后换成细节图，不能当成「已取消」丢掉；
+   *   3. 且从 1:1 的落点走到新落点 —— 按下那一刻画面就**当场**切成细节的
+   *      落点（图还没到，先按预览算），所以取消之后再按 Z 时模式已经是
+   *      1:1；不认领而是走「已在 1:1 → 复位」的话，`enterOneToOne` 根本
+   *      不执行，在飞的那次无人认领，图到了也没有人采用（真机 e2e 的
+   *      D13/D14）。另一端同理：`src` 从预览换成细节时 React 复用同一个
+   *      `<img>` 节点，jsdom 与真浏览器都不保证这期间再送一次 `onLoad`，
+   *      所以「换成全分辨率后的落点」由结果到达的 effect 结算，不靠 onLoad。
+   *
+   * 请求必须在重按那一刻**真的还在飞**：`renderHook` 外面先 `await` 一次
+   * `waitFor` 的话，微任务会把那次 drain 的 finally 跑完，`inflightRef`
+   * 已经清空，重按就走成了「发第二个请求」—— 那时这条用例测的是别的东西，
+   * 还会把认领路径整段漏掉。
+   *
+   * 中途不能碰任何会改画面的输入：取消按钮之外的一次 `waitFor` 就够把
+   * 时序拖过界（第一版写成 `await` 清除横幅，重按落成了「已在 1:1 → 复位」）。
+   */
+  it('取消 → 再按 Z（渲还在飞）→ 认领这次结果，换成细节并切到 1:1', async () => {
+    let releaseDetail: ((v: unknown) => void) | null = null;
+    setInvokeHandler((cmd) => {
+      if (cmd === 'lumen_detail_cmd') {
+        return new Promise((res) => {
+          releaseDetail = res;
+        });
+      }
+      if (cmd === 'lumen_preview_cmd') {
+        return { previewPath: 'D:/c/p.preview', width: 1600, original: false, cached: false };
+      }
+      return undefined;
+    });
+
+    const { container, ref } = renderWithRef(rawGroup, AVAILABLE);
+    const viewportImg = () => container.querySelector('img') as HTMLImageElement;
+    await waitFor(() => expect(viewportImg()).not.toBeNull());
+    stubMetrics(viewportImg(), 1600, 1200); // 预览阶段：1600px 源
+
+    act(() => ref.current());
+    stubMetrics(viewportImg(), 6024, 1200); // 细节图就绪后：6024px 源
+
+    // 后端仍在渲：取消只是不再等。
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+
+    // 反悔：同一张再按 Z。这一下必须认领在飞的那次，而不是重发。
+    act(() => ref.current());
+    expect(invokeCount('lumen_detail_cmd')).toBe(1);
+
+    // 而且画面不得被复位成「适应」去等结果：那样用户按 Z 反而看到图变小。
+    // 取消已经退出了 1:1，这一下按 Z 就得当场回到细节的落点 —— 此刻 src 还
+    // 是预览、像素宽已经按细节算好，所以是 6024 / 1200 = 5.02。
+    expect(viewportImg().style.transform).toContain('scale(5.02)');
+
+    // 认领之后结果才回来 —— 必须采用，并切到 1:1（6024 / 1200 = 5.02）。
+    act(() => {
+      releaseDetail?.({ detailPath: 'D:/cache/lumen/raw1_detail.jpg', cached: false, elapsedMs: 6500 });
+    });
+
+    await waitFor(() => expect(viewportImg().src).toContain('raw1_detail.jpg'));
+    await waitFor(() => expect(viewportImg().style.transform).toContain('scale(5.02)'));
+  });
+
+  /**
+   * 一次按 Z 只能算一次「进入 1:1」，不能算两次。
+   *
+   * 若结果到达时无条件再补一次 `zoom.oneToOne()`，用户在这 6–8 秒里已经
+   * 按过 Z 退出（或滚轮离开）之后，图一到就会**自己**跳回 1:1 —— 用户没
+   * 按键，画面却动了。标志位必须在请求时消费掉，而不是到达时消费。
+   */
+  /**
+   * 等待期间按 Z 回适应 → 图到了也不得自己放大。
+   *
+   * 回适应是一次明确的「不再等」。它必须同时做到三件事：画面回到适应、
+   * 模式记成「不在 1:1」（否则下一次按 Z 会当成「再进一次」而去结算一个
+   * 早已放弃的落点）、以及结果到达时不再结算。
+   *
+   * 前两件由 `oneToOneModeRef` 锁住：把 `oneToOneModeRef.current = false;`
+   * 从回适应分支里拿掉，这条用例照样绿 —— 因为那里的 `zoom.reset()` 会触发
+   * 离开 1:1 的监听，监听里也清了模式。也就是说模式位是**两条路径共同**的
+   * 出口，删掉任何一条都不会被现有用例发现。这一点如实记在这里，不假装
+   * 这条用例守住了那条语句。
+   *
+   * 真正被这条用例钉住的是「结果到达时看 `want` 再结算」：把到达 effect
+   * 上的 `!wantOneToOneRef.current` 守卫拿掉（曾经的第一版就没有守卫，
+   * 结果一到无条件补一次 `zoom.oneToOne()`），用户按 Z 退出后图一到画面
+   * 自己放大 —— 实测落在 scale 1.333，这条用例当场变红。收回请求（再按
+   * 一次 Z）与回适应是两个不同的出口，两条路径各有一条用例。
+   */
+  it('等途中按 Z 回适应 → 细节到达后不得自己放大', async () => {
+    mockInvokeCommand('lumen_preview_cmd', (args) => ({
+      previewPath: `${String(args?.filePath)}.preview`,
+      width: 1600,
+      original: false,
+      cached: false,
+    }));
+    let releaseDetail: ((v: unknown) => void) | null = null;
+    setInvokeHandler((cmd) => {
+      if (cmd === 'lumen_detail_cmd') {
+        return new Promise((res) => {
+          releaseDetail = res;
+        });
+      }
+      if (cmd === 'lumen_preview_cmd') {
+        return { previewPath: 'D:/c/p.preview', width: 1600, original: false, cached: false };
+      }
+      return undefined;
+    });
+
+    const { container, ref } = renderWithRef(rawGroup, AVAILABLE);
+    await waitFor(() => expect(container.querySelector('img')).not.toBeNull());
+    const img = container.querySelector('img') as HTMLImageElement;
+    stubMetrics(img, 1600, 1200);
+
+    act(() => ref.current()); // 进 1:1：算出 1600 / 1200 = 1.333，并进入等待
+    await screen.findByRole('button', { name: '取消' });
+    // 此刻模式是 1:1（落点按预览算出来了），再按 Z 就是回适应。
+    act(() => ref.current());
+    expect(img.style.transform).toContain('scale(1)');
+    // 前端这一侧已经放弃，但后端那张仍在跑：进度提示照旧（它说的是后端的
+    // 事，不是「我还想切过去」）。这条断言是下面那条的前提 —— 提示在，才
+    // 说明「等待」这个状态真的还在。
+    expect(screen.getByRole('button', { name: '取消' })).toBeInTheDocument();
+
+    // 结果到达：图片内容仍会被换成细节，但缩放必须停在适应。
+    act(() => {
+      releaseDetail?.({ detailPath: 'D:/cache/lumen/raw1_detail.jpg', cached: false, elapsedMs: 6500 });
+    });
+    await waitFor(() => expect(img.src).toContain('raw1_detail.jpg'));
+
+    expect(img.style.transform).toContain('scale(1)');
+  });
+
+  it('等途中再按 Z 收回请求 → 细节到达后不得自己跳 1:1', async () => {
+    mockInvokeCommand('lumen_preview_cmd', (args) => ({
+      previewPath: `${String(args?.filePath)}.preview`,
+      width: 1600,
+      original: false,
+      cached: false,
+    }));
+    let releaseDetail: ((v: unknown) => void) | null = null;
+    setInvokeHandler((cmd) => {
+      if (cmd === 'lumen_detail_cmd') {
+        return new Promise((res) => {
+          releaseDetail = res;
+        });
+      }
+      if (cmd === 'lumen_preview_cmd') {
+        return { previewPath: 'D:/c/p.preview', width: 1600, original: false, cached: false };
+      }
+      return undefined;
+    });
+
+    const { container, ref } = renderWithRef(rawGroup, AVAILABLE);
+    await waitFor(() => expect(container.querySelector('img')).not.toBeNull());
+    const img = container.querySelector('img') as HTMLImageElement;
+    stubMetrics(img, 1600, 1200);
+
+    act(() => ref.current());
+    await screen.findByRole('button', { name: '取消' });
+    act(() => ref.current()); // 收回：图到了也不要切过去
+
+    act(() => {
+      releaseDetail?.({ detailPath: 'D:/cache/lumen/raw1_detail.jpg', cached: false, elapsedMs: 6500 });
+    });
+    await waitFor(() => expect(img.src).toContain('raw1_detail.jpg'));
+
+    stubMetrics(img, 6024, 1200);
+    fireEvent.load(img);
+
+    expect(img.style.transform).toContain('scale(1)');
   });
 });
 

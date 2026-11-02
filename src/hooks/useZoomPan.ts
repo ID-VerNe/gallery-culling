@@ -102,6 +102,8 @@ export function useZoomPan(
     leaveListenerRef.current = fn;
   }, []);
 
+  // 换图复位。函数身份全部稳定（见下面 `reset` 的注释），所以这里真的只
+  // 在 `resetKey` 变化时跑；首次挂载状态本来就是 1 / {0,0}，无需补一次。
   useEffect(() => {
     leaveOneToOne();
     setScale(1);
@@ -117,12 +119,22 @@ export function useZoomPan(
     [scale, leaveOneToOne],
   );
 
+  /**
+   * 回适应窗口。
+   *
+   * 依赖里没有 `leaveOneToOne` 是**故意**的：`setOneToOneLeaveListener` 又
+   * 依赖它，调用方每次渲染都会拿到新的监听注册函数；把 `leaveOneToOne` 写进
+   * 依赖，`reset` / `oneToOne` 的身份就会跟着每次渲染变化，宿主那边依赖它们
+   * 的 effect（结果到达就切 1:1）会被无谓地重跑 —— 跟着重跑的还有上面那个
+   * 换图复位。监听器存在 ref 里，读的永远是最新那个，不需要进依赖。
+   */
   const reset = useCallback(() => {
-    leaveOneToOne();
+    leaveListenerRef.current?.();
     setTransition(SETTLE);
     setScale(1);
     setPos({ x: 0, y: 0 });
-  }, [leaveOneToOne]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const oneToOne = useCallback((fallback?: number): number | null => {
     const img = imgRef.current;
