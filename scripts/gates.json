@@ -49,6 +49,12 @@
       "why": "扫 src 里实际用到的「主题色+透明度」组合，逐个去 Tailwind 产物里核对有没有规则（issue #15）。配色写成 var(--color-*) 时 /NN 会被**静默丢弃**，不报错不警告，只有这条能盯住"
     },
     {
+      "name": "check-version-sync.mjs",
+      "cmd": ["node", "scripts/check-version-sync.mjs"],
+      "shard": "static",
+      "why": "`package.json`、`src-tauri/tauri.conf.json`、`package-lock.json` 的两处根版本必须一致（issue #23）。2.0.4 那次 bump 漏了 lock，`npm ci` 不报错、也没有门禁拦，不一致躺了一个版本"
+    },
+    {
       "name": "check-borders-emitted.mjs",
       "cmd": ["node", "scripts/check-borders-emitted.mjs"],
       "shard": "static",
