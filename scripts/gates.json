@@ -38,9 +38,9 @@
     },
     {
       "name": "tsc --noEmit",
-      "cmd": ["npx", "tsc", "--noEmit"],
+      "cmd": ["node", "node_modules/typescript/bin/tsc", "--noEmit"],
       "shard": "static",
-      "why": "TypeScript 类型检查（tsconfig 只覆盖 src，scripts 是纯 JS 不参与）"
+      "why": "TypeScript 类型检查（tsconfig 只覆盖 src，scripts 是纯 JS 不参与）。直指包内入口而非 `npx tsc`：本地缺席时 npx 会装同名包 `tsc@2.0.4`，它打印提示后 exit 0，门禁假绿（issue #24）"
     },
     {
       "name": "check-theme-alpha.mjs",
@@ -62,9 +62,9 @@
     },
     {
       "name": "vitest",
-      "cmd": ["npx", "vitest", "run", "--pool=vmForks"],
+      "cmd": ["node", "node_modules/vitest/vitest.mjs", "run", "--pool=vmForks"],
       "shard": "unit",
-      "why": "前端全量用例；--pool=vmForks 见 vitest.config.ts 的 pool 说明（Windows 上的既定跑法）"
+      "why": "前端全量用例；--pool=vmForks 见 vitest.config.ts 的 pool 说明（Windows 上的既定跑法）。直指包内入口而非 `npx vitest`：本地缺席时 npx 会去 registry 装 vitest@5（另一个大版本，可能真报绿），绕过了 package-lock（issue #24）"
     },
     {
       "name": "cargo test --lib",

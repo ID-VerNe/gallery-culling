@@ -40,11 +40,11 @@ npm run parity                             # CI 等价复跑：在被推送 sha 
 | 1 | `static` | `check-gates-manifest.mjs` | 元门禁：磁盘 check-*.mjs、本清单、AGENTS.md 生成段、ci.yml 分片矩阵四者零漂移 |
 | 2 | `static` | `check-gate-change-review.mjs` | PR 改动触及门禁链时，正文必须有 `## 门禁改动` 段逐个交代 + 段末独立复核结论（issue #8）；无 PR 上下文 SKIP，显式声明改动却无 base 时 fail-closed |
 | 3 | `static` | `check-fmt-baseline.mjs` | `cargo fmt --check` 差异处数不得超过 gates.json 的 fmtBaseline（防裸跑 fmt 重排整个 crate） |
-| 4 | `static` | `tsc --noEmit` | TypeScript 类型检查（tsconfig 只覆盖 src，scripts 是纯 JS 不参与） |
+| 4 | `static` | `tsc --noEmit` | TypeScript 类型检查（tsconfig 只覆盖 src，scripts 是纯 JS 不参与）。直指包内入口而非 `npx tsc`：本地缺席时 npx 会装同名包 `tsc@2.0.4`，它打印提示后 exit 0，门禁假绿（issue #24） |
 | 5 | `static` | `check-theme-alpha.mjs` | 扫 src 里实际用到的「主题色+透明度」组合，逐个去 Tailwind 产物里核对有没有规则（issue #15）。配色写成 var(--color-*) 时 /NN 会被**静默丢弃**，不报错不警告，只有这条能盯住 |
 | 6 | `static` | `check-version-sync.mjs` | `package.json`、`src-tauri/tauri.conf.json`、`package-lock.json` 的两处根版本必须一致（issue #23）。2.0.4 那次 bump 漏了 lock，`npm ci` 不报错、也没有门禁拦，不一致躺了一个版本 |
 | 7 | `static` | `check-borders-emitted.mjs` | 扫 src 里所有描边颜色类，逐个去 Tailwind 产物里核对有没有规则（issue #18 · PD-1）。`border.default` 生成的是 `border-border-default`，写成 `border-default` 时一条规则都不产出、回落 currentColor（body 为 text-white，看起来是 100% 白线），只有这条能盯住 |
-| 8 | `unit` | `vitest` | 前端全量用例；--pool=vmForks 见 vitest.config.ts 的 pool 说明（Windows 上的既定跑法） |
+| 8 | `unit` | `vitest` | 前端全量用例；--pool=vmForks 见 vitest.config.ts 的 pool 说明（Windows 上的既定跑法）。直指包内入口而非 `npx vitest`：本地缺席时 npx 会去 registry 装 vitest@5（另一个大版本，可能真报绿），绕过了 package-lock（issue #24） |
 | 9 | `rust` | `cargo test --lib` | 后端全量单测（真 tmpdir，不 mock fs）；7 例真机冒烟默认 ignored |
 
 共 9 个 CI 门禁，分 3 个分片（static 7、unit 1、rust 1）；manual 2、support 1 见 `scripts/gates.json`。
