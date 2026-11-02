@@ -11,8 +11,10 @@ import {
   clampToPanePair,
   dragGrab,
   dragTarget,
+  isFitScale,
   type Vec2,
 } from '../utils/viewportZoom';
+import { GESTURE, SETTLE } from '../utils/viewportMotion';
 
 const ORIGIN: Vec2 = { x: 0, y: 0 };
 
@@ -40,6 +42,8 @@ export interface DualZoomPan<P extends string> {
   /** `<img>` 的 transform；与单栏 hook 同格式（pan 测试按它解析）。 */
   transformOf: (pane: P) => string;
   isDragging: boolean;
+  /** 两栏共用的 `<img>` transition。语义同单栏 hook（见 viewportMotion.ts）。 */
+  transition: string;
   /** 联动开关（Split 的 syncZoom / BeforeAfter 的 syncLock）。 */
   sync: boolean;
   toggleSync: () => void;
@@ -79,6 +83,8 @@ export function useDualZoomPan<P extends string>(
   const [first, setFirst] = useState<PaneState>(INIT_PANE);
   const [second, setSecond] = useState<PaneState>(INIT_PANE);
   const [isDragging, setIsDragging] = useState(false);
+  // 动效通道（PB-1）：两栏共用一条 —— 联动变化本就同步，分开只会分叉。
+  const [transition, setTransition] = useState(SETTLE);
   const [sync, setSync] = useState(true);
   const [activePane, setActivePane] = useState<P>(initialActivePane);
 
@@ -106,6 +112,7 @@ export function useDualZoomPan<P extends string>(
 
   const zoomBy = useCallback(
     (factor: number) => {
+      setTransition(SETTLE);
       if (sync) {
         // 联动：以第一栏为基准拉齐两图（只改比例，不动平移）
         const next = clampScale(first.scale * factor);
@@ -119,6 +126,7 @@ export function useDualZoomPan<P extends string>(
   );
 
   const reset = useCallback(() => {
+    setTransition(SETTLE);
     setFirst(INIT_PANE);
     setSecond(INIT_PANE);
   }, []);
@@ -128,6 +136,7 @@ export function useDualZoomPan<P extends string>(
 
   const handleWheel = (p: P, e: React.WheelEvent) => {
     e.preventDefault();
+    setTransition(GESTURE);
     setActivePane(p);
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const opts = { min: ZOOM_MIN, max: ZOOM_MAX, step: ZOOM_STEP };
@@ -147,6 +156,7 @@ export function useDualZoomPan<P extends string>(
     if (e.button !== 0) return;
     // 覆盖层交互元素（设为基准、评分等）不进入拖拽。
     if (e.target !== e.currentTarget) return;
+    setTransition(GESTURE);
     setIsDragging(true);
     setActivePane(p);
     grabRef.current = dragGrab(e.clientX, e.clientY, get(p).pos);
@@ -180,14 +190,16 @@ export function useDualZoomPan<P extends string>(
 
   const handlePointerUp = (e: React.PointerEvent) => {
     if (!isDragging) return;
+    setTransition(SETTLE);
     setIsDragging(false);
     const host = e.currentTarget as HTMLElement;
     if (host.hasPointerCapture(e.pointerId)) host.releasePointerCapture(e.pointerId);
   };
 
   const handleDoubleClick = (p: P) => {
+    setTransition(SETTLE);
     setActivePane(p);
-    const targetScale = get(p).scale === 1 ? DOUBLE_CLICK_SCALE : 1;
+    const targetScale = isFitScale(get(p).scale) ? DOUBLE_CLICK_SCALE : 1;
     const next: PaneState = { scale: targetScale, pos: ORIGIN };
     if (sync) {
       setFirst(next);
@@ -220,6 +232,7 @@ export function useDualZoomPan<P extends string>(
       return `translate(${s.pos.x}px, ${s.pos.y}px) scale(${s.scale})`;
     },
     isDragging,
+    transition,
     sync,
     toggleSync,
     activePane,

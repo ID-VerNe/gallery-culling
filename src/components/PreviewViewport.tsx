@@ -106,17 +106,24 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
 
   // FR-05：RAW-only 的全分辨率细节（按 Z 才请求，6–8 秒/张）。
   const detail = useLumenDetail(group, lumenStatus ?? LUMEN_UNAVAILABLE);
-  /** 上一次 1:1 的比例（用于「再按一次回适应」的判定）。 */
-  const oneToOneScaleRef = useRef<number | null>(null);
+  /**
+   * PB-10：上一次按 Z 的落点是 1:1 还是适应（同一个键来回切）。
+   *
+   * 不能记下 1:1 的比例再拿当前 scale 跟它比 —— 固定窗口（`|差| < 0.02`）
+   * 会把「离开了一格又落回窗口内」读成「还在 1:1」，精确相等又会让 1:1
+   * 只在当前值恰好等于它时成立，而重算 1:1 与「已经在 1:1」在数值上不可区分。
+   * 记模式是唯一自洽的：1:1 的落点就是 `zoom.oneToOne()`，离开 1:1 的
+   * 每个入口（滚轮 / 拖拽 / 双击 / 复位 / 换图）都会把模式打回适应。
+   */
+  const oneToOneModeRef = useRef(false);
   /** 按 Z 时细节还没就绪 → 等 img onLoad 再切，不能立刻用预览宽度算。 */
   const pendingOneToOneRef = useRef(false);
 
   const toggleOneToOne = useCallback(() => {
     // 已在 1:1 → 回适应（同一个键来回切，与双击的「适应 ↔ 放大」同构）。
-    const known = oneToOneScaleRef.current;
-    if (known !== null && Math.abs(zoom.scale - known) < 0.02) {
+    if (oneToOneModeRef.current) {
       zoom.reset();
-      oneToOneScaleRef.current = null;
+      oneToOneModeRef.current = false;
       return;
     }
 
@@ -129,9 +136,16 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
       return;
     }
 
-    const s = zoom.oneToOne();
-    if (s !== null) oneToOneScaleRef.current = s;
+    if (zoom.oneToOne() !== null) oneToOneModeRef.current = true;
   }, [zoom, group, detail]);
+
+  // 任何非 Z 的缩放 / 平移 / 换图都会离开 1:1：模式必须跟着打回适应，
+  // 否则下一次按 Z 会复位到一个用户早就离开的画面。
+  useEffect(() => {
+    zoom.setOneToOneLeaveListener(() => {
+      oneToOneModeRef.current = false;
+    });
+  }, [zoom]);
 
   // 把 toggle 注册给全局快捷键（Z）。视口不在时（双栏 / 前后对照）清空，
   // 避免 `Z` 打到已经卸载的视口上。
@@ -255,8 +269,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
             // 细节图加载完才知道真实像素宽：此刻才能算 1:1。
             if (!pendingOneToOneRef.current) return;
             pendingOneToOneRef.current = false;
-            const s = zoom.oneToOne();
-            if (s !== null) oneToOneScaleRef.current = s;
+            if (zoom.oneToOne() !== null) oneToOneModeRef.current = true;
           }}
           onError={() => {
             // 细节图加载失败（缓存被删/写坏）与预览图加载失败是两条路径：
@@ -266,7 +279,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           }}
           style={{
             transform: zoom.transform,
-            transition: zoom.isDragging ? 'none' : 'transform 0.08s ease-out',
+            transition: zoom.transition,
             imageOrientation: 'from-image',
             filter: toneFilter,
           }}

@@ -279,7 +279,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
               onError={beforeImage.markBroken}
               style={{
                 transform: zoom.transformOf('before'),
-                transition: zoom.isDragging ? 'none' : 'transform 0.05s ease-out',
+                transition: zoom.transition,
                 imageOrientation: 'from-image',
               }}
               className="max-h-full max-w-full object-contain pointer-events-none origin-center"
@@ -337,7 +337,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
               draggable={false}
               style={{
                 transform: zoom.transformOf('after'),
-                transition: zoom.isDragging ? 'none' : 'transform 0.05s ease-out',
+                transition: zoom.transition,
                 filter: toneFilter,
                 imageOrientation: 'from-image',
               }}

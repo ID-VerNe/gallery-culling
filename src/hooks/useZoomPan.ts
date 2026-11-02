@@ -10,9 +10,11 @@ import {
   clampToPane,
   dragGrab,
   dragTarget,
+  isFitScale,
   oneToOneScale,
   type Vec2,
 } from '../utils/viewportZoom';
+import { GESTURE, SETTLE } from '../utils/viewportMotion';
 
 /** useZoomPan 的全部对外面（单图视口在用；双栏视口用 useDualZoomPan）。 */
 export interface ZoomPan {
@@ -21,6 +23,11 @@ export interface ZoomPan {
   isDragging: boolean;
   /** `<img>` 的 transform；三视口同格式（ViewportPanConsistency 按它解析）。 */
   transform: string;
+  /**
+   * `<img>` 的 `transition`。由**产生这次变化的输入**决定，不由 `isDragging`
+   * 决定 —— 滚轮抬手后 isDragging 已是 false，但滚轮仍属手势通道。
+   */
+  transition: string;
   /** 视口容器 —— 夹紧要量它的 clientWidth/Height。 */
   containerRef: React.RefObject<HTMLDivElement | null>;
   /** 绑到 `<img>`；同时转发给宿主（单图视图的直方图采样）。 */
@@ -35,6 +42,12 @@ export interface ZoomPan {
    * 元素未挂载 / 还没布局（宽度为 0）时返回 null，调用方保留原缩放。
    */
   oneToOne: () => number | null;
+  /**
+   * 注册「离开 1:1」的回调（PB-10）。除 `oneToOne()` 以外的每一个缩放 /
+   * 平移 / 复位入口都会触发它 —— 1:1 只在 `oneToOne()` 的落点上成立，
+   * 调用方据此维护「当前是不是 1:1」，而不是拿比例去跟一个算出来的数比。
+   */
+  setOneToOneLeaveListener: (fn: () => void) => void;
   /** 绑到视口容器的全套手势（滚轮 / 拖拽 / 双击）。 */
   bind: {
     onWheel: (e: React.WheelEvent) => void;
@@ -66,29 +79,49 @@ export function useZoomPan(
   const [scale, setScale] = useState(1);
   const [pos, setPos] = useState<Vec2>({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
+  // 动效通道（PB-1）：手势通道不补间，跳变通道补间。见 viewportMotion.ts。
+  const [transition, setTransition] = useState(SETTLE);
   // 绝对系抓取偏移：拖动期间恒定，故存 ref 而非 state —— 少一次 state
   // 更新，也从结构上排除「读到旧 dragStart」的可能。
   const grabRef = useRef<Vec2>({ x: 0, y: 0 });
+  const leaveListenerRef = useRef<(() => void) | null>(null);
+
+  const leaveOneToOne = useCallback(() => {
+    leaveListenerRef.current?.();
+  }, []);
+
+  const setOneToOneLeaveListener = useCallback((fn: () => void) => {
+    leaveListenerRef.current = fn;
+  }, []);
 
   useEffect(() => {
+    leaveOneToOne();
     setScale(1);
     setPos({ x: 0, y: 0 });
-  }, [resetKey]);
+  }, [resetKey, leaveOneToOne]);
 
-  const zoomBy = useCallback((factor: number) => {
-    setScale((s) => clampScale(s * factor));
-  }, []);
+  const zoomBy = useCallback(
+    (factor: number) => {
+      leaveOneToOne();
+      setTransition(SETTLE);
+      setScale((s) => clampScale(s * factor));
+    },
+    [leaveOneToOne],
+  );
 
   const reset = useCallback(() => {
+    leaveOneToOne();
+    setTransition(SETTLE);
     setScale(1);
     setPos({ x: 0, y: 0 });
-  }, []);
+  }, [leaveOneToOne]);
 
   const oneToOne = useCallback((): number | null => {
     const img = imgRef.current;
     if (!img) return null;
     const s = oneToOneScale(img.naturalWidth, img.offsetWidth);
     if (s === null) return null;
+    setTransition(SETTLE);
     setScale(s);
     setPos({ x: 0, y: 0 });
     return s;
@@ -97,6 +130,8 @@ export function useZoomPan(
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
       e.preventDefault();
+      leaveOneToOne();
+      setTransition(GESTURE);
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
       const next = zoomAtPoint(e, rect, scale, pos, {
         min: ZOOM_MIN,
@@ -106,7 +141,7 @@ export function useZoomPan(
       setScale(next.scale);
       setPos(next.pos);
     },
-    [scale, pos],
+    [scale, pos, leaveOneToOne],
   );
 
   const handlePointerDown = useCallback(
@@ -114,11 +149,13 @@ export function useZoomPan(
       if (e.button !== 0) return;
       // 覆盖层按钮 / EXIF 胶囊等交互元素不进入拖拽，避免抢走点击。
       if (e.target !== e.currentTarget) return;
+      leaveOneToOne();
+      setTransition(GESTURE);
       setIsDragging(true);
       grabRef.current = dragGrab(e.clientX, e.clientY, pos);
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     },
-    [pos],
+    [pos, leaveOneToOne],
   );
 
   const handlePointerMove = useCallback(
@@ -133,6 +170,7 @@ export function useZoomPan(
   const handlePointerUp = useCallback(
     (e: React.PointerEvent) => {
       if (!isDragging) return;
+      setTransition(SETTLE);
       setIsDragging(false);
       const host = e.currentTarget as HTMLElement;
       if (host.hasPointerCapture(e.pointerId)) host.releasePointerCapture(e.pointerId);
@@ -141,9 +179,11 @@ export function useZoomPan(
   );
 
   const handleDoubleClick = useCallback(() => {
-    setScale((s) => (s === 1 ? DOUBLE_CLICK_SCALE : 1));
+    leaveOneToOne();
+    setTransition(SETTLE);
+    setScale((s) => (isFitScale(s) ? DOUBLE_CLICK_SCALE : 1));
     setPos({ x: 0, y: 0 });
-  }, []);
+  }, [leaveOneToOne]);
 
   const imageRef = useCallback(
     (el: HTMLImageElement | null) => {
@@ -157,12 +197,14 @@ export function useZoomPan(
     scale,
     pos,
     isDragging,
+    transition,
     transform: `translate(${pos.x}px, ${pos.y}px) scale(${scale})`,
     containerRef,
     imageRef,
     zoomBy,
     reset,
     oneToOne,
+    setOneToOneLeaveListener,
     bind: {
       onWheel: handleWheel,
       onPointerDown: handlePointerDown,
