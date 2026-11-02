@@ -82,7 +82,12 @@ export function missingInputs(pristine, { exists = existsSync } = {}) {
  */
 export function linkModules(pristine, source, platform = process.platform) {
   const target = join(pristine, 'node_modules');
-  if (existsSync(target)) return { linked: false, reason: '干净检出里已经有 node_modules' };
+  // 干净检出是 `git worktree add` 刚造出来的：已跟踪文件里没有 `node_modules`（它被 gitignore）。
+  // 这里真有东西，只能是调用方自己灌进去的 —— 那种环境不是 CI 的形态，复跑结果不能拿来
+  // 声称「CI 等价」。原样照跑不报错会更糟：绿了也说明不了问题。
+  if (existsSync(target)) {
+    return { linked: false, reason: '干净检出里本来不该有 node_modules（被 gitignore），却出现了' };
+  }
   // 只判 source 目录存在是不够的：目录可能在、内容却是空（2026-11-02 实测 `npm ci` 装到
   // 一半中断就留下这种状态）。链接过去得到的是「目录在、内容空」的干净检出，
   // 前端门禁会以 `Cannot find package 'postcss'` 崩掉——那不是代码问题，是环境问题。
@@ -134,19 +139,32 @@ export function unlinkModules(pristine) {
  * 删干净检出：先摘链接，再让 git 删目录。
  *
  * 顺序不能反：反了就会在删目录那一步跟进联接，把调用方 `node_modules` 掏空。
+ * 顺序本身用注入的 `{ unlink, remove, prune }` 锁住（单测把调用记进数组比对）——
+ * 直接调模块私有函数是测不到先后的。
  */
-function removeWorktree(path) {
-  unlinkModules(path);
-  try {
-    git(['worktree', 'remove', '--force', path]);
-  } catch {
-    rmSync(path, { recursive: true, force: true });
-  }
-  try {
-    git(['worktree', 'prune']);
-  } catch {
-    // prune 失败不影响判定：残留条目由下一次 `git worktree list` 暴露。
-  }
+export function removeWorktree(path, steps = {}) {
+  const unlink = steps.unlink ?? unlinkModules;
+  const remove =
+    steps.remove ??
+    ((target) => {
+      try {
+        git(['worktree', 'remove', '--force', target]);
+      } catch {
+        rmSync(target, { recursive: true, force: true });
+      }
+    });
+  const prune =
+    steps.prune ??
+    (() => {
+      try {
+        git(['worktree', 'prune']);
+      } catch {
+        // prune 失败不影响判定：残留条目由下一次 `git worktree list` 暴露。
+      }
+    });
+  unlink(path);
+  remove(path);
+  prune();
 }
 
 function argValue(args, flag) {
@@ -195,7 +213,7 @@ export function main(argv, env = process.env) {
       // 没有依赖就跑门禁，红的是「干净检出缺环境」而不是被检查的代码。pre-push 会把
       // 这个当成「本地环境问题」而不是「这个 sha 有问题」，两者修法完全不同。
       console.error(
-        `FAIL: 干净检出里装不了 node_modules（${link.reason}），没有完成 CI 等价复跑——这不是绿。\n` +
+        `FAIL: 干净检出里 linkModules 没成（${link.reason}），没有完成 CI 等价复跑——这不是绿。\n` +
           '  修法：在当前工作区 `npm ci`（同一份 lockfile），或 SKIP_PARITY=1 git push（会留痕）。',
       );
       return 2;

@@ -636,13 +636,15 @@ describe('check-pr-parity', () => {
       }
     });
 
-    it('干净检出里已有 node_modules → 不动它', () => {
+    it('干净检出里已有 node_modules → 不接链，并说明那不该出现', () => {
       const { scratch, pristine, source } = withDirs(['postcss']);
       mkdirSync(join(pristine, 'node_modules'));
       try {
         const result = linkModules(pristine, source, 'linux');
         expect(result.linked).toBe(false);
-        expect(result.reason).toContain('已经有');
+        // 干净检出是刚 `git worktree add` 出来的，`node_modules` 被 gitignore，
+        // 里面有东西只可能是调用方灌的 —— reason 得让人看出是「环境不对」而不是「依赖没装」。
+        expect(result.reason).toContain('本来不该有');
       } finally {
         rmSync(scratch, { recursive: true, force: true });
       }

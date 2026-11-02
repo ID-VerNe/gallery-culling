@@ -144,17 +144,32 @@ export function diffManifest({ diskCheckScripts, manifest, agentsSection, ciShar
   return problems;
 }
 
-/** 扫出一段源码里的外部 import（跳过 `node:` 内置与相对路径）。scoped 包保留 `@scope/name`。 */
+/**
+ * import / require 的说明符 -> 包名。跳过 `node:` 内置与相对路径。
+ *
+ * 一段源码里能加载一个包的写法只有这几种，漏掉任何一种都会让「缺依赖时没人撞上」
+ * 从后门溜过去：`import x from 'p'`、`export … from 'p'`、副作用 `import 'p'`、
+ * 动态 `await import('p')`、`require('p')`。
+ */
+const SPECIFIER_PATTERNS = [
+  /\bfrom\s+['"]([^'"]+)['"]/g, // import … from 'p' / export … from 'p'
+  /(?<![\w$.])import\s*\(\s*['"]([^'"]+)['"]\s*\)/g, // await import('p')
+  /(?<![\w$.])import\s+['"]([^'"]+)['"]/g, // import 'p'（副作用）
+  /(?<![\w$.])require\s*\(\s*['"]([^'"]+)['"]\s*\)/g, // require('p')
+];
+
 export function externalImports(source) {
   const names = new Set();
-  for (const matched of source.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)) {
-    const specifier = matched[1];
-    if (specifier.startsWith('node:') || specifier.startsWith('.')) continue;
-    names.add(
-      specifier.startsWith('@')
-        ? specifier.split('/').slice(0, 2).join('/')
-        : specifier.split('/')[0],
-    );
+  for (const pattern of SPECIFIER_PATTERNS) {
+    for (const matched of source.matchAll(pattern)) {
+      const specifier = matched[1];
+      if (specifier.startsWith('node:') || specifier.startsWith('.')) continue;
+      names.add(
+        specifier.startsWith('@')
+          ? specifier.split('/').slice(0, 2).join('/')
+          : specifier.split('/')[0],
+      );
+    }
   }
   return [...names].sort();
 }
@@ -173,8 +188,11 @@ export function externalImports(source) {
  * 两者都绿，真正缺的是包内容。此时若清单里恰好没有会 import 这两个包的脚本，
  * parity 会报 PASS —— 它验的是一个产品里根本不存在的东西（issue #24 排查记录）。
  *
- * 这条约束不预先知道缺哪个包：它保证清单里每一行都有人去 import，于是缺依赖时
- * **一定**有门禁先撞上 `MODULE_NOT_FOUND`，而不是静默通过。
+ * 这条约束不预先知道缺哪个包，也不再追求「缺依赖时一定有门禁先撞上」那种强承诺 ——
+ * 它保证的是：**凡是被加载的 `check-*.mjs` 用到的外部包，都在某个 `ci` 门禁的加载路径上**。
+ * 它管不到的是 `ci` 门禁本身在缺依赖时怎么失败：`node scripts/x.mjs` 撞
+ * `ERR_MODULE_NOT_FOUND`（退出 1，门禁红，是对的），但经 `vitest` 加载的用例会在
+ * 模块图里缺包时红成什么样，取决于 vitest 自己的加载顺序，不在本约束的推理范围里。
  *
  * 只查 `check-*.mjs`：`release.mjs` 这类工具脚本不在清单的管辖范围里（它们不进
  * 任何一个档位，也没有「跑门禁时会加载它」的承诺）。`*.test.mjs` 由 unit 分片的
@@ -183,10 +201,16 @@ export function externalImports(source) {
 export function depProblems(scripts, manifest) {
   const sources = new Map(scripts.map((script) => [script.name, script.source]));
   const ciScripts = (manifest.ci ?? []).filter((row) => SCRIPT_NAME.test(row.name));
-  const loaded = new Set(ciScripts.flatMap((row) => externalImports(sources.get(row.name) ?? '')));
+  // 只认「由 ci 门禁自己 import」这一种加载路径：一个包只要被任何一条 ci 门禁 import 过，
+  // 就落在缺依赖必然出事的路径上。`vitest` 经 `*.test.mjs` 间接加载的那一层本函数看不见，
+  // 所以不把任何东西算作「被 test 加载」，覆盖面宁窄不虚宽。
+  const loaded = new Set(
+    ciScripts.flatMap((row) => externalImports(sources.get(row.name) ?? '')),
+  );
   const problems = [];
   for (const script of scripts) {
     if (!SCRIPT_NAME.test(script.name)) continue;
+    if (ciScripts.some((row) => row.name === script.name)) continue; // 自己就是 ci 门禁
     for (const name of externalImports(script.source)) {
       if (loaded.has(name)) continue;
       problems.push(
