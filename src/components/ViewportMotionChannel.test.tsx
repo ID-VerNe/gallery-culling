@@ -191,6 +191,17 @@ describe('PB-1 · 通道常量本身', () => {
     expect(SETTLE.startsWith('transform ')).toBe(true);
     expect(GESTURE).not.toBe(SETTLE);
   });
+
+  // 只判「以 transform 开头」等于放行任何时长与曲线：把 0.12s 改成 1.2s、
+  // 或把缓动换成 linear，都不会红 —— 而那正是 PB-1 要修的「慢半拍」本体。
+  // 这里钉住解析出来的时长与曲线，改任一项都必须先改这条。
+  it('SETTLE 的时长与曲线是定值：0.12s + cubic-bezier(0.32, 0.72, 0, 1)', () => {
+    const time = /(\d*\.?\d+)m?s\b/.exec(SETTLE);
+    expect(time).not.toBeNull();
+    const ms = time![0].endsWith('ms') ? Number(time![1]) : Number(time![1]) * 1000;
+    expect(ms).toBeCloseTo(120, 5);
+    expect(SETTLE).toContain('cubic-bezier(0.32, 0.72, 0, 1)');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -316,5 +327,44 @@ describe('PB-10 · Z 键的 1:1 往返（判据是模式，不是比例窗口）
       expect(readScale(img)).toBeCloseTo(1.01, 4);
     });
   }
+
+  // 双击与 Z 同构：落点走同一条 oneToOne 路径。两者分头实现时，双击在
+  // RAW-only 组上只会落在「适应 × 2.5」的假放大 —— 那张图根本没有可比的
+  // 1:1，用户双击看到的却是一个看似 1:1 的比例。
+  it('双击与 Z 落同一个点：都在 1:1 上，双击后按 Z 直接回适应', () => {
+    const oneToOneRef = { current: () => {} };
+    const { img, host } = renderPreview({ oneToOneRef });
+    stubNaturalSize(1212);
+
+    fireEvent.doubleClick(host);
+    expect(readScale(img)).toBeCloseTo(1.01, 4);
+
+    act(() => oneToOneRef.current());
+    expect(readScale(img)).toBe(1);
+  });
+
+  it('双击一次离开 1:1、再双击回 1:1（不是一路放大）', () => {
+    const oneToOneRef = { current: () => {} };
+    const { img, host } = renderPreview({ oneToOneRef });
+    stubNaturalSize(1212);
+
+    act(() => oneToOneRef.current());
+    expect(readScale(img)).toBeCloseTo(1.01, 4);
+
+    fireEvent.doubleClick(host);
+    expect(readScale(img)).toBe(1);
+
+    fireEvent.doubleClick(host);
+    expect(readScale(img)).toBeCloseTo(1.01, 4);
+  });
+
+  it('算不出 1:1（没有布局）时双击仍是一个放大：落在 DOUBLE_CLICK_SCALE', () => {
+    // setup 把 offsetWidth 桩成 1200，这里把原图尺寸打成 0 —— 元素在、但读不
+    // 出原图像素，oneToOneScale 返回 null。双击必须退回 2.5，而不是原地不动。
+    const { img, host } = renderPreview();
+    stubNaturalSize(0);
+    fireEvent.doubleClick(host);
+    expect(readScale(img)).toBe(2.5);
+  });
 });
 
