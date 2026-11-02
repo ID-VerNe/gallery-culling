@@ -7,7 +7,16 @@
  * 最后一组直接拿仓库现状跑一遍：门禁清单漂移应该在本机就被发现，而不是等 CI。
  */
 import { describe, expect, it } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   diffManifest,
@@ -17,7 +26,7 @@ import {
   ROOT,
 } from './check-gates-manifest.mjs';
 import { countFmtDiffs, judgeFmt } from './check-fmt-baseline.mjs';
-import { loadManifest, shardNames, shardRows } from './run-gates.mjs';
+import { loadManifest, missingTools, runOne, shardNames, shardRows, toolFiles } from './run-gates.mjs';
 import {
   APPROVED_AT,
   changedFiles,
@@ -31,7 +40,13 @@ import {
   reviewOrderProblem,
   reviewRecord,
 } from './check-gate-change-review.mjs';
-import { missingInputs, resolveRef, shardProblem } from './check-pr-parity.mjs';
+import {
+  linkModules,
+  missingInputs,
+  resolveRef,
+  shardProblem,
+  unlinkModules,
+} from './check-pr-parity.mjs';
 
 const manifest = loadManifest();
 const agents = readFileSync(join(ROOT, 'AGENTS.md'), 'utf8');
@@ -168,6 +183,86 @@ describe('run-gates 清单读取', () => {
 
   it('分片外的门禁不存在', () => {
     expect(shardRows(manifest, 'nope')).toEqual([]);
+  });
+
+  it('门禁命令行不经 npx / npm exec', () => {
+    // issue #24：`npx tsc --noEmit` 在 `node_modules/.bin` 缺席时会去 registry
+    // 装一个**同名但无关**的包（`tsc@2.0.4`），它打印「This is not the tsc
+    // command you are looking for」后 **exit 0** —— 类型检查一行没跑，门禁却报绿。
+    // npx 会把调用方的解析结果当成可协商项，门禁的输入必须是本地 pin 死的。
+    //
+    // 光看 argv[0] 不够：`node ./node_modules/.bin/tsc` 既不是 npx 也不是 npm，
+    // 却复用了同一条「本机 bin 垫片」的解析规则。垫片缺席时 node 把这个无扩展名的
+    // 路径当 CJS 跑，还是那句「这不是你要的 tsc」，还是 exit 0。门禁只许直指
+    // 包内入口，所以这里连路径也一起钉。
+    for (const row of manifest.ci) {
+      expect(row.cmd[0], `${row.name} 的命令行不该经 npx`).not.toBe('npx');
+      expect(row.cmd[0], `${row.name} 的命令行不该经 npm exec`).not.toBe('npm');
+      if (row.cmd[0] === 'node' && row.cmd[1]?.startsWith('node_modules/')) {
+        expect(row.cmd[1], `${row.name} 该直指包内入口，不该走 .bin 垫片`).not.toMatch(
+          /^node_modules[/\\]\.bin[/\\]/,
+        );
+      }
+    }
+  });
+});
+
+describe('run-gates 启动前检查工具文件', () => {
+  it('从 node 命令行里认出本地工具文件', () => {
+    expect(toolFiles(['node', 'node_modules/typescript/bin/tsc', '--noEmit'])).toEqual([
+      { command: 'node', file: 'node_modules/typescript/bin/tsc' },
+    ]);
+    expect(toolFiles(['node', 'node_modules/vitest/vitest.mjs', 'run'])).toEqual([
+      { command: 'node', file: 'node_modules/vitest/vitest.mjs' },
+    ]);
+  });
+
+  it('脚本与系统命令不算工具文件', () => {
+    expect(toolFiles(['node', 'scripts/run-gates.mjs'])).toEqual([]);
+    expect(toolFiles(['cargo', 'test', '--lib'])).toEqual([]);
+    expect(toolFiles(['node', '-e', 'console.log(1)'])).toEqual([]);
+    expect(toolFiles([])).toEqual([]);
+  });
+
+  it('工具文件缺席时判红并说明为什么不能靠命令自己报错', () => {
+    const missing = missingTools(['node', 'node_modules/typescript/bin/tsc'], { exists: () => false });
+    expect(missing).toHaveLength(1);
+    expect(missing[0]).toContain('node_modules/typescript/bin/tsc');
+    expect(missing[0]).toContain('npm ci');
+  });
+
+  it('工具文件在盘上时不判红', () => {
+    expect(missingTools(['node', 'node_modules/typescript/bin/tsc'], { exists: () => true })).toEqual([]);
+  });
+
+  it('工具缺席时**不启动子进程**，直接判红', () => {
+    // 这条锁的是接线，不是 missingTools 的返回值：把 runOne 里那段预检查整块
+    // 删掉，上面几个纯函数用例照样全绿，而缺依赖时会退回「拉起进程看它怎么崩」。
+    const spawned = [];
+    const spawn = (...args) => {
+      spawned.push(args);
+      return { status: 0 };
+    };
+    const status = runOne(
+      { name: 'tsc --noEmit', cmd: ['node', 'node_modules/@scope/definitely-absent/bin/x'] },
+      spawn,
+    );
+    expect(status).toBe(1);
+    expect(spawned).toEqual([]);
+  });
+
+  it('工具齐全时照常启动，并把它自己的退出码原样交出去', () => {
+    const spawned = [];
+    const spawn = (command, args) => {
+      spawned.push([command, args]);
+      return { status: 7 };
+    };
+    const status = runOne(
+      { name: 'tsc --noEmit', cmd: ['node', 'node_modules/typescript/bin/tsc', '--noEmit'] },
+      spawn,
+    );
+    expect(status).toBe(7);
+    expect(spawned).toEqual([['node', ['node_modules/typescript/bin/tsc', '--noEmit']]]);
   });
 });
 
@@ -541,6 +636,110 @@ describe('check-pr-parity', () => {
   it('ref 解析：HEAD 可用，垃圾 ref 返回 null（而不是抛错）', () => {
     expect(resolveRef('HEAD')).toMatch(/^[0-9a-f]{40}$/);
     expect(resolveRef('definitely-not-a-ref-xyz')).toBeNull();
+  });
+
+  // linkModules 是「干净检出里有没有依赖」的唯一判据。2026-11-02 实测：worktree 的
+  // `node_modules/` **目录在、内容空**（`npm ci` 中断留下的），旧实现只判目录存在，
+  // 于是把空目录链接进干净检出，前端门禁以 `Cannot find package 'postcss'` 崩掉，
+  // 推送被拦在「parity 未通过」——红的是环境，看起来像代码。
+  describe('linkModules —— 调用方没装齐依赖时不许假装装好了', () => {
+    // 探针文件写死成 `entry.mjs`，不复用真实清单：这条用例测的是「按探针判」，
+    // 用完「清单里探什么」由 check-pr-parity.test.mjs 的 probeContents 那组负责。
+    const PROBE = ['entry.mjs'];
+    const withDirs = (dirs) => {
+      const scratch = mkdtempSync(join(tmpdir(), 'link-modules-'));
+      const pristine = join(scratch, 'pristine');
+      const source = join(scratch, 'source-modules');
+      mkdirSync(pristine);
+      mkdirSync(source);
+      for (const name of dirs) mkdirSync(join(source, name));
+      return { scratch, pristine, source };
+    };
+
+    it('探针文件一个都没有（空目录）→ 不链接，并点名缺的那个', () => {
+      const { scratch, pristine, source } = withDirs([]);
+      try {
+        const result = linkModules(pristine, source, 'linux', PROBE);
+        expect(result.linked).toBe(false);
+        expect(result.reason).toContain('entry.mjs');
+        expect(existsSync(join(pristine, 'node_modules'))).toBe(false);
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    });
+
+    it('探针文件在 → 链接成功，干净检出里能看见包', () => {
+      const { scratch, pristine, source } = withDirs([]);
+      writeFileSync(join(source, 'entry.mjs'), '');
+      try {
+        const result = linkModules(pristine, source, 'linux', PROBE);
+        expect(result.linked).toBe(true);
+        expect(existsSync(join(pristine, 'node_modules', 'entry.mjs'))).toBe(true);
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    });
+
+    it('干净检出里已有 node_modules → 不接链，并说明那不该出现', () => {
+      const { scratch, pristine, source } = withDirs([]);
+      mkdirSync(join(pristine, 'node_modules'));
+      try {
+        const result = linkModules(pristine, source, 'linux', PROBE);
+        expect(result.linked).toBe(false);
+        // 干净检出是刚 `git worktree add` 出来的，`node_modules` 被 gitignore，
+        // 里面有东西只可能是调用方灌的 —— reason 得让人看出是「环境不对」而不是「依赖没装」。
+        expect(result.reason).toContain('本来不该有');
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    });
+  });
+
+  // 2026-11-02 现场：主工作区的 node_modules 三次被清空，每次都发生在 parity 收尾之后，
+  // 而同一次故障里 wt24 那个指向主工作区的目录联接退化成空目录。机制没查清（单独试
+  // `rmSync` 递归删联接**不会**跟进目标），所以这里不假设机制，只钉住结论：拆链接必须
+  // 用只删重解析点的做法，递归删除不许出现在这条路径上。
+  describe('unlinkModules —— 只拆链接，不顺着链接删掉别人的包', () => {
+    it('链接还在 → 拆掉链接，目标里的包一个不少', () => {
+      const scratch = mkdtempSync(join(tmpdir(), 'unlink-modules-'));
+      const source = join(scratch, 'source-modules');
+      const pristine = join(scratch, 'pristine');
+      mkdirSync(source);
+      mkdirSync(pristine);
+      mkdirSync(join(source, 'postcss'));
+      writeFileSync(join(source, 'postcss', 'index.js'), 'module.exports = 1;\n');
+      try {
+        expect(linkModules(pristine, source, 'linux', ['postcss/index.js']).linked).toBe(true);
+        unlinkModules(pristine);
+        expect(existsSync(join(pristine, 'node_modules'))).toBe(false);
+        expect(readFileSync(join(source, 'postcss', 'index.js'), 'utf8')).toBe(
+          'module.exports = 1;\n',
+        );
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    });
+
+    it('干净检出里没有 node_modules → 什么都不做，也不报错', () => {
+      const scratch = mkdtempSync(join(tmpdir(), 'unlink-modules-'));
+      try {
+        expect(() => unlinkModules(scratch)).not.toThrow();
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    });
+
+    it('真目录不是链接 → 不删（它不是我们造的）', () => {
+      const scratch = mkdtempSync(join(tmpdir(), 'unlink-modules-'));
+      // 落一份**真** node_modules（不是链接）：拆链接的边界就看得见了。
+      mkdirSync(join(scratch, 'node_modules', 'postcss'), { recursive: true });
+      try {
+        expect(() => unlinkModules(scratch)).not.toThrow();
+        expect(readdirSync(join(scratch, 'node_modules'))).toEqual(['postcss']);
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    });
   });
 });
 
