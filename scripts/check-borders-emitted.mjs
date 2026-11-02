@@ -44,11 +44,14 @@ export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
  * 只认「边框颜色」候选，三类一律跳过：
  *   - 宽度类（`border-2`、`border-r-0`、`border-[3px]`）：首字符是数字或 `[`
  *   - 样式类（`border-solid` 等）：见 `NON_COLOR_BORDER`
- *   - 任意值表达式内部（`transition-[border-color,transform]`）：见下方的
- *     `ARBITRARY_VALUE_RE` 预剥离
+ *   - `/NN` 透明度修饰（`border-white/[0.15]`）：`/` 不在字符集里
  *
  * 刻意**不匹配** `border-white/20` 这类内置色写法：内置调色板天然支持 `/NN`，
  * 纳入只会让门禁对着已知能工作的东西空转。
+ *
+ * 也刻意**不匹配** `border-border-default/50`：主题色今天零处使用 `/NN`，
+ * 而 `theme.extend.colors.border` 的值是十六进制字面量，Tailwind 能正常
+ * 生成带透明度的规则 —— 这一类没有静默失效的形态可防。
  */
 const BORDER_CLASS_RE = /\bborder(?:-[a-z0-9]+)+\b/g;
 
@@ -121,8 +124,61 @@ function parseBorderColorKey(className) {
   return key;
 }
 
+/**
+ * 任意值里会被误当成描边类的 token。
+ *
+ * 只显式排除一种：`border-color` / `border-width` 这类 **CSS 属性名**——
+ * 它们是单个属性词。其余 token 一律交给 `parseBorderColorKey` 按类名语义判：
+ *   - `border-border-subtle` → `border-subtle`（真实类引用，收）
+ *   - `border-default` → 越界命名空间（真实写错的类，判红）
+ *   - `border-t-white` / `border-sky-500` → 内置色，本就跳过
+ *   - `border-solid` → 样式词，本就跳过
+ *
+ * 代价写明：`w-[calc(border-border-strong)]` 这种「值与主题键名巧合拼接」的写法
+ * 会被当成 `border-strong` 收下。它只在产物里缺 `.border-border-strong` 规则时
+ * 才误报，而那意味着主题键真被删了 —— 误报方向安全，且不影响判定正确性。
+ */
+const PROPERTY_WORDS = new Set(['color', 'width', 'style', 'radius', 'spacing', 'opacity']);
+
 /** 方括号任意值表达式，如 `transition-[border-color,transform]`。 */
 const ARBITRARY_VALUE_RE = /\[[^\]]*\]/g;
+
+/**
+ * 方括号里的描边类候选。
+ *
+ * 无 `g` 标志：带 `g` 的正则对象会在多次 `exec` 之间保留 `lastIndex`，逐 token
+ * 扫描时第二个及以后的 token 会被静默跳过。
+ */
+const ARBITRARY_BORDER_RE = /\bborder-[a-z0-9]+(?:-[a-z0-9]+)*/;
+
+/**
+ * 从方括号内容里挑出「真的在引用描边类」的 token。
+ *
+ * 动机：`[...]` 里既可能是 CSS 属性名（`border-color`）、也可能是合法的
+ * Tailwind 类引用（`border-t-white`、`border-border-default`）。整段剥离
+ * 会对后者完全失明 —— 2026-11-02 评审实测 `transition-[border-default,transform]`
+ * 注入后门禁仍 PASS，而 Tailwind 会把它编译成一条属性名无效、被静默丢弃的
+ * `transition-property`，正是本门禁要防的那类静默失效。
+ *
+ * 做法：按 `,` 和括号切开逐 token 判断，跳过 CSS 属性名（见 `PROPERTY_WORDS`），
+ * 其余交给 `parseBorderColorKey`：合法的内置色 / 主题色收下，越界命名空间标红
+ * （`transition-[border-default]` 是真实写错的类，必须红）。
+ */
+function scanArbitraryValue(inner) {
+  const found = [];
+  for (const token of inner.split(/[,()]+/)) {
+    const trimmed = token.trim();
+    const match = ARBITRARY_BORDER_RE.exec(trimmed);
+    if (!match) continue;
+    const whole = match[0];
+    // 只排除 CSS 属性名（`border-color` 是单段属性词）；宽度/样式/内置色由
+    // `parseBorderColorKey` 自己排除，不必在这里重复判形态。
+    if (PROPERTY_WORDS.has(whole.slice('border-'.length))) continue;
+    const key = parseBorderColorKey(whole);
+    if (key) found.push(key);
+  }
+  return found;
+}
 
 /** 宽度/样式等非颜色的 `border-*` 取值，核对颜色规则时排除。 */
 const NON_COLOR_BORDER = new Set([
@@ -147,10 +203,12 @@ const NON_COLOR_BORDER = new Set([
  * `judgeBorderClasses` 判红。
  */
 export function extractBorderClasses(source) {
-  // 先剥掉 `[...]` 任意值表达式：里面的 `border-color` 是 CSS 属性名，
-  // 不是 Tailwind 类名，留着会在产物里找不到规则而误报。
-  const stripped = source.replace(ARBITRARY_VALUE_RE, ' ');
   const found = new Set();
+  // 方括号单独处理：整段剥离会对里面的真实类引用失明，逐 token 判则不会。
+  for (const match of source.matchAll(ARBITRARY_VALUE_RE)) {
+    for (const key of scanArbitraryValue(match[0].slice(1, -1))) found.add(key);
+  }
+  const stripped = source.replace(ARBITRARY_VALUE_RE, ' ');
   for (const match of stripped.matchAll(BORDER_CLASS_RE)) {
     const key = parseBorderColorKey(match[0]);
     if (key) found.add(key);

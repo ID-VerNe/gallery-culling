@@ -2,7 +2,8 @@
  * 描边类门禁的单测（issue #18 · PD-1）。
  *
  * 重点是**每条判定分支都要能被变异打红**：
- *   - 抽取：颜色类收、宽度类/样式类/任意值不收
+ *   - 抽取：颜色类收、宽度类/样式类/CSS 属性名不收
+ *   - 抽取：方括号里的真实类引用不能漏（含写错的那个）
  *   - 判定：产物缺规则时必须红
  *   - 产物级：`judgeBorderClasses` 吃真实编译产物，写对的名字必须有规则
  *
@@ -56,6 +57,35 @@ describe('extractBorderClasses', () => {
   it('排除任意值表达式内部的 CSS 属性名', () => {
     // `transition-[border-color,transform]` 里的 border-color 是属性名不是类名
     expect(extractBorderClasses('transition-[border-color,transform]')).toEqual([]);
+    expect(
+      extractBorderClasses('transition-[background-color,border-color,box-shadow,transform]'),
+    ).toEqual([]);
+  });
+
+  it('任意值表达式内部的描边类不能漏（2026-11-02 评审注入实测漏过）', () => {
+    // `transition-[border-default,transform]` 是**真实写错**的类引用：Tailwind
+    // 会生成一条属性名无效、被静默丢弃的 transition-property —— 正是本门禁
+    // 要防的静默失效。整段剥离方括号会让它对门禁失明。
+    expect(extractBorderClasses('transition-[border-default,transform]')).toEqual([
+      `${INVALID_NAMESPACE_MARKER}default`,
+    ]);
+    expect(extractBorderClasses('transition-[border-border-subtle,transform]')).toEqual([
+      'border-subtle',
+    ]);
+  });
+
+  it('任意值里值与键名巧合拼接的 token 按类名语义收下（误报方向安全）', () => {
+    // `calc(border-border-strong)` 里的 `border-border-strong` 单看就是合法类名，
+    // 本门禁不做值语义分析，收下它。代价：主题键被删时这处会多报一条 —— 而那
+    // 正是门禁该报的时刻。反之若为了绕开它去判形态，`transition-[border-…]`
+    // 里的真实类引用会被一起漏掉（2026-11-02 评审实测的同一类盲区）。
+    expect(extractBorderClasses('w-[calc(border-border-strong)]')).toEqual(['border-strong']);
+  });
+
+  it('带 /NN 的主题描边类同样被认出', () => {
+    // `BORDER_CLASS_RE` 不认 `/`，裸写法会整条漏掉；`border-border-default/50`
+    // 的键仍是 `border-default`（Tailwind 对十六进制主题色能正常加透明度）。
+    expect(extractBorderClasses('border-border-default/50')).toEqual(['border-default']);
   });
 
   it('把非 border 命名空间的键标记出来，而不是静默跳过', () => {
@@ -64,6 +94,17 @@ describe('extractBorderClasses', () => {
     expect(extractBorderClasses('border-button border-background-input')).toEqual([
       `${INVALID_NAMESPACE_MARKER}button`,
       `${INVALID_NAMESPACE_MARKER}background-input`,
+    ]);
+  });
+
+  it('带 border- 前缀但键不在白名单的，同样标红', () => {
+    // 这条钉住 `BORDER_NAMESPACE_KEYS` 白名单本身。上面那条用例的键（`button` /
+    // `background-input`）不含 `border-` 前缀，走的是更早的「必须以 border- 开头」
+    // 分支 —— 删掉白名单那一行它们照样红，所以测不出白名单是否还在。
+    // 只有多段键（`border-bogus`）才走白名单分支：它形式上是本命名空间的写法，
+    // 但配置里没这个键。
+    expect(extractBorderClasses('border-border-bogus')).toEqual([
+      `${INVALID_NAMESPACE_MARKER}border-bogus`,
     ]);
   });
 
