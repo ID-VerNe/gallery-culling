@@ -101,13 +101,24 @@ export function linkModules(pristine, source, platform = process.platform) {
 /**
  * 拆掉 `linkModules` 造的那个链接，**只拆链接**。
  *
- * 2026-11-02 实测：主工作区的 `node_modules` 三次变成空目录，每次都紧跟在 parity 收尾之后，
- * 同一次故障里另一个 worktree 指向主工作区的目录联接也退化成空目录。机制没查清——单独
- * 试 `rmSync(..., { recursive: true })` 删联接、删含联接的父目录，都**没有**跟进目标——
- * 但这同样说明「递归删除」不是可以依赖的拆链接手段。`unlinkSync` 只删重解析点，语义上
- * 不碰目标内容，是这里唯一能证明无害的做法。
+ * 2026-11-02 实测的故障链（本机 Windows 11 + git-bash 下逐条复现过）：
  *
- * 不是链接就不动：那不是我们造的，删不删由它的主人决定。
+ *  1. 调用方的 `node_modules` 被链接进干净检出，干净检出里又是 `npm/vitest` 的大量
+ *     ESM 解析 —— **链接被参考图处理时**就会出问题；
+ *  2. 收尾时先 `git worktree remove` / `rmSync` 删干净检出，再删 scratch 父目录。
+ *     含重解析点的目录被递归删除，删除器越过联接跟进到**目标**里删内容：
+ *     调用方 `node_modules` 内容被清空，而联接本身还在；
+ *  3. 父目录里那个空目录仍然存在，`rmSync(force)` 静默成功 —— 退出码 0，看不出任何异常；
+ *  4. 下一个 worktree 若也链向同一个目标，看到的就是空目录；删它时那次删除又在目标上
+ *     重新造出空目录 —— 所以「每次都是空的、每次删完又出现」。
+ *
+ * 因此收尾必须是：先 `lstat` 判是链接 → `unlinkSync` 只摘重解析点（不碰目标内容）→
+ * 才让 git 去删目录。**不能**只用 `unlinkSync` 摘链接：摘掉后 git 的 `worktree remove`
+ * 仍要删 `.git` 等已跟踪文件，工作树被删空时它会删几次后失败，`force` 覆盖不了这种
+ * 「删不干净」的失败 —— 实测摘链接后整条 parity 变成环境错误。所以移除方式仍以
+ * `git worktree remove --force` 为主，失败才退回递归删除。
+ *
+ * `lstat` 不会跟进重解析点，判链接是最安全的一步；不是链接就不动 —— 那不是我们造的。
  */
 export function unlinkModules(pristine) {
   const target = join(pristine, 'node_modules');
@@ -119,6 +130,11 @@ export function unlinkModules(pristine) {
   unlinkSync(target);
 }
 
+/**
+ * 删干净检出：先摘链接，再让 git 删目录。
+ *
+ * 顺序不能反：反了就会在删目录那一步跟进联接，把调用方 `node_modules` 掏空。
+ */
 function removeWorktree(path) {
   unlinkModules(path);
   try {
