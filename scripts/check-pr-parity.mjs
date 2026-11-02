@@ -26,7 +26,15 @@
  * CI 自己**不跑**本脚本：CI 已经是那个干净环境，而且它需要完整的 git 历史。
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -90,7 +98,29 @@ export function linkModules(pristine, source, platform = process.platform) {
   }
 }
 
+/**
+ * 拆掉 `linkModules` 造的那个链接，**只拆链接**。
+ *
+ * 2026-11-02 实测：主工作区的 `node_modules` 三次变成空目录，每次都紧跟在 parity 收尾之后，
+ * 同一次故障里另一个 worktree 指向主工作区的目录联接也退化成空目录。机制没查清——单独
+ * 试 `rmSync(..., { recursive: true })` 删联接、删含联接的父目录，都**没有**跟进目标——
+ * 但这同样说明「递归删除」不是可以依赖的拆链接手段。`unlinkSync` 只删重解析点，语义上
+ * 不碰目标内容，是这里唯一能证明无害的做法。
+ *
+ * 不是链接就不动：那不是我们造的，删不删由它的主人决定。
+ */
+export function unlinkModules(pristine) {
+  const target = join(pristine, 'node_modules');
+  try {
+    if (!lstatSync(target).isSymbolicLink()) return;
+  } catch {
+    return; // 不存在（或读不了）：没什么可拆的。
+  }
+  unlinkSync(target);
+}
+
 function removeWorktree(path) {
+  unlinkModules(path);
   try {
     git(['worktree', 'remove', '--force', path]);
   } catch {

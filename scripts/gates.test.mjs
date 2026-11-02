@@ -7,7 +7,15 @@
  * 最后一组直接拿仓库现状跑一遍：门禁清单漂移应该在本机就被发现，而不是等 CI。
  */
 import { describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -32,7 +40,13 @@ import {
   reviewOrderProblem,
   reviewRecord,
 } from './check-gate-change-review.mjs';
-import { linkModules, missingInputs, resolveRef, shardProblem } from './check-pr-parity.mjs';
+import {
+  linkModules,
+  missingInputs,
+  resolveRef,
+  shardProblem,
+  unlinkModules,
+} from './check-pr-parity.mjs';
 
 const manifest = loadManifest();
 const agents = readFileSync(join(ROOT, 'AGENTS.md'), 'utf8');
@@ -629,6 +643,53 @@ describe('check-pr-parity', () => {
         const result = linkModules(pristine, source, 'linux');
         expect(result.linked).toBe(false);
         expect(result.reason).toContain('已经有');
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    });
+  });
+
+  // 2026-11-02 现场：主工作区的 node_modules 三次被清空，每次都发生在 parity 收尾之后，
+  // 而同一次故障里 wt24 那个指向主工作区的目录联接退化成空目录。机制没查清（单独试
+  // `rmSync` 递归删联接**不会**跟进目标），所以这里不假设机制，只钉住结论：拆链接必须
+  // 用只删重解析点的做法，递归删除不许出现在这条路径上。
+  describe('unlinkModules —— 只拆链接，不顺着链接删掉别人的包', () => {
+    it('链接还在 → 拆掉链接，目标里的包一个不少', () => {
+      const scratch = mkdtempSync(join(tmpdir(), 'unlink-modules-'));
+      const source = join(scratch, 'source-modules');
+      const pristine = join(scratch, 'pristine');
+      mkdirSync(source);
+      mkdirSync(pristine);
+      mkdirSync(join(source, 'postcss'));
+      writeFileSync(join(source, 'postcss', 'index.js'), 'module.exports = 1;\n');
+      try {
+        expect(linkModules(pristine, source).linked).toBe(true);
+        unlinkModules(pristine);
+        expect(existsSync(join(pristine, 'node_modules'))).toBe(false);
+        expect(readFileSync(join(source, 'postcss', 'index.js'), 'utf8')).toBe(
+          'module.exports = 1;\n',
+        );
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    });
+
+    it('干净检出里没有 node_modules → 什么都不做，也不报错', () => {
+      const scratch = mkdtempSync(join(tmpdir(), 'unlink-modules-'));
+      try {
+        expect(() => unlinkModules(scratch)).not.toThrow();
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    });
+
+    it('真目录不是链接 → 不删（它不是我们造的）', () => {
+      const scratch = mkdtempSync(join(tmpdir(), 'unlink-modules-'));
+      // 落一份**真** node_modules（不是链接）：拆链接的边界就看得见了。
+      mkdirSync(join(scratch, 'node_modules', 'postcss'), { recursive: true });
+      try {
+        expect(() => unlinkModules(scratch)).not.toThrow();
+        expect(readdirSync(join(scratch, 'node_modules'))).toEqual(['postcss']);
       } finally {
         rmSync(scratch, { recursive: true, force: true });
       }
