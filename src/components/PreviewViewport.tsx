@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
 import { getToneFilterString } from '../utils/autoTone';
-import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from '../utils/viewportZoom';
+import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, isFitScale, scaleLabel } from '../utils/viewportZoom';
 import { useZoomPan } from '../hooks/useZoomPan';
 import { useViewportImage } from '../hooks/useViewportImage';
 import { useLumenDetail } from '../hooks/useLumenDetail';
@@ -116,8 +116,40 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
    * 每个入口（滚轮 / 拖拽 / 双击 / 复位 / 换图）都会把模式打回适应。
    */
   const oneToOneModeRef = useRef(false);
-  /** 按 Z 时细节还没就绪 → 等 img onLoad 再切，不能立刻用预览宽度算。 */
+  /**
+   * 等在飞的细节图时，「这次请求是不是为了进 1:1」。
+   *
+   * 请求与模式是两件事：等图的 6–8 秒里用户可能滚轮 / 拖拽 / 换图离开，
+   * 也可能按 Z 放弃（PB-10 的 C1 场景）。图加载完时若不再是要进 1:1，
+   * **什么都不做**——直接 `zoom.oneToOne()` 会把用户已经调好的画面掰回去。
+   */
   const pendingOneToOneRef = useRef(false);
+
+  /**
+   * 进 1:1 的唯一入口：按 Z 与双击都落在这里。
+   * JPG 分组原图就是全分辨率，不需要（也不该）花 6–8 秒渲染。
+   *
+   * `fallback` 只在算不出 1:1（预览还没布局）时兜底，见 `zoom.oneToOne`。
+   */
+  const enterOneToOne = useCallback(
+    (fallback?: number) => {
+      const showDetail = () => {
+        if (zoom.oneToOne(fallback) !== null) oneToOneModeRef.current = true;
+      };
+      if (group?.jpg?.path || detail.url) {
+        showDetail();
+        return;
+      }
+      // RAW-only 且还没细节：先请求，等图真正加载完再切（onLoad 里接手）。
+      pendingOneToOneRef.current = true;
+      detail.request();
+      // 一张照片可能早就被别处请求过（缓存在飞）。这时 onLoad 也会来，
+      // 但不能把「这一帧什么都不做」当成默认——算得出落点就先切过去，
+      // 等到手的也只是同一个落点。算不出来（预览还没布局）才交给 onLoad。
+      showDetail();
+    },
+    [zoom, group, detail],
+  );
 
   const toggleOneToOne = useCallback(() => {
     // 已在 1:1 → 回适应（同一个键来回切，与双击的「适应 ↔ 放大」同构）。
@@ -127,25 +159,29 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
       return;
     }
 
-    // JPG 分组：原图就是全分辨率，不需要（也不该）花 6–8 秒渲染。
-    const hasJpg = Boolean(group?.jpg?.path);
-    if (!hasJpg && !detail.url) {
-      // 还没细节：先请求，等图真正加载完再切（onLoad 里接手）。
-      pendingOneToOneRef.current = true;
-      detail.request();
+    // 正在等这次请求的图：再按一次 = 收回请求，图到了也不要再切过去。
+    if (pendingOneToOneRef.current) {
+      pendingOneToOneRef.current = false;
       return;
     }
 
-    if (zoom.oneToOne() !== null) oneToOneModeRef.current = true;
-  }, [zoom, group, detail]);
+    enterOneToOne();
+  }, [zoom, enterOneToOne]);
 
-  // 任何非 Z 的缩放 / 平移 / 换图都会离开 1:1：模式必须跟着打回适应，
-  // 否则下一次按 Z 会复位到一个用户早就离开的画面。
+  // 任何非 Z 的离开 1:1 都会让模式打回适应，否则下一次按 Z 会复位到一个
+  // 用户早就离开的画面；等图的请求同样作废。
   useEffect(() => {
     zoom.setOneToOneLeaveListener(() => {
       oneToOneModeRef.current = false;
+      pendingOneToOneRef.current = false;
     });
   }, [zoom]);
+
+  // 换图：resetKey 变化会把缩放复位，等图的请求也不再指向当前这张。
+  useEffect(() => {
+    pendingOneToOneRef.current = false;
+    oneToOneModeRef.current = false;
+  }, [group?.id]);
 
   // 把 toggle 注册给全局快捷键（Z）。视口不在时（双栏 / 前后对照）清空，
   // 避免 `Z` 打到已经卸载的视口上。
@@ -156,6 +192,20 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
       oneToOneRef.current = () => {};
     };
   }, [oneToOneRef, toggleOneToOne]);
+
+  // 双击与 Z 同构：适应 → 1:1（必要时先请求细节），1:1 → 适应。落点走同一组
+  // 入口，读数才一致；否则双击在 RAW 上会跳到一个「适应 × 2.5」的假放大。
+  // 算不出 1:1（预览还没布局）时退到「适应 × DOUBLE_CLICK_SCALE」，仍是放大。
+  const zoomDoubleClickScale = zoom.bind.doubleClickScale;
+  const handleDoubleClick = useCallback(() => {
+    const target = zoomDoubleClickScale();
+    if (isFitScale(target)) {
+      zoom.reset();
+      oneToOneModeRef.current = false;
+      return;
+    }
+    enterOneToOne(target);
+  }, [zoomDoubleClickScale, zoom, enterOneToOne]);
 
   if (!group) {
     return <ViewportEmptyStateView emptyState={emptyState} />;
@@ -203,7 +253,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
       onPointerMove={zoom.bind.onPointerMove}
       onPointerUp={zoom.bind.onPointerUp}
       onPointerCancel={zoom.bind.onPointerUp}
-      onDoubleClick={zoom.bind.onDoubleClick}
+      onDoubleClick={handleDoubleClick}
       className={`relative flex-1 bg-background-base overflow-hidden flex items-center justify-center select-none ${
         zoom.isDragging ? 'cursor-grabbing' : 'cursor-grab'
       }`}

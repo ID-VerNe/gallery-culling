@@ -39,13 +39,16 @@ export interface ZoomPan {
    *
    * 比例是 `naturalWidth / offsetWidth` —— `scale` 的语义是「相对适应窗口
    * 的倍数」，所以 1:1 取决于原图尺寸与窗口大小，不能写死。
-   * 元素未挂载 / 还没布局（宽度为 0）时返回 null，调用方保留原缩放。
+   * 元素未挂载 / 还没布局（宽度为 0）时算不出来：给了 `fallback` 就落在
+   * `fallback` 上并返回它（双击在算不出 1:1 的宿主上仍是一个放大），
+   * 没给则返回 null、画面不动（Z 的语义是「到 1:1」，不是「到某个倍数」）。
    */
-  oneToOne: () => number | null;
+  oneToOne: (fallback?: number) => number | null;
   /**
-   * 注册「离开 1:1」的回调（PB-10）。除 `oneToOne()` 以外的每一个缩放 /
-   * 平移 / 复位入口都会触发它 —— 1:1 只在 `oneToOne()` 的落点上成立，
-   * 调用方据此维护「当前是不是 1:1」，而不是拿比例去跟一个算出来的数比。
+   * 注册「离开 1:1」的回调（PB-10）。除 `oneToOne()` 以外的每一个**真的改变了
+   * 画面**的缩放 / 平移 / 复位入口都会触发它 —— 1:1 只在 `oneToOne()` 的落点
+   * 上成立，调用方据此维护「当前是不是 1:1」，而不是拿比例去跟一个算出来的数比。
+   * 按住不放的单击不触发：它没有改变任何东西，只是「可能开始拖」。
    */
   setOneToOneLeaveListener: (fn: () => void) => void;
   /** 绑到视口容器的全套手势（滚轮 / 拖拽 / 双击）。 */
@@ -55,6 +58,11 @@ export interface ZoomPan {
     onPointerMove: (e: React.PointerEvent) => void;
     onPointerUp: (e: React.PointerEvent) => void;
     onDoubleClick: () => void;
+    /**
+     * 双击该落到哪个比例：适应窗口 → `DOUBLE_CLICK_SCALE`，否则 → 1。
+     * 读的是当前 `scale`，不是 setState 回调里的旧值。
+     */
+    doubleClickScale: () => number;
   };
 }
 
@@ -104,9 +112,9 @@ export function useZoomPan(
     (factor: number) => {
       leaveOneToOne();
       setTransition(SETTLE);
-      setScale((s) => clampScale(s * factor));
+      setScale(clampScale(scale * factor));
     },
-    [leaveOneToOne],
+    [scale, leaveOneToOne],
   );
 
   const reset = useCallback(() => {
@@ -116,15 +124,15 @@ export function useZoomPan(
     setPos({ x: 0, y: 0 });
   }, [leaveOneToOne]);
 
-  const oneToOne = useCallback((): number | null => {
+  const oneToOne = useCallback((fallback?: number): number | null => {
     const img = imgRef.current;
-    if (!img) return null;
-    const s = oneToOneScale(img.naturalWidth, img.offsetWidth);
-    if (s === null) return null;
+    const s = img ? oneToOneScale(img.naturalWidth, img.offsetWidth) : null;
+    const landing = s ?? fallback;
+    if (landing === undefined) return null;
     setTransition(SETTLE);
-    setScale(s);
+    setScale(landing);
     setPos({ x: 0, y: 0 });
-    return s;
+    return landing;
   }, []);
 
   const handleWheel = useCallback(
@@ -149,22 +157,27 @@ export function useZoomPan(
       if (e.button !== 0) return;
       // 覆盖层按钮 / EXIF 胶囊等交互元素不进入拖拽，避免抢走点击。
       if (e.target !== e.currentTarget) return;
-      leaveOneToOne();
+      // 只按下还什么都没离开 1:1：没有位移的单击（选片、进调色）不该把
+      // 1:1 状态打掉。真正的离开判据是 handlePointerMove 里的「真的动了」。
       setTransition(GESTURE);
       setIsDragging(true);
       grabRef.current = dragGrab(e.clientX, e.clientY, pos);
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     },
-    [pos, leaveOneToOne],
+    [pos],
   );
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
       if (!isDragging) return;
       const target = dragTarget(e.clientX, e.clientY, grabRef.current);
-      setPos(clampToPane(containerRef.current, imgRef.current, target, scale));
+      const next = clampToPane(containerRef.current, imgRef.current, target, scale);
+      // 夹紧之后位置真变了才算离开 1:1：1:1 时平移本就封死在原点，按着不放
+      // 不该让「再按 Z」变成「重新进 1:1」而不是「回适应」。
+      if (next.x !== pos.x || next.y !== pos.y) leaveOneToOne();
+      setPos(next);
     },
-    [isDragging, scale],
+    [isDragging, scale, pos, leaveOneToOne],
   );
 
   const handlePointerUp = useCallback(
@@ -178,12 +191,15 @@ export function useZoomPan(
     [isDragging],
   );
 
+  /** 双击：一处判「是不是适应」，一处应用落点 —— 三视口共用。 */
+  const doubleClickScale = useCallback(() => (isFitScale(scale) ? DOUBLE_CLICK_SCALE : 1), [scale]);
+
   const handleDoubleClick = useCallback(() => {
     leaveOneToOne();
     setTransition(SETTLE);
-    setScale((s) => (isFitScale(s) ? DOUBLE_CLICK_SCALE : 1));
+    setScale(doubleClickScale());
     setPos({ x: 0, y: 0 });
-  }, [leaveOneToOne]);
+  }, [leaveOneToOne, doubleClickScale]);
 
   const imageRef = useCallback(
     (el: HTMLImageElement | null) => {
@@ -211,6 +227,9 @@ export function useZoomPan(
       onPointerMove: handlePointerMove,
       onPointerUp: handlePointerUp,
       onDoubleClick: handleDoubleClick,
+      // 双击的落点由宿主决定：Preview 的落点里可能要先等细节图（Z 同构），
+      // 单栏视口自己算不出来，所以只把「该落在哪」暴露出去。
+      doubleClickScale,
     },
   };
 }
