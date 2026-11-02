@@ -82,10 +82,9 @@ export function missingInputs(pristine, { exists = existsSync } = {}) {
  * （缺陷）而不是被检查的代码，读者会把环境问题当成代码问题。调用方据此判退出码 2。
  * 返回 `{ linked, reason }`；`linked: false` 时 `reason` 是给人看的一句话。
  *
- * 判「装没装齐」的探针是 `contents`：只判 `source/postcss` 目录存在不够——`npm ci`
- * 装到一半中断会留下空目录。这里要的是**能证明包内容真的落盘**的文件，由调用方按
- * `gates.json` 里各条门禁的 `node node_modules/…` 入口推出来（见 `probeContents`）。
- * 默认值是 `probeContents(loadManifest())`：不传就是「按当前清单探」，单测传死值。
+ * `contents` 是**相对调用方 `node_modules` 的路径**（如 `typescript/bin/tsc`），默认由
+ * `probeContents()` 从清单推出来。探针不写死包名：只判 `postcss` 目录在不在时，换成
+ * tsc 或 vitest 缺席照样接上去，干净检出会在门禁里崩。
  */
 export function linkModules(pristine, source, platform = process.platform, contents = probeContents()) {
   const target = join(pristine, 'node_modules');
@@ -114,7 +113,11 @@ export function linkModules(pristine, source, platform = process.platform, conte
 }
 
 /**
- * 清单里每条「node 跑包内入口」的门禁各贡献一个必须是**文件**的路径。
+ * 清单里每条「node 跑包内入口」的门禁各贡献一个探针，路径**相对 `node_modules`**。
+ *
+ * `toolFiles` 给的是命令行里的写法（`node_modules/typescript/bin/tsc`），而探针要拼在
+ * 调用方的 `node_modules` 上——原样拼会得到 `node_modules/node_modules/…`，永远探不到，
+ * 于是每次推送都在这里判退出 2。所以先在 `probeContents` 里剥掉这段前缀，让下游拼一次就够。
  *
  * 与 `run-gates.mjs` 的 `missingTools` 同口径：那边查的是这些文件在不在，缺了就判红；
  * 这边查的是它们在不在**调用方**的 `node_modules` 里，缺了就别把干净检出接上去。
@@ -122,7 +125,7 @@ export function linkModules(pristine, source, platform = process.platform, conte
  */
 export function probeContents(manifest = loadManifest()) {
   const files = (manifest.ci ?? []).flatMap((row) =>
-    toolFiles(row.cmd ?? []).map(({ file }) => file),
+    toolFiles(row.cmd ?? []).map(({ file }) => file.replace(/^node_modules[/\\]/, '')),
   );
   return [...new Set(files)].sort();
 }

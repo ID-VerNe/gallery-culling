@@ -103,7 +103,10 @@ describe('unlinkModules —— 只摘重解析点，不碰目标内容', () => {
 });
 
 describe('probeContents —— 探针跟清单走，不写死包名', () => {
-  it('每条「node 跑 node_modules 入口」的门禁各贡献一个路径，去重且排序', () => {
+  it('每条「node 跑 node_modules 入口」的门禁各贡献一个探针，路径相对 node_modules', () => {
+    // 相对 node_modules 而不是相对仓库根：`linkModules` 会把它拼在**调用方的**
+    // node_modules 上。留着 `node_modules/` 前缀会拼成 `node_modules/node_modules/…`，
+    // 永远探不到 —— 这个错误只会在真推送时才暴露（本机 push 实测过一次）。
     expect(
       probeContents({
         ci: [
@@ -114,7 +117,17 @@ describe('probeContents —— 探针跟清单走，不写死包名', () => {
           { cmd: ['cargo', 'test', '--lib'] },
         ],
       }),
-    ).toEqual(['node_modules/typescript/bin/tsc', 'node_modules/vitest/vitest.mjs']);
+    ).toEqual(['typescript/bin/tsc', 'vitest/vitest.mjs']);
+  });
+
+  it('默认参数取真实清单，探出来的文件在调用方 node_modules 里都真实存在', () => {
+    // 这条用例的意义在**默认值**：`linkModules` 不传探针时会走到这里。清单改了入口
+    // 而没跑 `npm ci`、或路径拼错，都会在这条先红，而不是等到 pre-push 判退出 2。
+    for (const rel of probeContents()) {
+      expect(existsSync(join('node_modules', rel)), `探针 ${rel} 在 node_modules 里不存在`).toBe(
+        true,
+      );
+    }
   });
 });
 
