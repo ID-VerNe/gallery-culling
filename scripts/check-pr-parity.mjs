@@ -9,9 +9,10 @@
  * 干净检出**里：
  *
  *  1. `git worktree add --detach <临时目录>/pristine <sha>`：只有该 sha 的已跟踪文件；
- *  2. 注入 `node_modules`（链接调用方的那一份，省一次 `npm ci`）——它是**同一份 lockfile
- *     的产物**，不携带工作区未提交的源码，不影响等价性；链接不成（调用方没装齐依赖）
- *     直接判环境问题退出 2，**不**降级成「没有依赖照样跑」，否则红的是环境不是代码；
+ *  2. 链接调用方那份 `node_modules` —— 它是**同一份 lockfile 的产物**，不携带工作区
+ *     未提交的源码，不影响等价性；链接前按 `gates.json` 的 `node node_modules/…` 入口
+ *     逐个探文件，探不到就是调用方没装齐。链接不成直接判环境问题退出 2，
+ *     **不**降级成「没有依赖照样跑」，否则红的是环境不是代码；
  *  3. `src-tauri/binaries/` **不注入**：这正是 CI 与本地最容易分叉的地方（本地有全量
  *     sidecar，CI 只有占位文件），若被运行的用例真的依赖它，就应该在这里红出来；
  *  4. 用**该 sha 自己那份** `scripts/run-gates.mjs` + `gates.json` 执行（清单是被跑对象
@@ -38,6 +39,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadManifest, toolFiles } from './run-gates.mjs';
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -79,8 +81,13 @@ export function missingInputs(pristine, { exists = existsSync } = {}) {
  * 链接失败**是环境问题**，不是「门禁会自己红」：干净检出里没有依赖时，红的是门禁本身
  * （缺陷）而不是被检查的代码，读者会把环境问题当成代码问题。调用方据此判退出码 2。
  * 返回 `{ linked, reason }`；`linked: false` 时 `reason` 是给人看的一句话。
+ *
+ * 判「装没装齐」的探针是 `contents`：只判 `source/postcss` 目录存在不够——`npm ci`
+ * 装到一半中断会留下空目录。这里要的是**能证明包内容真的落盘**的文件，由调用方按
+ * `gates.json` 里各条门禁的 `node node_modules/…` 入口推出来（见 `probeContents`）。
+ * 默认值是 `probeContents(loadManifest())`：不传就是「按当前清单探」，单测传死值。
  */
-export function linkModules(pristine, source, platform = process.platform) {
+export function linkModules(pristine, source, platform = process.platform, contents = probeContents()) {
   const target = join(pristine, 'node_modules');
   // 干净检出是 `git worktree add` 刚造出来的：已跟踪文件里没有 `node_modules`（它被 gitignore）。
   // 这里真有东西，只能是调用方自己灌进去的 —— 那种环境不是 CI 的形态，复跑结果不能拿来
@@ -88,11 +95,14 @@ export function linkModules(pristine, source, platform = process.platform) {
   if (existsSync(target)) {
     return { linked: false, reason: '干净检出里本来不该有 node_modules（被 gitignore），却出现了' };
   }
-  // 只判 source 目录存在是不够的：目录可能在、内容却是空（2026-11-02 实测 `npm ci` 装到
-  // 一半中断就留下这种状态）。链接过去得到的是「目录在、内容空」的干净检出，
-  // 前端门禁会以 `Cannot find package 'postcss'` 崩掉——那不是代码问题，是环境问题。
-  if (!existsSync(join(source, 'postcss'))) {
-    return { linked: false, reason: '调用方的 node_modules 里没有 postcss（依赖没装齐）' };
+  if (contents.length === 0) {
+    // 清单里一条 `node node_modules/…` 门禁都没有时，没有可判的依据。说不出来就别说，
+    // 但也不能假装验过 —— 照跑一个「不知道装没装齐」的环境，绿了同样说明不了问题。
+    return { linked: false, reason: '推不出任何要探的包内文件（清单里没有 node 跑 node_modules 的门禁）' };
+  }
+  const missing = contents.filter((rel) => !existsSync(join(source, rel)));
+  if (missing.length > 0) {
+    return { linked: false, reason: `调用方的 node_modules 里找不到 ${missing.join('、')}（依赖没装齐）` };
   }
   try {
     if (platform === 'win32') symlinkSync(source, target, 'junction');
@@ -101,6 +111,20 @@ export function linkModules(pristine, source, platform = process.platform) {
   } catch (error) {
     return { linked: false, reason: `链接失败：${error.message}` };
   }
+}
+
+/**
+ * 清单里每条「node 跑包内入口」的门禁各贡献一个必须是**文件**的路径。
+ *
+ * 与 `run-gates.mjs` 的 `missingTools` 同口径：那边查的是这些文件在不在，缺了就判红；
+ * 这边查的是它们在不在**调用方**的 `node_modules` 里，缺了就别把干净检出接上去。
+ * 两处看同一批证据（同一个 `toolFiles`），不会出现「runner 认为配齐了、parity 认为没配齐」。
+ */
+export function probeContents(manifest = loadManifest()) {
+  const files = (manifest.ci ?? []).flatMap((row) =>
+    toolFiles(row.cmd ?? []).map(({ file }) => file),
+  );
+  return [...new Set(files)].sort();
 }
 
 /**

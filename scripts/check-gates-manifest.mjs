@@ -147,9 +147,13 @@ export function diffManifest({ diskCheckScripts, manifest, agentsSection, ciShar
 /**
  * import / require 的说明符 -> 包名。跳过 `node:` 内置与相对路径。
  *
- * 一段源码里能加载一个包的写法只有这几种，漏掉任何一种都会让「缺依赖时没人撞上」
- * 从后门溜过去：`import x from 'p'`、`export … from 'p'`、副作用 `import 'p'`、
- * 动态 `await import('p')`、`require('p')`。
+ * 一段源码里能加载一个包的写法只有这几种：`import x from 'p'`、`export … from 'p'`、
+ * 副作用 `import 'p'`、动态 `await import('p')`、`require('p')`。
+ *
+ * **只认字面量说明符**。拼接出来的（`import('post' + 'css')`）和模板里的
+ * （`` import(`${x}`) ``）一律看不见——本函数是正则而不是解析器，静态判不出结果。
+ * 所以 `depProblems` 承诺的是「字面量说明符的外部依赖被人加载」，不是「所有外部依赖」；
+ * 把本文件改成正则再加分支救不了这一类，要救得换成真正的 AST 扫描。
  */
 const SPECIFIER_PATTERNS = [
   /\bfrom\s+['"]([^'"]+)['"]/g, // import … from 'p' / export … from 'p'
@@ -184,12 +188,16 @@ export function externalImports(source) {
  * 这正是我们想要的 fail-closed。在本地有 node_modules 时看不出任何问题。
  *
  * 问题是 `check-pr-parity.mjs` 的干净检出可能落在「`node_modules` 在、内容空」的状态：
- * `linkModules` 只判目录存在，而 runner 的 `missingTools` 只查**单个文件**在不在。
- * 两者都绿，真正缺的是包内容。此时若清单里恰好没有会 import 这两个包的脚本，
+ * `linkModules` 与 runner 的 `missingTools` 都只看**入口文件**在不在，看不见包内容。
+ * 两者都可能绿，真正缺的是包内容。此时若清单里恰好没有会 import 这两个包的脚本，
  * parity 会报 PASS —— 它验的是一个产品里根本不存在的东西（issue #24 排查记录）。
+ * 注意 2026-11-02 起 `linkModules` 已改成按同一批入口文件探（见 `probeContents`），
+ * 所以「环境坏到只剩空目录」现在会在 parity 入口判退出 2；本约束防的是另一半：
+ * 环境**看起来**配齐了，而清单让某个包压根不在任何一条 ci 门禁的加载路径上。
  *
  * 这条约束不预先知道缺哪个包，也不再追求「缺依赖时一定有门禁先撞上」那种强承诺 ——
  * 它保证的是：**凡是被加载的 `check-*.mjs` 用到的外部包，都在某个 `ci` 门禁的加载路径上**。
+ * 范围限定在 `externalImports` 认得的那几种写法（字面量说明符），原因见该函数注释。
  * 它管不到的是 `ci` 门禁本身在缺依赖时怎么失败：`node scripts/x.mjs` 撞
  * `ERR_MODULE_NOT_FOUND`（退出 1，门禁红，是对的），但经 `vitest` 加载的用例会在
  * 模块图里缺包时红成什么样，取决于 vitest 自己的加载顺序，不在本约束的推理范围里。

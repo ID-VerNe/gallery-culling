@@ -21,7 +21,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { removeWorktree, unlinkModules } from './check-pr-parity.mjs';
+import { linkModules, probeContents, removeWorktree, unlinkModules } from './check-pr-parity.mjs';
 
 describe('removeWorktree —— 先摘链接，再删目录', () => {
   it('调用顺序是 unlink → remove → prune', () => {
@@ -96,6 +96,85 @@ describe('unlinkModules —— 只摘重解析点，不碰目标内容', () => {
     const root = scratch();
     try {
       expect(() => unlinkModules(root)).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('probeContents —— 探针跟清单走，不写死包名', () => {
+  it('每条「node 跑 node_modules 入口」的门禁各贡献一个路径，去重且排序', () => {
+    expect(
+      probeContents({
+        ci: [
+          { cmd: ['node', 'node_modules/typescript/bin/tsc', '--noEmit'] },
+          { cmd: ['node', 'node_modules/typescript/bin/tsc', '--noEmit'] },
+          { cmd: ['node', 'node_modules/vitest/vitest.mjs', 'run'] },
+          { cmd: ['node', 'scripts/check-theme-alpha.mjs'] },
+          { cmd: ['cargo', 'test', '--lib'] },
+        ],
+      }),
+    ).toEqual(['node_modules/typescript/bin/tsc', 'node_modules/vitest/vitest.mjs']);
+  });
+});
+
+describe('linkModules —— 依赖没装齐时不接进去', () => {
+  const setup = () => {
+    const root = mkdtempSync(join(tmpdir(), 'gallery-link-'));
+    const source = join(root, 'source');
+    const pristine = join(root, 'pristine');
+    mkdirSync(source);
+    mkdirSync(pristine);
+    return { root, source, pristine };
+  };
+
+  it('探针文件都在 → 链接成功（Windows 上走 junction）', () => {
+    const { root, source, pristine } = setup();
+    try {
+      mkdirSync(join(source, 'real'), { recursive: true });
+      writeFileSync(join(source, 'real', 'entry.mjs'), '');
+      const link = linkModules(pristine, source, 'win32', ['real/entry.mjs']);
+      expect(link).toEqual({ linked: true, reason: null });
+      expect(lstatSync(join(pristine, 'node_modules')).isSymbolicLink()).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('探针文件缺一个就判没装齐，并把缺的那个点名', () => {
+    // 这条锁的是**按清单探**而不是写死一个包名：写死 postcss 时，
+    // 换掉清单里的 tsc 入口这条用例照样绿，而真实缺的是 tsc。
+    const { root, source, pristine } = setup();
+    try {
+      mkdirSync(join(source, 'real'), { recursive: true });
+      writeFileSync(join(source, 'real', 'entry.mjs'), '');
+      const link = linkModules(pristine, source, 'win32', ['real/entry.mjs', 'gone/tsc']);
+      expect(link.linked).toBe(false);
+      expect(link.reason).toContain('gone/tsc');
+      expect(existsSync(join(pristine, 'node_modules'))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('推不出任何探针时不假装验过（空清单也是 fail-closed）', () => {
+    const { root, source, pristine } = setup();
+    try {
+      const link = linkModules(pristine, source, 'win32', []);
+      expect(link.linked).toBe(false);
+      expect(link.reason).toContain('推不出');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('干净检出里已经躺着 node_modules 时不接（那已经不是 CI 的形态）', () => {
+    const { root, source, pristine } = setup();
+    try {
+      mkdirSync(join(pristine, 'node_modules'));
+      const link = linkModules(pristine, source, 'win32', ['whatever']);
+      expect(link.linked).toBe(false);
+      expect(link.reason).toContain('gitignore');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -50,6 +50,13 @@ describe('externalImports', () => {
     expect(externalImports("await import('./local.mjs');\nawait import('node:fs');")).toEqual([]);
   });
 
+  it('拼接 / 模板说明符看不见 —— 这是已知边界，不是承诺的一部分', () => {
+    // 本函数是正则不是解析器：静态判不出结果说明符。写成用例是为了让以后想
+    // 「顺手扩一下」的人先看到这条边界，别以为扩正则就能救。
+    expect(externalImports("await import('post' + 'css');")).toEqual([]);
+    expect(externalImports('await import(`postcss`);')).toEqual([]);
+  });
+
   it('标识符里的 import 字样不算（importments / reimport）', () => {
     expect(externalImports("const reimported = 1;\nfoo.import('postcss');")).toEqual([]);
   });
@@ -89,13 +96,23 @@ describe('depProblems —— 每个 check-*.mjs 的外部依赖都要有人加�
     expect(problems[0]).toContain('check-a.mjs');
   });
 
-  it('只登记在 support 档不算加载（那两档不在 parity 复跑范围）', () => {
+  it('只登记在 support 档不算加载（support 不在 parity 复跑范围）', () => {
     const withSupportOnly = {
       ci: [],
       support: [{ name: 'check-a.mjs' }],
     };
     expect(
       depProblems([{ name: 'check-a.mjs', source: "import postcss from 'postcss';" }], withSupportOnly),
+    ).toHaveLength(1);
+  });
+
+  it('manual 档同样不算加载（手动门禁 CI 与 parity 都不跑）', () => {
+    const withManualOnly = {
+      ci: [],
+      manual: [{ name: 'check-a.mjs' }],
+    };
+    expect(
+      depProblems([{ name: 'check-a.mjs', source: "import postcss from 'postcss';" }], withManualOnly),
     ).toHaveLength(1);
   });
 

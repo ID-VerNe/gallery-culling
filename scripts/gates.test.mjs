@@ -26,7 +26,7 @@ import {
   ROOT,
 } from './check-gates-manifest.mjs';
 import { countFmtDiffs, judgeFmt } from './check-fmt-baseline.mjs';
-import { loadManifest, missingTools, shardNames, shardRows, toolFiles } from './run-gates.mjs';
+import { loadManifest, missingTools, runOne, shardNames, shardRows, toolFiles } from './run-gates.mjs';
 import {
   APPROVED_AT,
   changedFiles,
@@ -190,9 +190,19 @@ describe('run-gates 清单读取', () => {
     // 装一个**同名但无关**的包（`tsc@2.0.4`），它打印「This is not the tsc
     // command you are looking for」后 **exit 0** —— 类型检查一行没跑，门禁却报绿。
     // npx 会把调用方的解析结果当成可协商项，门禁的输入必须是本地 pin 死的。
+    //
+    // 光看 argv[0] 不够：`node ./node_modules/.bin/tsc` 既不是 npx 也不是 npm，
+    // 却复用了同一条「本机 bin 垫片」的解析规则。垫片缺席时 node 把这个无扩展名的
+    // 路径当 CJS 跑，还是那句「这不是你要的 tsc」，还是 exit 0。门禁只许直指
+    // 包内入口，所以这里连路径也一起钉。
     for (const row of manifest.ci) {
       expect(row.cmd[0], `${row.name} 的命令行不该经 npx`).not.toBe('npx');
       expect(row.cmd[0], `${row.name} 的命令行不该经 npm exec`).not.toBe('npm');
+      if (row.cmd[0] === 'node' && row.cmd[1]?.startsWith('node_modules/')) {
+        expect(row.cmd[1], `${row.name} 该直指包内入口，不该走 .bin 垫片`).not.toMatch(
+          /^node_modules[/\\]\.bin[/\\]/,
+        );
+      }
     }
   });
 });
@@ -223,6 +233,36 @@ describe('run-gates 启动前检查工具文件', () => {
 
   it('工具文件在盘上时不判红', () => {
     expect(missingTools(['node', 'node_modules/typescript/bin/tsc'], { exists: () => true })).toEqual([]);
+  });
+
+  it('工具缺席时**不启动子进程**，直接判红', () => {
+    // 这条锁的是接线，不是 missingTools 的返回值：把 runOne 里那段预检查整块
+    // 删掉，上面几个纯函数用例照样全绿，而缺依赖时会退回「拉起进程看它怎么崩」。
+    const spawned = [];
+    const spawn = (...args) => {
+      spawned.push(args);
+      return { status: 0 };
+    };
+    const status = runOne(
+      { name: 'tsc --noEmit', cmd: ['node', 'node_modules/@scope/definitely-absent/bin/x'] },
+      spawn,
+    );
+    expect(status).toBe(1);
+    expect(spawned).toEqual([]);
+  });
+
+  it('工具齐全时照常启动，并把它自己的退出码原样交出去', () => {
+    const spawned = [];
+    const spawn = (command, args) => {
+      spawned.push([command, args]);
+      return { status: 7 };
+    };
+    const status = runOne(
+      { name: 'tsc --noEmit', cmd: ['node', 'node_modules/typescript/bin/tsc', '--noEmit'] },
+      spawn,
+    );
+    expect(status).toBe(7);
+    expect(spawned).toEqual([['node', ['node_modules/typescript/bin/tsc', '--noEmit']]]);
   });
 });
 
@@ -603,6 +643,9 @@ describe('check-pr-parity', () => {
   // 于是把空目录链接进干净检出，前端门禁以 `Cannot find package 'postcss'` 崩掉，
   // 推送被拦在「parity 未通过」——红的是环境，看起来像代码。
   describe('linkModules —— 调用方没装齐依赖时不许假装装好了', () => {
+    // 探针文件写死成 `entry.mjs`，不复用真实清单：这条用例测的是「按探针判」，
+    // 用完「清单里探什么」由 check-pr-parity.test.mjs 的 probeContents 那组负责。
+    const PROBE = ['entry.mjs'];
     const withDirs = (dirs) => {
       const scratch = mkdtempSync(join(tmpdir(), 'link-modules-'));
       const pristine = join(scratch, 'pristine');
@@ -613,34 +656,35 @@ describe('check-pr-parity', () => {
       return { scratch, pristine, source };
     };
 
-    it('调用方是空目录 → 不链接，理由说得清', () => {
+    it('探针文件一个都没有（空目录）→ 不链接，并点名缺的那个', () => {
       const { scratch, pristine, source } = withDirs([]);
       try {
-        const result = linkModules(pristine, source, 'linux');
+        const result = linkModules(pristine, source, 'linux', PROBE);
         expect(result.linked).toBe(false);
-        expect(result.reason).toContain('postcss');
+        expect(result.reason).toContain('entry.mjs');
         expect(existsSync(join(pristine, 'node_modules'))).toBe(false);
       } finally {
         rmSync(scratch, { recursive: true, force: true });
       }
     });
 
-    it('调用方装了依赖 → 链接成功，干净检出里能看见包', () => {
-      const { scratch, pristine, source } = withDirs(['postcss', 'tailwindcss']);
+    it('探针文件在 → 链接成功，干净检出里能看见包', () => {
+      const { scratch, pristine, source } = withDirs([]);
+      writeFileSync(join(source, 'entry.mjs'), '');
       try {
-        const result = linkModules(pristine, source, 'linux');
+        const result = linkModules(pristine, source, 'linux', PROBE);
         expect(result.linked).toBe(true);
-        expect(existsSync(join(pristine, 'node_modules', 'tailwindcss'))).toBe(true);
+        expect(existsSync(join(pristine, 'node_modules', 'entry.mjs'))).toBe(true);
       } finally {
         rmSync(scratch, { recursive: true, force: true });
       }
     });
 
     it('干净检出里已有 node_modules → 不接链，并说明那不该出现', () => {
-      const { scratch, pristine, source } = withDirs(['postcss']);
+      const { scratch, pristine, source } = withDirs([]);
       mkdirSync(join(pristine, 'node_modules'));
       try {
-        const result = linkModules(pristine, source, 'linux');
+        const result = linkModules(pristine, source, 'linux', PROBE);
         expect(result.linked).toBe(false);
         // 干净检出是刚 `git worktree add` 出来的，`node_modules` 被 gitignore，
         // 里面有东西只可能是调用方灌的 —— reason 得让人看出是「环境不对」而不是「依赖没装」。
@@ -665,7 +709,7 @@ describe('check-pr-parity', () => {
       mkdirSync(join(source, 'postcss'));
       writeFileSync(join(source, 'postcss', 'index.js'), 'module.exports = 1;\n');
       try {
-        expect(linkModules(pristine, source).linked).toBe(true);
+        expect(linkModules(pristine, source, 'linux', ['postcss/index.js']).linked).toBe(true);
         unlinkModules(pristine);
         expect(existsSync(join(pristine, 'node_modules'))).toBe(false);
         expect(readFileSync(join(source, 'postcss', 'index.js'), 'utf8')).toBe(
