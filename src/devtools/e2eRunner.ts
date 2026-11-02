@@ -594,12 +594,16 @@ function scaleOf(img: HTMLImageElement): number {
  * 为什么必须用**真实 ARW**：夹具里的 RAW 是「JPEG 字节 + .ARW 后缀」，
  * `photo.export` 解不出图，1:1 永远走不到 —— 那样测出来的「通过」毫无意义。
  *
- * 四段，每段都在验一件 jsdom 测不到的事：
+ * 五段，每段都在验一件 jsdom 测不到的事：
  *   A. 首次 1:1：真耗时（≤10s 的出口标准）、换的是全分辨率图、`scale` 真的是
  *      `naturalWidth / offsetWidth`（jsdom 不布局，只能给这两个值打桩，
  *      打桩等于假设结论成立）；
  *   B. 再按 Z 回适应窗口；
- *   C. 切走再切回 → 重新请求走**缓存命中**（≤2s，而不是再等 6–8s）；
+ *   C1. **离开 1:1 之后按 Z 必须重新进 1:1**（issue #18 · PB-10）：滚轮是真
+ *      窗口里唯一能把比例推离 1:1 的手势（双击本身就是 Z 同构的开关，拖拽
+ *      在 1:1 时被夹紧、比例不变）。jsdom 里这条只能靠打桩，这里读的是真
+ *      布局出来的 `offsetWidth`；
+ *   C2. 切走再切回 → 重新请求走**缓存命中**（≤2s，而不是再等 6–8s）；
  *   D. 另一张上取消 → 提示消失、仍停在预览；再按 Z 能重新认领那次在飞的结果
  *      （不能静默失效，否则「取消」等于把 Z 键弄坏）。
  */
@@ -700,8 +704,43 @@ async function scenarioDetailOneToOne(
     `[${el()}] >>> 断言D7 回到适应窗口 = ${Math.abs(backScale - 1) < 0.01}（${backScale.toFixed(3)}）`,
   );
 
-  // ── C. 切走再切回 → 缓存命中 ──────────────────────────
-  raw('===== 场景 C：切走再切回（缓存命中）=====');
+  // ── C1. 离开 1:1 → 再按 Z 仍要落回 1:1（PB-10）─────────
+  raw('===== 场景 C1：滚轮离开 1:1 后再按 Z（PB-10）=====');
+  const wheelHost = viewportImg(nameA)?.parentElement;
+  if (wheelHost) {
+    // deltaY<0 即放大一格。1:1 已经是 7.6 倍，再放大就到图片真实像素之外 ——
+    // 比例必须真的变了，这一条才有意义。
+    wheelHost.dispatchEvent(
+      new WheelEvent('wheel', { deltaY: -100, clientX: 400, clientY: 300, bubbles: true }),
+    );
+  }
+  await sleep(600);
+  const afterWheel = viewportImg(nameA);
+  const wheelScale = afterWheel ? scaleOf(afterWheel) : -1;
+  const oneToOneScale = afterWheel ? afterWheel.naturalWidth / afterWheel.offsetWidth : -1;
+  raw(`[${el()}] 滚一格后 scale=${wheelScale.toFixed(3)}（1:1 应为 ${oneToOneScale.toFixed(3)}）`);
+  raw(`[${el()}] >>> 断言C-1 滚轮真的离开了 1:1 = ${Math.abs(wheelScale - oneToOneScale) > 0.5}`);
+
+  pressKey('z');
+  // 缓存已在场景 A 落盘，重新进入是命中路径，不需要再等 6–8s。
+  await waitFor(
+    () => {
+      const img = viewportImg(nameA);
+      return img && /_detail_lumen/.test(img.src) && img.complete ? img : null;
+    },
+    20_000,
+    100,
+  );
+  await sleep(600);
+  const reEntered = viewportImg(nameA);
+  const reScale = reEntered ? scaleOf(reEntered) : -1;
+  const reExpected = reEntered ? reEntered.naturalWidth / reEntered.offsetWidth : -1;
+  raw(`[${el()}] 再按 Z 后 scale=${reScale.toFixed(3)} 期望=${reExpected.toFixed(3)}`);
+  const reEnteredOk = reScale > 1 && Math.abs(reScale - reExpected) < 0.05;
+  raw(`[${el()}] >>> 断言C-2 离开 1:1 后按 Z 重新进 1:1 = ${reEnteredOk}`);
+
+  // ── C2. 切走再切回 → 缓存命中 ─────────────────────────
+  raw('===== 场景 C2：切走再切回（缓存命中）=====');
   pressKey('ArrowRight');
   await sleep(1500);
   pressKey('ArrowLeft');
