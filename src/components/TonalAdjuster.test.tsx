@@ -277,6 +277,39 @@ describe('TonalAdjuster —— LUMEN RAW 预设', () => {
   });
 });
 
+describe('TonalAdjuster —— 间距层级（issue #18 · PA-4）', () => {
+  /**
+   * 「图标-标签」必须 < 「标签-滑轨」,否则间距层级塌陷。
+   * 这里钉的是图标+标签那个 span 的 `gap-1`(原为 `gap-1.5`),
+   * 以及外层滑杆容器仍保持 `gap-4`(不动)。
+   *
+   * 选第一条滑杆(曝光)做样本:六个滑杆共用同一渲染分支,一条代表全部,
+   * 既不重复断言也避免把列表顺序锁死。
+   */
+  it('图标+标签容器用 gap-1（不再是 gap-1.5）', () => {
+    const { view } = renderAdjuster();
+    const container = view.container;
+    // 第一个 .flex.flex-col.gap-1.5 是「单条滑杆外层」(PA-4 不动),
+    // 其下第一个 .flex.items-center.gap-1 才是图标+标签那一段。
+    const sliders = container.querySelectorAll('.flex.flex-col.gap-1\\.5');
+    expect(sliders.length).toBeGreaterThan(0);
+    const firstSlider = sliders[0];
+    const iconLabelSpan = firstSlider.querySelector('.flex.items-center.min-w-0') as HTMLElement | null;
+    expect(iconLabelSpan).not.toBeNull();
+    expect(iconLabelSpan!.className).toContain('gap-1');
+    expect(iconLabelSpan!.className).not.toContain('gap-1.5');
+  });
+
+  it('外层滑杆容器仍保持 gap-4（不动）', () => {
+    const { view } = renderAdjuster();
+    const container = view.container;
+    // .flex.flex-col.gap-4 在 TonalAdjuster 里有两处(面板 root 与 Sliders Container),
+    // 这里只确认「至少一处」仍在,不动外层结构。
+    const gap4Containers = container.querySelectorAll('.flex.flex-col.gap-4');
+    expect(gap4Containers.length).toBeGreaterThan(0);
+  });
+});
+
 describe('TonalAdjuster —— 滑杆与工具按钮', () => {
   it('六个滑杆都在，包括 tint（类型里有、computeAutoTone 会产出）', () => {
     renderAdjuster();
