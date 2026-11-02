@@ -17,7 +17,7 @@ import {
   ROOT,
 } from './check-gates-manifest.mjs';
 import { countFmtDiffs, judgeFmt } from './check-fmt-baseline.mjs';
-import { loadManifest, shardNames, shardRows } from './run-gates.mjs';
+import { loadManifest, missingTools, shardNames, shardRows, toolFiles } from './run-gates.mjs';
 import {
   APPROVED_AT,
   changedFiles,
@@ -168,6 +168,46 @@ describe('run-gates 清单读取', () => {
 
   it('分片外的门禁不存在', () => {
     expect(shardRows(manifest, 'nope')).toEqual([]);
+  });
+
+  it('门禁命令行不经 npx / npm exec', () => {
+    // issue #24：`npx tsc --noEmit` 在 `node_modules/.bin` 缺席时会去 registry
+    // 装一个**同名但无关**的包（`tsc@2.0.4`），它打印「This is not the tsc
+    // command you are looking for」后 **exit 0** —— 类型检查一行没跑，门禁却报绿。
+    // npx 会把调用方的解析结果当成可协商项，门禁的输入必须是本地 pin 死的。
+    for (const row of manifest.ci) {
+      expect(row.cmd[0], `${row.name} 的命令行不该经 npx`).not.toBe('npx');
+      expect(row.cmd[0], `${row.name} 的命令行不该经 npm exec`).not.toBe('npm');
+    }
+  });
+});
+
+describe('run-gates 启动前检查工具文件', () => {
+  it('从 node 命令行里认出本地工具文件', () => {
+    expect(toolFiles(['node', 'node_modules/typescript/bin/tsc', '--noEmit'])).toEqual([
+      { command: 'node', file: 'node_modules/typescript/bin/tsc' },
+    ]);
+    expect(toolFiles(['node', 'node_modules/vitest/vitest.mjs', 'run'])).toEqual([
+      { command: 'node', file: 'node_modules/vitest/vitest.mjs' },
+    ]);
+  });
+
+  it('脚本与系统命令不算工具文件', () => {
+    expect(toolFiles(['node', 'scripts/run-gates.mjs'])).toEqual([]);
+    expect(toolFiles(['cargo', 'test', '--lib'])).toEqual([]);
+    expect(toolFiles(['node', '-e', 'console.log(1)'])).toEqual([]);
+    expect(toolFiles([])).toEqual([]);
+  });
+
+  it('工具文件缺席时判红并说明为什么不能靠命令自己报错', () => {
+    const missing = missingTools(['node', 'node_modules/typescript/bin/tsc'], { exists: () => false });
+    expect(missing).toHaveLength(1);
+    expect(missing[0]).toContain('node_modules/typescript/bin/tsc');
+    expect(missing[0]).toContain('npm ci');
+  });
+
+  it('工具文件在盘上时不判红', () => {
+    expect(missingTools(['node', 'node_modules/typescript/bin/tsc'], { exists: () => true })).toEqual([]);
   });
 });
 
