@@ -92,6 +92,24 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/**
+ * 等防抖定时器（600ms）真的把刷新发出去。
+ *
+ * 每个聚焦用例都要先过这一关：`waitFor` 默认的 1s / 50ms 只够跑 20 次轮询，
+ * 而 600ms 定时器在机器被其它测试占满时完全可能晚到 —— 2026-11-02 实测过一次
+ * 失败（`invokeCount` 0 ≠ 1），当时同时跑 957 条、`App.session` 等集成用例各占
+ * 数秒 CPU。这是**等待窗口太窄**，不是行为错了：同一条单跑 4 次全绿，全量
+ * 复跑 6 次也全绿。
+ *
+ * 判据不变（调用次数恰好为 1），只是把 waitFor 的超时放宽到一条集成用例能
+ * 容忍的量级。改窄回来会把这条用例变回偶发红。
+ */
+async function expectOneRefresh() {
+  await waitFor(() => expect(invokeCount('refresh_from_xmp_cmd')).toBe(1), {
+    timeout: 5000,
+  });
+}
+
 describe('FR-08 —— 聚焦增量读取', () => {
   it('切回窗口：只把变化的那张读回来，界面跟着磁盘走', async () => {
     mockStartup();
@@ -113,7 +131,7 @@ describe('FR-08 —— 聚焦增量读取', () => {
 
     await windowFocus();
 
-    await waitFor(() => expect(invokeCount('refresh_from_xmp_cmd')).toBe(1));
+    await expectOneRefresh();
     // 请求里的目标就是分组主路径（RAW 优先，这里只有 JPG）
     expect(invokeCalls('refresh_from_xmp_cmd')[0].args?.targets).toEqual([
       { path: 'D:/shoot/JPG/IMG_0001.jpg', jpgPath: 'D:/shoot/JPG/IMG_0001.jpg' },
@@ -138,7 +156,7 @@ describe('FR-08 —— 聚焦增量读取', () => {
     });
 
     await windowFocus();
-    await waitFor(() => expect(invokeCount('refresh_from_xmp_cmd')).toBe(1));
+    await expectOneRefresh();
 
     expect(screen.queryByText(/已从 XMP 更新/)).not.toBeInTheDocument();
     expect(screen.queryByText(/有冲突待处理/)).not.toBeInTheDocument();
@@ -258,7 +276,7 @@ describe('FR-08 —— 手动入口', () => {
     await scanOne();
 
     fireEvent.click(screen.getByRole('button', { name: '从 XMP 重新读取' }));
-    await waitFor(() => expect(invokeCount('refresh_from_xmp_cmd')).toBe(1));
+    await expectOneRefresh();
   });
 
   it('扫描进行中点击：当场说明被谁挡住（不是静默无反应）', async () => {

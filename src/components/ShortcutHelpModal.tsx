@@ -146,7 +146,7 @@ export const ShortcutHelpModal: React.FC<ShortcutHelpModalProps> = ({
           onChange={(e) => setQuery(e.target.value)}
           placeholder="搜索快捷键，例如「星级」「对比」「撤销」"
           aria-label="搜索快捷键"
-          className="focus-ring w-full px-3 py-2 rounded-md bg-background-base border border-default text-white text-xs outline-none placeholder:text-white/40"
+          className="focus-ring w-full px-3 py-2 rounded-md bg-background-base border border-border-default text-white text-xs outline-none placeholder:text-white/40"
         />
         <p className="mt-1.5 text-[10px] text-white/50" role="status" aria-live="polite">
           {query.trim()

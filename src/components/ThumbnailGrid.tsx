@@ -224,9 +224,9 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
     virtualRows.some((v) => v.index === selectedRowIndex);
 
   return (
-    <div className="h-full w-full flex flex-col bg-background-base border-l border-default select-none">
+    <div className="h-full w-full flex flex-col bg-background-base border-l border-border-default select-none">
       {/* Top Header & Column Switcher */}
-      <div className="px-2.5 py-1 bg-background-base border-b border-default flex items-center justify-between text-xs text-white/80 shrink-0 gap-2 min-h-9">
+      <div className="px-2.5 py-1 bg-background-base border-b border-border-default flex items-center justify-between text-xs text-white/80 shrink-0 gap-2 min-h-9">
         {/* B8：命中数是"状态"，加 role=status/aria-live 让读屏在搜索收窄时播报。 */}
         <span
           role="status"
@@ -264,7 +264,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
             </button>
           )}
 
-          <div className="flex items-center bg-background-base p-0.5 rounded-lg border border-default">
+          <div className="flex items-center bg-background-base p-0.5 rounded-lg border border-border-default">
             <button
               onClick={() => setColumns(3)}
               className={`focus-ring flex items-center gap-1 px-2 min-h-7 rounded text-[10px] transition-colors ${
@@ -299,7 +299,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
 
       {/* Search field — only present while open, so the grid keeps its width */}
       {searchOpen && (
-        <div className="px-2 py-1.5 border-b border-default bg-background-base shrink-0">
+        <div className="px-2 py-1.5 border-b border-border-default bg-background-base shrink-0">
           <div className="flex items-center gap-1.5 bg-background-surface-hover rounded-md px-2 py-1 focus-within:bg-white/10 transition-colors">
             <Search className="w-3 h-3 text-white/40 shrink-0" aria-hidden="true" />
             <input
@@ -372,7 +372,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
         <div
           role="note"
           aria-label="角标图例：R 表示 RAW 原片，X 表示已有 XMP 侧边栏，T 表示已调色，E 表示有精修成果"
-          className="px-2.5 py-1 border-b border-default flex items-center gap-2 text-[9px] text-white/60 shrink-0 flex-wrap"
+          className="px-2.5 py-1 border-b border-border-default flex items-center gap-2 text-[9px] text-white/60 shrink-0 flex-wrap"
         >
           <span className="flex items-center gap-0.5">
             <span className="font-medium text-white">R</span>RAW
@@ -512,7 +512,7 @@ const EmptyGridState: React.FC<{
   onResetFilter?: () => void;
 }> = ({ isSearchFiltering, onClearSearch, onResetFilter }) => (
   <div role="status" aria-live="polite" className="flex-1 flex flex-col items-center justify-center text-center px-6 py-10 gap-3">
-    <div className="w-12 h-12 rounded-xl bg-background-surface-hover border border-default flex items-center justify-center">
+    <div className="w-12 h-12 rounded-xl bg-background-surface-hover border border-border-default flex items-center justify-center">
       <Images className="w-6 h-6 text-white/50" aria-hidden="true" />
     </div>
     <div>
@@ -705,7 +705,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
       ? 'border-emerald-500/40'
       : group.flag === 'reject'
       ? 'border-rose-500/40'
-      : 'border-default';
+      : 'border-border-default';
 
   // One sentence that tells a screen-reader user everything the cell shows.
   const description = [
@@ -833,7 +833,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
 
         {/* Bottom-Right Rating */}
         {group.rating > 0 && (
-          <div className="absolute bottom-1 right-1 bg-background-base/85 backdrop-blur px-1 py-[2px] rounded flex items-center text-[10px] text-amber-300 font-medium gap-0.5 tabular-nums border border-default">
+          <div className="absolute bottom-1 right-1 bg-background-base/85 backdrop-blur px-1 py-[2px] rounded flex items-center text-[10px] text-amber-300 font-medium gap-0.5 tabular-nums border border-border-default">
             <Star
               className="w-2.5 h-2.5 fill-amber-400 text-amber-400"
               aria-hidden="true"
@@ -856,7 +856,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
       </div>
 
       {/* Bottom Minimal File Stem & Badges */}
-      <div className="px-1.5 py-1 bg-background-base border-t border-default flex items-center justify-between text-[10px] font-mono shrink-0 gap-1">
+      <div className="px-1.5 py-1 bg-background-base border-t border-border-default flex items-center justify-between text-[10px] font-mono shrink-0 gap-1">
         <span
           className="text-white/80 truncate min-w-0"
           title={group.baseName}

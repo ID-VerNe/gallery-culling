@@ -40,7 +40,7 @@ export const LumenGateNotice: React.FC<LumenGateNoticeProps> = ({
     return (
       <div
         role="status"
-        className="p-2.5 bg-background-base border border-default rounded flex items-center gap-2 text-white/60"
+        className="p-2.5 bg-background-base border border-border-default rounded flex items-center gap-2 text-white/60"
       >
         <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" aria-hidden="true" />
         <span>正在检测 LUMEN RAW 引擎…</span>

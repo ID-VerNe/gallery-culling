@@ -39,7 +39,7 @@ export const WatermarkOptions: React.FC<WatermarkOptionsProps> = ({
   const hintId = useId();
 
   return (
-    <details className="rounded border border-default bg-background-base">
+    <details className="rounded border border-border-default bg-background-base">
       <summary className="focus-ring flex items-center gap-2 cursor-pointer select-none rounded px-2.5 py-1.5 text-white/80 font-medium hover:bg-background-surface-hover transition-colors">
         <span>底边水印</span>
         <span className="text-white/40 text-[11px] font-normal">（可选）</span>

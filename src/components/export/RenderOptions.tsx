@@ -67,7 +67,7 @@ export const RenderOptions: React.FC<RenderOptionsProps> = ({
   return (
     <fieldset>
       <legend className="text-white/80 font-medium mb-1.5">成片设置</legend>
-      <div className="flex flex-col gap-2.5 bg-background-base p-2.5 rounded border border-default">
+      <div className="flex flex-col gap-2.5 bg-background-base p-2.5 rounded border border-border-default">
         {/* 格式：三种足够覆盖摄影出片，PNG 不进入 UI */}
         <div className="flex flex-col gap-1.5">
           <span className="text-white/70 text-[11px]">输出格式</span>

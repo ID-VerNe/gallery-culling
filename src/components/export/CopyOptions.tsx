@@ -23,7 +23,7 @@ export const CopyOptions: React.FC<CopyOptionsProps> = ({
 }) => (
   <fieldset>
     <legend className="text-white/80 font-medium mb-1.5">包含文件类型</legend>
-    <div className="flex flex-col sm:flex-row sm:items-center gap-3 bg-background-base p-2.5 rounded border border-default">
+    <div className="flex flex-col sm:flex-row sm:items-center gap-3 bg-background-base p-2.5 rounded border border-border-default">
       <label
         htmlFor="export-include-raw"
         className="focus-ring flex items-center gap-2 cursor-pointer rounded p-1 hover:bg-background-surface-hover transition-colors"

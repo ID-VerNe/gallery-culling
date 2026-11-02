@@ -273,7 +273,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
       {/* 3. 导出范围 */}
       <fieldset>
         <legend className="text-white/80 font-medium mb-1.5">导出范围</legend>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-background-base p-2.5 rounded border border-default">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-background-base p-2.5 rounded border border-border-default">
           {EXPORT_FILTERS.map((filter) => (
             <label
               key={filter.value}
@@ -366,7 +366,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
         current={run.progress?.current}
         onCancel={run.cancel}
         cancelRequested={run.cancelRequested}
-        className="bg-background-base border border-default rounded p-2.5"
+        className="bg-background-base border border-border-default rounded p-2.5"
       />
 
       {/* 7. 结果：成功走绿色 status，部分失败走琥珀色 alert（必须立即知晓） */}
