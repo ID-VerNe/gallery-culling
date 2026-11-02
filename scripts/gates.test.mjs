@@ -7,7 +7,8 @@
  * 最后一组直接拿仓库现状跑一遍：门禁清单漂移应该在本机就被发现，而不是等 CI。
  */
 import { describe, expect, it } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   diffManifest,
@@ -31,7 +32,7 @@ import {
   reviewOrderProblem,
   reviewRecord,
 } from './check-gate-change-review.mjs';
-import { missingInputs, resolveRef, shardProblem } from './check-pr-parity.mjs';
+import { linkModules, missingInputs, resolveRef, shardProblem } from './check-pr-parity.mjs';
 
 const manifest = loadManifest();
 const agents = readFileSync(join(ROOT, 'AGENTS.md'), 'utf8');
@@ -581,6 +582,57 @@ describe('check-pr-parity', () => {
   it('ref 解析：HEAD 可用，垃圾 ref 返回 null（而不是抛错）', () => {
     expect(resolveRef('HEAD')).toMatch(/^[0-9a-f]{40}$/);
     expect(resolveRef('definitely-not-a-ref-xyz')).toBeNull();
+  });
+
+  // linkModules 是「干净检出里有没有依赖」的唯一判据。2026-11-02 实测：worktree 的
+  // `node_modules/` **目录在、内容空**（`npm ci` 中断留下的），旧实现只判目录存在，
+  // 于是把空目录链接进干净检出，前端门禁以 `Cannot find package 'postcss'` 崩掉，
+  // 推送被拦在「parity 未通过」——红的是环境，看起来像代码。
+  describe('linkModules —— 调用方没装齐依赖时不许假装装好了', () => {
+    const withDirs = (dirs) => {
+      const scratch = mkdtempSync(join(tmpdir(), 'link-modules-'));
+      const pristine = join(scratch, 'pristine');
+      const source = join(scratch, 'source-modules');
+      mkdirSync(pristine);
+      mkdirSync(source);
+      for (const name of dirs) mkdirSync(join(source, name));
+      return { scratch, pristine, source };
+    };
+
+    it('调用方是空目录 → 不链接，理由说得清', () => {
+      const { scratch, pristine, source } = withDirs([]);
+      try {
+        const result = linkModules(pristine, source, 'linux');
+        expect(result.linked).toBe(false);
+        expect(result.reason).toContain('postcss');
+        expect(existsSync(join(pristine, 'node_modules'))).toBe(false);
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    });
+
+    it('调用方装了依赖 → 链接成功，干净检出里能看见包', () => {
+      const { scratch, pristine, source } = withDirs(['postcss', 'tailwindcss']);
+      try {
+        const result = linkModules(pristine, source, 'linux');
+        expect(result.linked).toBe(true);
+        expect(existsSync(join(pristine, 'node_modules', 'tailwindcss'))).toBe(true);
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    });
+
+    it('干净检出里已有 node_modules → 不动它', () => {
+      const { scratch, pristine, source } = withDirs(['postcss']);
+      mkdirSync(join(pristine, 'node_modules'));
+      try {
+        const result = linkModules(pristine, source, 'linux');
+        expect(result.linked).toBe(false);
+        expect(result.reason).toContain('已经有');
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    });
   });
 });
 

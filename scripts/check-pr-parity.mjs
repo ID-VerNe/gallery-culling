@@ -9,8 +9,9 @@
  * 干净检出**里：
  *
  *  1. `git worktree add --detach <临时目录>/pristine <sha>`：只有该 sha 的已跟踪文件；
- *  2. 注入 `node_modules`（优先复用调用方的，省一次 `npm ci`）——它是**同一份 lockfile
- *     的产物**，不携带工作区未提交的源码，不影响等价性；
+ *  2. 注入 `node_modules`（链接调用方的那一份，省一次 `npm ci`）——它是**同一份 lockfile
+ *     的产物**，不携带工作区未提交的源码，不影响等价性；链接不成（调用方没装齐依赖）
+ *     直接判环境问题退出 2，**不**降级成「没有依赖照样跑」，否则红的是环境不是代码；
  *  3. `src-tauri/binaries/` **不注入**：这正是 CI 与本地最容易分叉的地方（本地有全量
  *     sidecar，CI 只有占位文件），若被运行的用例真的依赖它，就应该在这里红出来；
  *  4. 用**该 sha 自己那份** `scripts/run-gates.mjs` + `gates.json` 执行（清单是被跑对象
@@ -66,18 +67,26 @@ export function missingInputs(pristine, { exists = existsSync } = {}) {
  *
  * Windows 上目录联接（junction）不需要管理员权限，`symlinkSync` 默认会要求开发者模式；
  * 所以优先 junction（`type: 'junction'` 在 win32 上就是 reparse point），其余平台普通软链。
- * 链接失败不算致命：门禁会自己因为缺依赖而红，那时输出里能看出是环境问题。
+ *
+ * 链接失败**是环境问题**，不是「门禁会自己红」：干净检出里没有依赖时，红的是门禁本身
+ * （缺陷）而不是被检查的代码，读者会把环境问题当成代码问题。调用方据此判退出码 2。
+ * 返回 `{ linked, reason }`；`linked: false` 时 `reason` 是给人看的一句话。
  */
 export function linkModules(pristine, source, platform = process.platform) {
   const target = join(pristine, 'node_modules');
-  if (existsSync(target)) return { linked: false, reason: '已存在' };
-  if (!existsSync(source)) return { linked: false, reason: '调用方没有 node_modules' };
+  if (existsSync(target)) return { linked: false, reason: '干净检出里已经有 node_modules' };
+  // 只判 source 目录存在是不够的：目录可能在、内容却是空（2026-11-02 实测 `npm ci` 装到
+  // 一半中断就留下这种状态）。链接过去得到的是「目录在、内容空」的干净检出，
+  // 前端门禁会以 `Cannot find package 'postcss'` 崩掉——那不是代码问题，是环境问题。
+  if (!existsSync(join(source, 'postcss'))) {
+    return { linked: false, reason: '调用方的 node_modules 里没有 postcss（依赖没装齐）' };
+  }
   try {
     if (platform === 'win32') symlinkSync(source, target, 'junction');
     else symlinkSync(source, target, 'dir');
     return { linked: true, reason: null };
   } catch (error) {
-    return { linked: false, reason: error.message };
+    return { linked: false, reason: `链接失败：${error.message}` };
   }
 }
 
@@ -136,10 +145,17 @@ export function main(argv, env = process.env) {
 
     const link = linkModules(pristine, join(ROOT, 'node_modules'));
     console.log(`parity: ref ${sha.slice(0, 7)} → ${pristine}`);
+    if (!link.linked) {
+      // 没有依赖就跑门禁，红的是「干净检出缺环境」而不是被检查的代码。pre-push 会把
+      // 这个当成「本地环境问题」而不是「这个 sha 有问题」，两者修法完全不同。
+      console.error(
+        `FAIL: 干净检出里装不了 node_modules（${link.reason}），没有完成 CI 等价复跑——这不是绿。\n` +
+          '  修法：在当前工作区 `npm ci`（同一份 lockfile），或 SKIP_PARITY=1 git push（会留痕）。',
+      );
+      return 2;
+    }
     console.log(
-      link.linked
-        ? 'parity: node_modules 已从调用方链接（同一份 lockfile 的产物；src-tauri/binaries 不注入，与 CI 同形）'
-        : `parity: 未链接 node_modules（${link.reason}）——前端门禁可能因缺依赖而红，先看输出再归因`,
+      'parity: node_modules 已从调用方链接（同一份 lockfile 的产物；src-tauri/binaries 不注入，与 CI 同形）',
     );
 
     const command = ['ci', ...(shard ? ['--shard', shard] : [])];
@@ -148,6 +164,10 @@ export function main(argv, env = process.env) {
       stdio: 'inherit',
       env,
     });
+    if (result.error) {
+      console.error(`FAIL: 起不了 gates 执行器（${result.error.message}）`);
+      return 2;
+    }
     const status = result.status ?? 2;
     if (status === 0) {
       console.log(`PASS: parity 通过（${shard ? `分片 ${shard}` : '全部分片'}，干净检出 + 同一份清单）`);
