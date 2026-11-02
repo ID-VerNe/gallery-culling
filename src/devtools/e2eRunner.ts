@@ -451,11 +451,17 @@ async function scenarioRenderExport(
  *
  * 用途：给真机目视复核（截图）准备一个「已扫出缩略图」的稳定起点。
  * 不点选、不改评级、不写盘，所以可以反复跑而不会污染 fixture。
+ *
+ * 完成信号沿用 `scanFolders` 的「按钮恢复」—— 那是唯一与扫盘本身同步的标志。
+ * 但**单元格数不能借用 `minCells` 当前置条件**：这个场景拿到的目录由调用方
+ * 决定，写死一个下限等于把结论建立在「夹具没变」上。所以下限给 1（只要出了
+ * 东西就继续），真正的读数在下面**原样打印**，由读日志的人对照目录去核。
  */
 async function scenarioLoadPhotos(jpgFolder: string, rawFolder: string, el: () => string) {
   if (!(await scanFolders(jpgFolder, rawFolder, 1, el))) return;
   const cells = document.querySelectorAll('[role="option"]').length;
-  raw(`[${el()}] >>> 读数 loaded=${cells}`);
+  // 读数要能自己说明「扫的是哪些目录」，否则日志离开命令行上下文就不可核。
+  raw(`[${el()}] >>> 读数 jpg="${jpgFolder}" raw="${rawFolder || '(未填)'}" loaded=${cells}`);
 }
 
 /** 场景：LUMEN RAW 预设（问题一）+ 自动调色（问题二）。 */

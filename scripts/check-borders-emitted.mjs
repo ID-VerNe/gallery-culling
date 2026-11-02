@@ -14,7 +14,8 @@
  * 不警告、不红。元素回落到 `currentColor`，而 `body` 继承 `text-white`，
  * 于是「失效的描边」看起来是 100% 白线，肉眼极难发现。
  *
- * 2026-11-01 实测：57 处 `border-default` 分布在 22 个文件，全部静默失效。
+ * 2026-11-02 实测（master `4a5b0a5`）：45 处裸 `border-default` 分布在 20 个文件，
+ * 全部静默失效；另有 12 处已写对的 `border-border-default`。全站 57 处统一形态。
  *
  * ## 为什么和 check-theme-alpha.mjs 分开
  *
@@ -52,14 +53,55 @@ export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BORDER_CLASS_RE = /\bborder(?:-[a-z0-9]+)+\b/g;
 
 /**
+ * `tailwind.config.js` 里 `theme.extend.colors.border` 的键 —— 描边色只认这些。
+ *
+ * 为什么要白名单，而不是「只要产物里有规则就放过」：`border-background-input`、
+ * `border-button` 这类写法在 Tailwind 3.4 下**确实会**从 `colors` 根键提升出规则
+ * （`background.input` / `button` 都在 `colors` 下），于是编译成功——但那个颜色
+ * 是**背景色调色板**里的值，语义上根本不是描边。写它的人多半是想给输入框描边，
+ * 实际拿到的却是背景色，而且没有人会注意到。
+ *
+ * 门禁的职责是钉住「描边色只该来自 `border` 命名空间」这条不变量，所以不在
+ * 这份表里的键一律判红，报错文案直接说明该去哪加。新增描边色时**必须**同步
+ * 这里 —— 这是刻意付出的代价，换的是没有绕过它的写法。
+ */
+const BORDER_NAMESPACE_KEYS = new Set(['subtle', 'default', 'strong']);
+
+/** Tailwind 内置基础色名（`border-white`、`border-transparent` 等）。 */
+const BUILTIN_PALETTE = new Set(['white', 'black', 'transparent', 'current', 'inherit']);
+
+/** Tailwind 内置色阶（`border-sky-500`、`border-gray-700/50`）。 */
+const BUILTIN_SCALE_RE =
+  /^(slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d{2,3}$/;
+
+/**
+ * 解析结果不是描边色、而是「写了不属于 `border` 命名空间的键」—— 必须判红。
+ * 用前缀标记把它和 `null`（不是描边色类，跳过）区分开。
+ */
+export const INVALID_NAMESPACE_MARKER = '!namespace:';
+
+/**
  * 把 `border-t-2` / `border-border-default` 这类完整类名解析成颜色键。
  *
- * 返回 `null` 表示「这不是颜色类」，包括：
+ * 返回 `null` 表示「这不是描边色类」：
  *   - 方位前缀 + 数字（`border-r-0`）或任意值（`border-t-[3px]`）
  *   - 样式词（`border-solid`）
  *   - 孤立的 `border-t` / `border-x`（方位宽度），不带宽度值时是 1px 边框
+ *   - Tailwind 内置调色板（`border-white`、`border-sky-500`）
+ *
+ * 返回 `INVALID_NAMESPACE_MARKER + key` 表示「是描边色类，但键不在 `border`
+ * 命名空间里」（`border-button`、`border-background-input`）—— 这类必须判红。
+ *
+ * ⚠️ `theme.extend.colors` 下的**每个**根键都是合法的 `border-*` 颜色来源
+ * （Tailwind 把 `colors` 整体并入 `borderColor`）。所以「配置根键」不是越界，
+ * 是**另一个调色板**：`border-background-input` 编译成
+ * `border-color: var(--color-bg-input)`，能跑、也没报错——只是语义上是背景色。
+ * 门禁要拦的正是这种「编译得通但用错了调色板」的写法，靠白名单拦。
+ *
+ * 注意 `BORDER_CLASS_RE` 不认 `/`，所以 `/NN` 修饰不会走到这里：内置色的
+ * `/NN` 写法在正则层就已经被排除，而主题色今天零处使用 `/NN`。
  */
-function parseColorKey(className) {
+function parseBorderColorKey(className) {
   const parts = className.split('-').slice(1); // 去掉开头的 `border`
   const DIRS = new Set(['t', 'r', 'b', 'l', 'x', 'y', 's', 'e']);
   if (parts.length > 1 && DIRS.has(parts[0])) parts.shift();
@@ -69,6 +111,13 @@ function parseColorKey(className) {
   if (parts.length === 1 && DIRS.has(key)) return null;
   if (/^\d/.test(key)) return null;
   if (NON_COLOR_BORDER.has(key)) return null;
+  if (BUILTIN_PALETTE.has(key) || BUILTIN_SCALE_RE.test(key)) return null;
+
+  // 本仓 `border` 命名空间：配置键是 `border-subtle/default/strong`，编译出的
+  // 类名是 `border-border-<key>`，所以裸键必须以 `border-` 开头。
+  if (!key.startsWith('border-')) return INVALID_NAMESPACE_MARKER + key;
+  const configKey = key.slice('border-'.length);
+  if (!BORDER_NAMESPACE_KEYS.has(configKey)) return INVALID_NAMESPACE_MARKER + key;
   return key;
 }
 
@@ -92,6 +141,10 @@ const NON_COLOR_BORDER = new Set([
  *
  * 返回去重后的类名键数组（如 `['border-default', 'border-border-subtle']`），
  * 报错时能直接告诉人「是哪一处」。纯函数，便于单测与变异。
+ *
+ * 键名带 `INVALID_NAMESPACE_MARKER` 前缀的，是「写了描边类、但键不在 `border`
+ * 命名空间里」的写法（`border-button`）—— 它们不静默跳过，而是交给
+ * `judgeBorderClasses` 判红。
  */
 export function extractBorderClasses(source) {
   // 先剥掉 `[...]` 任意值表达式：里面的 `border-color` 是 CSS 属性名，
@@ -99,7 +152,7 @@ export function extractBorderClasses(source) {
   const stripped = source.replace(ARBITRARY_VALUE_RE, ' ');
   const found = new Set();
   for (const match of stripped.matchAll(BORDER_CLASS_RE)) {
-    const key = parseColorKey(match[0]);
+    const key = parseBorderColorKey(match[0]);
     if (key) found.add(key);
   }
   return [...found];
@@ -115,6 +168,26 @@ export function extractBorderClasses(source) {
  * 纯函数：`keys` 来自 `extractBorderClasses`，`css` 是编译产物全文。
  */
 export function judgeBorderClasses(keys, css) {
+  // 命名空间违规单独分流：它们的产物规则**可能确实存在**（Tailwind 会从
+  // `colors` 根键提升出 `border-button`），所以「产物里有没有规则」判不出来，
+  // 必须按不变量判。
+  const offNamespace = keys.filter((k) => k.startsWith(INVALID_NAMESPACE_MARKER));
+  if (offNamespace.length > 0) {
+    const list = offNamespace
+      .map((k) => `  border-${k.slice(INVALID_NAMESPACE_MARKER.length)}`)
+      .join('\n');
+    return {
+      ok: false,
+      message:
+        `FAIL: ${offNamespace.length} 个描边类的键不在 \`border\` 命名空间里：\n${list}\n` +
+        '  本仓描边色只有 `theme.extend.colors.border` 下的键。`border-button` 之流\n' +
+        '  即便能编译，取到的也是 `colors.button`（背景色）的值，不是描边色。\n' +
+        '  要么改用 `border-border-default` 这类正确写法，要么先往 tailwind.config.js\n' +
+        '  的 `colors.border` 里加键并同步 scripts/check-borders-emitted.mjs。\n' +
+        '  详见 issue #18。',
+    };
+  }
+
   const missing = keys.filter((key) => {
     // 两端加边界，防止 `.border-border-default` 命中 `.border-border-default-foo`
     const selector = `.border-${key}`;
