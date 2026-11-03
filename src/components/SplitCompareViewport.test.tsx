@@ -168,3 +168,42 @@ describe('SplitCompareViewport —— 命中光标缩放（M-08）', () => {
     expect(imgs[0].style.transform).toContain('scale(1)');
   });
 });
+
+/**
+ * SH-01（issue #32）：双图对比的色标入口必须**按窗格**作用于各自的 group，
+ * 不能像单图视口那样只有一组（否则给左图点红标会误改右图）。
+ */
+describe('SplitCompareViewport —— 色标鼠标入口（SH-01）', () => {
+  it('左窗格点红标只把 leftGroup 交给宿主', () => {
+    const left = withJpg('left');
+    const right = withJpg('right');
+    const onLabel = vi.fn();
+    renderSplit({ leftGroup: left, rightGroup: right, onLabel });
+
+    fireEvent.click(screen.getByRole('button', { name: 'left：红色标（快捷 6）' }));
+
+    expect(onLabel).toHaveBeenCalledTimes(1);
+    expect(onLabel).toHaveBeenCalledWith(left, 'Red');
+  });
+
+  it('右窗格点蓝标只作用于 rightGroup，并按各自 label 显示按下态', () => {
+    const left = withJpg('left');
+    const right = { ...withJpg('right'), label: 'Green' };
+    const onLabel = vi.fn();
+    renderSplit({ leftGroup: left, rightGroup: right, onLabel });
+
+    fireEvent.click(screen.getByRole('button', { name: 'right：蓝色标（快捷 9）' }));
+
+    expect(onLabel).toHaveBeenCalledTimes(1);
+    expect(onLabel).toHaveBeenCalledWith(right, 'Blue');
+
+    expect(screen.getByRole('button', { name: 'right：绿色标（快捷 8）' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByRole('button', { name: 'left：绿色标（快捷 8）' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+});

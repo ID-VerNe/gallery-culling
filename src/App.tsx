@@ -155,6 +155,7 @@ function AppShell() {
     applyRating,
     applyFlag,
     applyLabel,
+    setLabel,
     pushCommand,
     retrySync: handleRetrySync,
     clearRatingFlag: handleClearRatingFlag,
@@ -557,6 +558,8 @@ function AppShell() {
     onPinLeft: handleTogglePinLeft,
     onPinRight: handleTogglePinRight,
     onTogglePinCurrent: handleTogglePinCurrent,
+    // SH-03：空格在按钮/链接/role=option 聚焦时不再静默，给一条可感知反馈。
+    onNotify: (message) => toast.info(message),
     onOpenMetadataModal: () => setIsMetadataOpen(true),
     onToggleBeforeAfter: external.toggleBeforeAfter,
     onToggleTonalPanel: handleToggleTonalPanel,
@@ -688,6 +691,7 @@ function AppShell() {
             onNext={guardedNext}
             onRate={applyRating}
             onFlag={applyFlag}
+            onLabel={applyLabel}
             onOpenExternal={external.openExternal}
             onOpenLuminar={external.openLuminar}
             onToggleTonalAdjuster={handleToggleTonalPanel}
@@ -706,6 +710,7 @@ function AppShell() {
             isHoldOriginal={isHoldOriginal}
             onRate={applyRating}
             onFlag={applyFlag}
+            onLabel={applyLabel}
             onOpenLuminar={external.openLuminar}
             onToggleTonalAdjuster={handleToggleTonalPanel}
             isTonalPanelOpen={tonalPanelVisible}
@@ -726,6 +731,8 @@ function AppShell() {
             onSwap={handleSwapCompare}
             onRate={(g, r) => handleRate(r, g)}
             onFlag={(g, f) => handleFlag(f, g)}
+            /* SH-01：双图窗格的色点按窗格落到各自的 group（不走多选批量确认）。 */
+            onLabel={(g, l) => void setLabel(l, g)}
             lumenStatus={lumenStatus}
             getTone={(g) => toneMap[g.id] || g.tone}
             /* C7：对比视图补翻页入口，与单图一致 */

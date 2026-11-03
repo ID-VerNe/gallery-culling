@@ -27,6 +27,14 @@ interface KeyboardShortcutsProps {
   onPinRight?: () => void;
   /** 空格：把当前照片设为对比基准，已钉住则取消（落在 currentGroup，不落在右窗格）。 */
   onTogglePinCurrent?: () => void;
+  /**
+   * 空格生效后的可感知反馈（SH-03，issue #32）。
+   *
+   * 焦点停在按钮/链接/`role=option` 上时过去是静默 return，用户看不出空格
+   * 做了什么。宿主传入后（App 用 `toast.info`），每次触发都播报一句。
+   * 保持可选：独立使用本 hook 的调用方不接也能正常工作。
+   */
+  onNotify?: (message: string) => void;
   onOpenMetadataModal?: () => void;
   onToggleBeforeAfter?: () => void;
   onToggleTonalPanel?: () => void;
@@ -77,6 +85,7 @@ export function useKeyboardShortcuts({
   onPinLeft,
   onPinRight,
   onTogglePinCurrent,
+  onNotify,
   onOpenMetadataModal,
   onToggleBeforeAfter,
   onToggleTonalPanel,
@@ -137,18 +146,6 @@ export function useKeyboardShortcuts({
         (el as HTMLElement).isContentEditable ||
         el.tagName === 'SELECT');
 
-    /** 可被空格「激活」的元素 —— 空格必须让位，且不得 preventDefault。 */
-    const isActivatable = (el: Element | null): boolean =>
-      !!el &&
-      (el.tagName === 'BUTTON' ||
-        el.tagName === 'SUMMARY' ||
-        el.tagName === 'A' ||
-        (el.tagName === 'INPUT' &&
-          ['checkbox', 'radio', 'button', 'submit', 'reset'].includes((el as HTMLInputElement).type)) ||
-        ['button', 'radio', 'checkbox', 'switch', 'tab', 'menuitem', 'option', 'link'].includes(
-          el.getAttribute('role') ?? '',
-        ));
-
     const handleKeyDown = (e: KeyboardEvent) => {
       // 1 模态对话框独占屏幕时，任何单键快捷键都失效（防止误改背后的照片）。
       if (isDialogOpen()) return;
@@ -174,9 +171,13 @@ export function useKeyboardShortcuts({
       //   这是 H-01 的核心修复：SELECT 曾被漏掉，导致聚焦下拉时按键改评级并写盘。
       if (isFormControlOrEditing(el)) return;
 
-      // 5 空格让位给可激活元素（不 preventDefault，保证原生按钮/链接能被空格激活）。
-      //   宫格 `[role="listbox"]` 不在 isActivatable 内，故其空格仍 = 设为基准。
-      if (e.key === ' ' && isActivatable(el)) return;
+      // 5 空格：**不再对可激活元素静默让位**（SH-03，issue #32）。
+      //   过去焦点停在底栏按钮/链接/role=option 上时，这里直接 return：空格
+      //   要么原生再次激活那个按钮（例如重开导出弹窗），要么什么也不发生，
+      //   既不设基准也没有任何反馈，与帮助弹窗「空格 = 设为基准」矛盾。
+      //   现在交给下面的 `case ' '` 统一处理（触发 + preventDefault + 通知）。
+      //   代价：BUTTON/SUMMARY 上空格不再触发原生激活（Enter 仍可激活）——
+      //   这是「空格不吞键」的取舍，写进 PR 影响面。
 
       // 5.4 重做：Ctrl/Cmd+Shift+Z（Windows 习惯的 Ctrl+Y 同样接受）。
       //     必须排在撤销分支**之前** —— 撤销只判 key，会连 Shift+Z 一起吞掉。
@@ -404,6 +405,8 @@ export function useKeyboardShortcuts({
           if (onTogglePinCurrent) {
             e.preventDefault();
             onTogglePinCurrent();
+            // SH-03：无论焦点停在宫格、按钮还是链接，失败都不该是静默的。
+            onNotify?.('已切换对比基准。');
           }
           break;
 
