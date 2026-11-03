@@ -163,4 +163,21 @@ describe('B8 P2 收敛（issue #18）', () => {
       expect(hit[1]).not.toMatch(/\brounded\b/);
     });
   });
+
+  describe('PD-7 ThumbnailGrid 可重试角标补 focus-ring', () => {
+    it('「未同步」重试角标按钮的 className 含 focus-ring', () => {
+      const grid = readSrc('src/components/ThumbnailGrid.tsx');
+      // 该按钮在 :793，title 在 :800「未同步到 XMP 侧边栏，点击重试」，审计原
+      // 证据无 focus-ring。从 title 反向取它所在的 className 行：title 行往前
+      // 最近的 className= 即是它的。避免 [\s\S]* 跨标签匹配到更早的按钮。
+      const titleIdx = grid.indexOf('title="未同步到 XMP 侧边栏，点击重试"');
+      expect(titleIdx).toBeGreaterThan(-1);
+      const before = grid.slice(0, titleIdx);
+      const lastClass = before.lastIndexOf('className=');
+      expect(lastClass).toBeGreaterThan(-1);
+      // 取该 className= 后到下一个属性（title/aria-/type/onClick）前的串。
+      const seg = grid.slice(lastClass, titleIdx);
+      expect(seg).toContain('focus-ring');
+    });
+  });
 });

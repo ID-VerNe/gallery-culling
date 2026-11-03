@@ -796,7 +796,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
               e.stopPropagation();
               onRetrySync(group);
             }}
-            className="absolute top-6 right-1 bg-rose-500/90 hover:bg-rose-500 text-white rounded px-1 min-h-6 text-[10px] font-medium shadow-sm"
+            className="focus-ring absolute top-6 right-1 bg-rose-500/90 hover:bg-rose-500 text-white rounded px-1 min-h-6 text-[10px] font-medium shadow-sm"
             title="未同步到 XMP 侧边栏，点击重试"
             aria-label="未同步到 XMP 侧边栏，点击重试同步"
           >
