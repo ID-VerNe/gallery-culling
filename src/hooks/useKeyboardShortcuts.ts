@@ -25,8 +25,13 @@ interface KeyboardShortcutsProps {
   onTogglePinReference?: () => void;
   onPinLeft?: () => void;
   onPinRight?: () => void;
-  /** 空格：把当前照片设为对比基准，已钉住则取消（落在 currentGroup，不落在右窗格）。 */
-  onTogglePinCurrent?: () => void;
+  /**
+   * 空格：把当前照片设为对比基准，已钉住则取消（落在 currentGroup，不落在右窗格）。
+   *
+   * 返回 `false` 表示 pin 实际没有生效（如无 currentGroup 时是 no-op），
+   * 用于决定要不要给反馈；返回 `true` 或历史的 `void` 视为已生效（issue #35）。
+   */
+  onTogglePinCurrent?: () => boolean | void;
   /**
    * 空格生效后的可感知反馈（SH-03，issue #32）。
    *
@@ -404,9 +409,11 @@ export function useKeyboardShortcuts({
         case ' ':
           if (onTogglePinCurrent) {
             e.preventDefault();
-            onTogglePinCurrent();
             // SH-03：无论焦点停在宫格、按钮还是链接，失败都不该是静默的。
-            onNotify?.('已切换对比基准。');
+            // #35：但 no-op（无 currentGroup）并非失败，而是「什么都没发生」，
+            // 此时必须闭嘴 —— 否则用户会以为基准变了。
+            const applied = onTogglePinCurrent();
+            if (applied !== false) onNotify?.('已切换对比基准。');
           }
           break;
 

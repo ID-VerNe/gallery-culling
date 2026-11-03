@@ -66,9 +66,13 @@ export function useComparePin(opts: {
   //
   // 不用 togglePinRight —— 见文件头说明。钉在右侧窗格（比较视图里看得到
   // "基准 vs 候选"），与左/中/右位置无关。
-  const togglePinCurrent = useCallback(() => {
-    if (!currentGroup) return;
+  // 返回值 = 「是否真的生效」，是调用方（空格快捷键）要不要给反馈的唯一真值。
+  // 无 currentGroup 时是 no-op，必须返回 false，否则 App 会播报「已切换对比基准」
+  // 而界面上什么都没发生（issue #35）。
+  const togglePinCurrent = useCallback((): boolean => {
+    if (!currentGroup) return false;
     setPinnedId((prev) => (prev === currentGroup.id ? null : currentGroup.id));
+    return true;
   }, [currentGroup]);
 
   // Swap A / B (Candidate becomes new pinned benchmark or swap positions)
