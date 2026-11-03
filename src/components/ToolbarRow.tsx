@@ -253,7 +253,7 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
           <button
             onClick={onOpenLuminar}
             disabled={isLuminarRunning}
-            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap"
+            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap"
             title="在 Luminar AI 中精修当前照片"
             aria-label="Luminar AI 精修"
           >
@@ -272,7 +272,7 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
           <button
             onClick={onRefreshXmp}
             disabled={isRefreshingXmp}
-            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap"
+            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap"
             title="从 XMP 重新读取外部改动（切回窗口时会自动读取）"
             aria-label="从 XMP 重新读取"
           >

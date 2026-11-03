@@ -133,7 +133,7 @@ export const AlbumDialog: React.FC<AlbumDialogProps> = ({
             <button
               onClick={onOpen}
               disabled={busy}
-              className="focus-ring w-full flex items-center gap-2 px-3 py-2 bg-background-surface-hover hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-md font-medium active:scale-[0.99] transition-colors"
+              className="focus-ring w-full flex items-center gap-2 px-3 py-2 bg-background-surface-hover hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md font-medium active:scale-[0.99] transition-colors"
               aria-label="打开选片集"
             >
               <FolderOpen className="w-4 h-4" aria-hidden="true" />

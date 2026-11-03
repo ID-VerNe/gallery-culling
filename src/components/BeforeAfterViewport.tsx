@@ -196,7 +196,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
           <button
             onClick={onOpenLuminar}
             disabled={isLuminarRunning}
-            className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/20 text-white border border-border-default rounded text-[11px] font-semibold transition-colors active:scale-[0.96] disabled:opacity-50 disabled:cursor-not-allowed"
+            className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/20 text-white border border-border-default rounded text-[11px] font-semibold transition-colors active:scale-[0.96] disabled:opacity-40 disabled:cursor-not-allowed"
             title="Luminar AI 修图"
             aria-label="在 Luminar AI 中修图当前照片"
           >
