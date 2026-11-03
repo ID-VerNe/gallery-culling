@@ -48,7 +48,7 @@ export default defineConfig({
     // tsconfig.json 已注入 `vitest/globals` + `@testing-library/jest-dom` 类型。
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
-    include: ['src/**/*.{test,spec}.{ts,tsx}', 'scripts/**/*.test.mjs'],
+    include: ['src/**/*.{test,spec}.{ts,tsx}', 'src/**/*.{test,spec}.mjs', 'scripts/**/*.test.mjs'],
     // 应用用例只覆盖 `src`；`scripts/**/*.test.mjs` 是门禁自身的单测（issue #6）——
     // 元门禁坏了是静默放行，它必须被自己的用例盯住。src-tauri 不进 jsdom 环境。
     exclude: ['node_modules/**', 'dist/**', 'src-tauri/**', '.venv/**'],
