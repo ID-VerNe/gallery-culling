@@ -343,7 +343,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
           return (
             <div className="flex flex-col gap-1.5" key={s.field}>
               <div className="flex justify-between items-center text-white/80 gap-2">
-                <span className="flex items-center gap-1.5 min-w-0">
+                <span className="flex items-center gap-1 min-w-0">
                   {s.icon}
                   <span className="truncate">{s.label}</span>
                 </span>
