@@ -203,7 +203,7 @@ export const XmpConflictDialog: React.FC<XmpConflictDialogProps> = ({
                       onClick={() =>
                         setSelection((prev) => ({ ...prev, [rowKey(c)]: value }))
                       }
-                      className={`focus-ring px-2 py-0.5 rounded text-[11px] whitespace-nowrap transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                      className={`focus-ring px-2 py-0.5 rounded text-[11px] whitespace-nowrap transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                         action === value
                           ? 'bg-white text-black font-medium shadow-sm'
                           : 'text-white/60 hover:text-white hover:bg-white/10'

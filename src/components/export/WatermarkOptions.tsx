@@ -88,7 +88,7 @@ export const WatermarkOptions: React.FC<WatermarkOptionsProps> = ({
                     onChangePreset(e.target.value as WatermarkPresetName)
                   }
                   disabled={disabled}
-                  className="focus-ring w-full bg-background-base border border-border-default rounded-md px-2 py-1.5 text-white outline-none focus:border-white/40 disabled:opacity-50"
+                  className="focus-ring w-full bg-background-base border border-border-default rounded-md px-2 py-1.5 text-white outline-none focus:border-white/40 disabled:opacity-40"
                 >
                   {WATERMARK_PRESETS.map((p) => (
                     <option key={p.value} value={p.value}>

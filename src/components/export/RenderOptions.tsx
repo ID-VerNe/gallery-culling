@@ -105,7 +105,7 @@ export const RenderOptions: React.FC<RenderOptionsProps> = ({
               value={longEdge}
               onChange={(e) => onChangeLongEdge(Number(e.target.value))}
               disabled={disabled}
-              className="focus-ring w-full bg-background-base border border-border-default rounded-md px-2 py-1.5 text-white outline-none focus:border-white/40 disabled:opacity-50"
+              className="focus-ring w-full bg-background-base border border-border-default rounded-md px-2 py-1.5 text-white outline-none focus:border-white/40 disabled:opacity-40"
             >
               {RENDER_LONG_EDGES.map((e) => (
                 <option key={e.value} value={e.value}>
@@ -133,7 +133,7 @@ export const RenderOptions: React.FC<RenderOptionsProps> = ({
                 onBlur={onCommitQuality}
                 disabled={disabled}
                 aria-describedby={describedBy}
-                className="focus-ring w-full bg-background-base border border-border-default rounded-md px-2 py-1.5 text-white outline-none font-mono tabular-nums focus:border-white/40 disabled:opacity-50"
+                className="focus-ring w-full bg-background-base border border-border-default rounded-md px-2 py-1.5 text-white outline-none font-mono tabular-nums focus:border-white/40 disabled:opacity-40"
               />
             </div>
           )}

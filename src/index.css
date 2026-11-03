@@ -100,6 +100,21 @@
     cursor: not-allowed;
     opacity: 0.5;
   }
+
+  /* ---------------------------------------------------------------
+     禁用态 hover 全局复位（issue #18 · B5 · PD-2）
+     70 处 `disabled` 按钮里只有 3 处带 `disabled:hover:` 复位；典型
+     `BottomBar.tsx:199` 的 `hover:bg-white/15 ... disabled:bg-background-surface-hover`
+     —— `disabled` 时 `hover` 仍生效并覆盖 `disabled:bg`，禁用按钮被悬停时变亮。
+     一条全局规则覆盖全部 70 处：禁用按钮完全不接收指针事件，hover 永不触发。
+     前置确认：本仓库禁用按钮的关键说明已按 AGENTS.md 要求常驻 footer
+     （`BatchExportModal.tsx:170` 明文「footer 左侧是唯一的状态说明位」），
+     不依赖 hover tooltip；`src/styles/disabled-state.test.ts` 钉住「无 Tooltip
+     组件」。视觉验证（按下禁用按钮时确实不变亮）待真机回签。
+     --------------------------------------------------------------- */
+  button:disabled {
+    pointer-events: none;
+  }
 }
 
 /* ---------------------------------------------------------------

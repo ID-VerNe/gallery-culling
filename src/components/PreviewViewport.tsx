@@ -621,7 +621,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
             <button
               onClick={onOpenLuminar}
               disabled={isLuminarRunning}
-              className={`${BAR_BUTTON} bg-white/10 hover:bg-white/20 text-white border border-border-default disabled:opacity-50 disabled:cursor-not-allowed`}
+              className={`${BAR_BUTTON} bg-white/10 hover:bg-white/20 text-white border border-border-default disabled:opacity-40 disabled:cursor-not-allowed`}
               title="Luminar AI 修图"
               aria-label="在 Luminar AI 中修图"
             >

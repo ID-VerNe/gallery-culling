@@ -252,7 +252,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
             title={form.targetFolder || undefined}
             aria-describedby={form.targetIsSourceDir ? folderErrorId : undefined}
             aria-invalid={form.targetIsSourceDir || undefined}
-            className="focus-ring flex-1 min-w-0 bg-background-base border border-border-default rounded-md px-3 py-1.5 text-white outline-none font-mono text-xs focus:border-white/40 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="focus-ring flex-1 min-w-0 bg-background-base border border-border-default rounded-md px-3 py-1.5 text-white outline-none font-mono text-xs focus:border-white/40 disabled:opacity-40 disabled:cursor-not-allowed"
           />
           <button
             onClick={form.browseTarget}

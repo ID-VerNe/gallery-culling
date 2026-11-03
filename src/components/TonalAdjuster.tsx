@@ -449,7 +449,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
             <button
               onClick={() => setPendingMask(true)}
               disabled={isMasking || !!aiBlockedReason}
-              className="focus-ring shrink-0 px-2.5 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.98] text-white rounded-md text-xs transition-colors disabled:opacity-50"
+              className="focus-ring shrink-0 px-2.5 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.98] text-white rounded-md text-xs transition-colors disabled:opacity-40"
               title={aiBlockedReason ?? '用 AI 检测该区域并只对它应用去薄雾'}
             >
               {isMasking ? '检测中…' : '套用'}
