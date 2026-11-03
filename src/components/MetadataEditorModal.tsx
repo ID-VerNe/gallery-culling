@@ -253,7 +253,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
           <button
             onClick={handleSave}
             disabled={isSaving || targetGroups.length === 0}
-            className="focus-ring px-5 py-2 text-xs font-medium bg-white hover:bg-white/90 text-black active:scale-95 disabled:opacity-50 disabled:pointer-events-none rounded-lg transition-transform shadow-md"
+            className="focus-ring px-5 py-2 text-xs font-medium bg-white hover:bg-white/90 text-black active:scale-95 disabled:opacity-40 disabled:pointer-events-none rounded-lg transition-transform shadow-md"
           >
             {/* D7：批量写 XMP 可能上千张，至少给出待写张数。 */}
             {isSaving
@@ -434,7 +434,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
                 <button
                   type="submit"
                   disabled={isPresetSaving}
-                  className="focus-ring px-3 py-1.5 text-[11px] font-medium bg-white hover:bg-white/90 text-black rounded-lg transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                  className="focus-ring px-3 py-1.5 text-[11px] font-medium bg-white hover:bg-white/90 text-black rounded-lg transition-colors disabled:opacity-40 disabled:pointer-events-none"
                 >
                   {editingPresetIndex === null ? '添加预设' : '保存修改'}
                 </button>

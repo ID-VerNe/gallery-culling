@@ -83,7 +83,7 @@ export const LrcatDialog: React.FC<LrcatDialogProps> = ({
           <button
             onClick={onPick}
             disabled={busy}
-            className="focus-ring px-3 py-1.5 text-white/80 hover:text-white bg-background-surface-hover hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed rounded-md text-sm"
+            className="focus-ring px-3 py-1.5 text-white/80 hover:text-white bg-background-surface-hover hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed rounded-md text-sm"
           >
             {reading ? '读取中…' : report ? '换一个目录…' : '选择目录…'}
           </button>
@@ -92,7 +92,7 @@ export const LrcatDialog: React.FC<LrcatDialogProps> = ({
               <button
                 onClick={onCancel}
                 disabled={cancelling}
-                className="focus-ring px-3 py-1.5 text-white/80 hover:text-white bg-background-surface-hover hover:bg-white/10 disabled:opacity-50 rounded-md text-sm"
+                className="focus-ring px-3 py-1.5 text-white/80 hover:text-white bg-background-surface-hover hover:bg-white/10 disabled:opacity-40 rounded-md text-sm"
               >
                 {cancelling ? '取消中…' : '取消'}
               </button>
@@ -100,7 +100,7 @@ export const LrcatDialog: React.FC<LrcatDialogProps> = ({
             <button
               onClick={onClose}
               disabled={busy}
-              className="focus-ring px-3 py-1.5 text-white/80 hover:text-white bg-background-surface-hover hover:bg-white/10 disabled:opacity-50 rounded-md text-sm"
+              className="focus-ring px-3 py-1.5 text-white/80 hover:text-white bg-background-surface-hover hover:bg-white/10 disabled:opacity-40 rounded-md text-sm"
             >
               关闭
             </button>
