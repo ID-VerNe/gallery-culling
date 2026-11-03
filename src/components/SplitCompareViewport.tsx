@@ -289,7 +289,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
           {/* Pick / Reject */}
           <button
             onClick={() => onFlag(group, group.flag === 'pick' ? 'none' : 'pick')}
-            className={`focus-ring p-1.5 rounded-md text-xs active:scale-[0.96] transition-colors border ${
+            className={`focus-ring p-1.5 rounded-md text-xs active:scale-[0.96] press border ${
               group.flag === 'pick'
                 ? 'bg-emerald-600/40 text-emerald-300 border-emerald-500/50'
                 : 'bg-transparent text-white/70 hover:text-white hover:bg-white/10 border-transparent'
@@ -305,7 +305,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
           </button>
           <button
             onClick={() => onFlag(group, group.flag === 'reject' ? 'none' : 'reject')}
-            className={`focus-ring p-1.5 rounded-md text-xs active:scale-[0.96] transition-colors border ${
+            className={`focus-ring p-1.5 rounded-md text-xs active:scale-[0.96] press border ${
               group.flag === 'reject'
                 ? 'bg-rose-600/40 text-rose-300 border-rose-500/50'
                 : 'bg-transparent text-white/70 hover:text-white hover:bg-white/10 border-transparent'
@@ -369,7 +369,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             <button
               onClick={() => zoom.zoomBy(1 / ZOOM_STEP)}
               disabled={effectiveScale <= ZOOM_MIN}
-              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-l active:scale-[0.96] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-l active:scale-[0.96] press disabled:opacity-40 disabled:cursor-not-allowed"
               title="缩小"
               aria-label="缩小双图"
             >
@@ -401,7 +401,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             <button
               onClick={() => zoom.zoomBy(ZOOM_STEP)}
               disabled={zoom.effectiveScale >= ZOOM_MAX}
-              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 active:scale-[0.96] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 active:scale-[0.96] press disabled:opacity-40 disabled:cursor-not-allowed"
               title="放大"
               aria-label="放大双图"
             >
@@ -409,7 +409,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             </button>
             <button
               onClick={zoom.reset}
-              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-r active:scale-[0.96] transition-colors"
+              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-r active:scale-[0.96] press"
               title={`重置缩放与平移（当前 ${scaleLabel(zoom.effectiveScale)}）`}
               aria-label={`重置缩放与平移（当前 ${scaleLabel(zoom.effectiveScale)}）`}
             >
@@ -420,7 +420,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
           {/* Sync Zoom toggle */}
           <button
             onClick={zoom.toggleSync}
-            className={`focus-ring flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium active:scale-[0.96] transition-colors ${
+            className={`focus-ring flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium active:scale-[0.96] press ${
               zoom.sync
                 ? 'bg-white text-black shadow-sm'
                 : 'bg-background-surface-hover text-white/70 hover:text-white hover:bg-white/10'
@@ -454,7 +454,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             e.stopPropagation();
             onPrev();
           }}
-          className="focus-ring absolute left-3 top-1/2 -translate-y-1/2 p-3 z-20 bg-background-base/70 hover:ring-1 hover:ring-white/25 active:scale-[0.96] text-white rounded-full transition-colors backdrop-blur-sm pointer-events-auto"
+          className="focus-ring absolute left-3 top-1/2 -translate-y-1/2 p-3 z-20 bg-background-base/70 hover:ring-1 hover:ring-white/25 active:scale-[0.96] text-white rounded-full press backdrop-blur-sm pointer-events-auto"
           title="上一张 (A / ←)"
           aria-label="上一张照片（快捷键 A 或 ←）"
         >
@@ -467,7 +467,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             e.stopPropagation();
             onNext();
           }}
-          className="focus-ring absolute right-3 top-1/2 -translate-y-1/2 p-3 z-20 bg-background-base/70 hover:ring-1 hover:ring-white/25 active:scale-[0.96] text-white rounded-full transition-colors backdrop-blur-sm pointer-events-auto"
+          className="focus-ring absolute right-3 top-1/2 -translate-y-1/2 p-3 z-20 bg-background-base/70 hover:ring-1 hover:ring-white/25 active:scale-[0.96] text-white rounded-full press backdrop-blur-sm pointer-events-auto"
           title="下一张 (D / →)"
           aria-label="下一张照片（快捷键 D 或 →）"
         >

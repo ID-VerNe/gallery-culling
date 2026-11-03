@@ -148,7 +148,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
             <button
               onClick={() => zoom.zoomBy(1 / ZOOM_STEP)}
               disabled={effectiveScale <= ZOOM_MIN}
-              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-l active:scale-[0.96] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-l active:scale-[0.96] press disabled:opacity-40 disabled:cursor-not-allowed"
               title="缩小"
               aria-label="缩小"
             >
@@ -180,7 +180,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
             <button
               onClick={() => zoom.zoomBy(ZOOM_STEP)}
               disabled={effectiveScale >= ZOOM_MAX}
-              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 active:scale-[0.96] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 active:scale-[0.96] press disabled:opacity-40 disabled:cursor-not-allowed"
               title="放大"
               aria-label="放大"
             >
@@ -188,7 +188,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
             </button>
             <button
               onClick={zoom.reset}
-              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-r active:scale-[0.96] transition-colors"
+              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-r active:scale-[0.96] press"
               title={`重置缩放与平移（当前 ${scaleLabel(effectiveScale)}）`}
               aria-label={`重置缩放与平移（当前 ${scaleLabel(effectiveScale)}）`}
             >
@@ -200,7 +200,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
           <button
             onClick={onOpenLuminar}
             disabled={isLuminarRunning}
-            className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/20 text-white border border-border-default rounded text-[11px] font-semibold transition-colors active:scale-[0.96] disabled:opacity-40 disabled:cursor-not-allowed"
+            className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/20 text-white border border-border-default rounded text-[11px] font-semibold press active:scale-[0.96] disabled:opacity-40 disabled:cursor-not-allowed"
             title="Luminar AI 修图"
             aria-label="在 Luminar AI 中修图当前照片"
           >
@@ -214,7 +214,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
           {/* Toggle Tonal Adjuster */}
           <button
             onClick={onToggleTonalAdjuster}
-            className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded text-[11px] font-medium transition-colors active:scale-[0.96]"
+            className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white rounded text-[11px] font-medium press active:scale-[0.96]"
             title="调色面板 (快捷键 E)"
             aria-label="调色面板"
             aria-pressed={isTonalPanelOpen}
@@ -228,7 +228,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
           {/* Sync-zoom lock toggle (L-01): a real, keyboard-operable switch. */}
           <button
             onClick={zoom.toggleSync}
-            className={`focus-ring flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium active:scale-[0.96] transition-colors border ${
+            className={`focus-ring flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium active:scale-[0.96] press border ${
               zoom.sync
                 ? 'bg-white/10 text-white border-white/25'
                 : 'bg-background-surface-hover text-white/60 border-border-default hover:text-white hover:bg-white/10'

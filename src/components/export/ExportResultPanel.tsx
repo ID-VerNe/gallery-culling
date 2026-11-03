@@ -70,7 +70,7 @@ export const ExportResultPanel: React.FC<ExportResultPanelProps> = ({
     <button
       type="button"
       onClick={() => onOpenFolder(result.folder)}
-      className="focus-ring shrink-0 self-center flex items-center gap-1 px-2 py-1 rounded-md bg-white/10 hover:bg-white/15 active:scale-[0.96] text-white/80 transition-colors text-[11px]"
+      className="focus-ring shrink-0 self-center flex items-center gap-1 px-2 py-1 rounded-md bg-white/10 hover:bg-white/15 active:scale-[0.96] text-white/80 press text-[11px]"
     >
       <FolderOpen className="w-3 h-3" aria-hidden="true" />
       <span>打开目录</span>

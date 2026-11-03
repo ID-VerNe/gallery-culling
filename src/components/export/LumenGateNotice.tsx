@@ -63,7 +63,7 @@ export const LumenGateNotice: React.FC<LumenGateNoticeProps> = ({
           <button
             onClick={onOpenSettings}
             disabled={disabled}
-            className="focus-ring self-start flex items-center gap-1.5 px-2.5 py-1 rounded bg-amber-900/40 hover:bg-amber-900/60 active:scale-[0.96] text-amber-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="focus-ring self-start flex items-center gap-1.5 px-2.5 py-1 rounded bg-amber-900/40 hover:bg-amber-900/60 active:scale-[0.96] text-amber-100 press disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Settings2 className="w-3 h-3" aria-hidden="true" />
             <span>去设置</span>
