@@ -12,7 +12,13 @@
     --color-bg-header: rgb(255 255 255 / 3%);
     --color-bg-panel: rgb(255 255 255 / 6%);
     --color-bg-input: rgb(255 255 255 / 8%);
-    
+
+    /* Toast 面板底色（issue #18 · PC-3）：原 Toast.tsx:68 硬编码 #1c1c1c/95，
+       是全仓唯一硬编码色值，绕过令牌与 prefers-contrast: more 的 :root 覆盖。
+       改走通道三元组令牌，/95 才能被 Tailwind 解析出 rgb(... / a)；
+       值仍是 28 28 28（= #1c1c1c），视觉不变，高对比覆盖见 index.css。 */
+    --color-bg-toast-rgb: 28 28 28;
+
     /* Borders
        E6：结构性边框原 10%/15% 与 #0A0A0A 仅约 1.26/1.48:1，弱视/强光下不可见。
        subtle 保持很低（纯装饰性分隔），default/strong 提升到可感知水平：

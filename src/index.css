@@ -267,5 +267,9 @@
     --color-border-default: rgb(255 255 255 / 45%);
     --color-border-strong: rgb(255 255 255 / 70%);
     --color-scrollbar-thumb: rgb(255 255 255 / 40%);
+    /* Toast 底色（issue #18 · PC-3）：基线 28 28 28 在高对比下与 #0A0A0A app
+       底色对比不足，这里提到 40 让面板从页面底色里浮起。原先硬编码 #1c1c1c
+       绕过了这条 :root 覆盖，改令牌后恢复受控。 */
+    --color-bg-toast-rgb: 40 40 40;
   }
 }
