@@ -40,7 +40,7 @@ export const EditorPathSection: React.FC<{
             />
             <button
               onClick={onBrowse}
-              className="focus-ring px-3 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white rounded-md flex items-center gap-1 transition-colors shrink-0"
+              className="focus-ring px-3 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white rounded-md flex items-center gap-1 press shrink-0"
               title="选择 Photoshop 路径"
               aria-label="选择 Photoshop 路径"
             >
@@ -223,7 +223,7 @@ export const LumenSettingsSection: React.FC<{
             />
             <button
               onClick={handleBrowsePath}
-              className="focus-ring px-3 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white rounded-md flex items-center gap-1 transition-colors shrink-0"
+              className="focus-ring px-3 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white rounded-md flex items-center gap-1 press shrink-0"
               title="选择 lumen-cli 路径"
               aria-label="选择 lumen-cli 路径"
             >
@@ -242,7 +242,7 @@ export const LumenSettingsSection: React.FC<{
             <button
               onClick={handleTest}
               disabled={isProbing}
-              className="focus-ring flex items-center gap-1.5 px-3 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white rounded-md text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="focus-ring flex items-center gap-1.5 px-3 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white rounded-md text-xs press disabled:opacity-40 disabled:cursor-not-allowed"
               title="用当前输入框里的路径探测引擎是否可用"
               aria-label="测试 LUMEN RAW 连接"
             >
@@ -345,7 +345,7 @@ export const LumenSettingsSection: React.FC<{
               <button
                 onClick={handleSync}
                 disabled={isSyncing}
-                className="focus-ring flex items-center justify-center gap-1.5 py-2 px-3 bg-background-surface-hover hover:bg-white/10 active:scale-[0.98] text-white rounded-md text-xs transition-colors disabled:opacity-40"
+                className="focus-ring flex items-center justify-center gap-1.5 py-2 px-3 bg-background-surface-hover hover:bg-white/10 active:scale-[0.98] text-white rounded-md text-xs press disabled:opacity-40"
                 title="从 LUMEN RAW 拉取该文件夹的星级/旗标并写回 .xmp"
               >
                 {isSyncing ? '同步中…' : '从 LUMEN RAW 同步评级'}

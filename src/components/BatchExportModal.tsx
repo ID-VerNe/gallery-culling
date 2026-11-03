@@ -210,7 +210,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
           <button
             onClick={onClose}
             disabled={isExporting}
-            className="focus-ring px-3.5 py-1.5 rounded-md bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-background-surface-hover"
+            className="focus-ring px-3.5 py-1.5 rounded-md bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white/80 press disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-background-surface-hover"
           >
             关闭
           </button>
@@ -257,7 +257,7 @@ export const BatchExportModal: React.FC<BatchExportModalProps> = ({
           <button
             onClick={form.browseTarget}
             disabled={isExporting}
-            className="focus-ring px-3.5 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white rounded-md flex items-center gap-1.5 transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="focus-ring px-3.5 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white rounded-md flex items-center gap-1.5 press shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <FolderOpen className="w-3.5 h-3.5" aria-hidden="true" />
             <span>浏览</span>

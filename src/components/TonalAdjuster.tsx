@@ -449,7 +449,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
             <button
               onClick={() => setPendingMask(true)}
               disabled={isMasking || !!aiBlockedReason}
-              className="focus-ring shrink-0 px-2.5 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.98] text-white rounded-md text-xs transition-colors disabled:opacity-40"
+              className="focus-ring shrink-0 px-2.5 py-1.5 bg-background-surface-hover hover:bg-white/10 active:scale-[0.98] text-white rounded-md text-xs press disabled:opacity-40"
               title={aiBlockedReason ?? '用 AI 检测该区域并只对它应用去薄雾'}
             >
               {isMasking ? '检测中…' : '套用'}
@@ -510,7 +510,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
           <button
             onClick={() => onApplyToSelected({ writeLumen: applyWriteLumen })}
             disabled={applying || !!applyBlockedReason}
-            className="focus-ring w-full flex items-center justify-center gap-1.5 py-2 px-2 bg-background-surface-hover hover:bg-white/10 text-white font-medium rounded-lg text-xs active:scale-[0.98] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            className="focus-ring w-full flex items-center justify-center gap-1.5 py-2 px-2 bg-background-surface-hover hover:bg-white/10 text-white font-medium rounded-lg text-xs active:scale-[0.98] press disabled:opacity-60 disabled:cursor-not-allowed"
             title={applyBlockedReason ?? '把当前面板里的 6 个调色参数套用到其余选中照片；星级/旗标/色标不受影响'}
           >
             <Copy className="w-3.5 h-3.5 text-white/60" aria-hidden="true" />
@@ -544,7 +544,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
         <button
           onClick={triggerAutoTone}
           disabled={autoTonePending}
-          className="focus-ring flex-1 flex items-center justify-center gap-1.5 py-2 px-2 bg-background-surface-hover hover:bg-white/10 text-white font-medium rounded-lg text-xs active:scale-[0.98] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+          className="focus-ring flex-1 flex items-center justify-center gap-1.5 py-2 px-2 bg-background-surface-hover hover:bg-white/10 text-white font-medium rounded-lg text-xs active:scale-[0.98] press disabled:opacity-60 disabled:cursor-not-allowed"
           title="基于直方图智能自适应计算"
           aria-label="智能自动调色"
           aria-busy={autoTonePending || undefined}
@@ -558,7 +558,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
         {/* Reset Button */}
         <button
           onClick={handleReset}
-          className="focus-ring p-2 text-white/60 hover:text-white bg-background-surface-hover hover:bg-white/10 rounded-lg active:scale-[0.98] transition-colors"
+          className="focus-ring p-2 text-white/60 hover:text-white bg-background-surface-hover hover:bg-white/10 rounded-lg active:scale-[0.98] press"
           title="重置所有参数"
           aria-label="重置调色滑块"
         >
@@ -569,7 +569,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
         <button
           onClick={handleSaveClick}
           disabled={isSaving}
-          className={`focus-ring flex-1 flex items-center justify-center gap-1.5 py-2 px-2 font-medium rounded-lg text-xs active:scale-[0.98] transition-colors ${
+          className={`focus-ring flex-1 flex items-center justify-center gap-1.5 py-2 px-2 font-medium rounded-lg text-xs active:scale-[0.98] press ${
             saveFeedback
               ? 'bg-emerald-600/40 text-emerald-200'
               : 'bg-white hover:bg-white/90 text-black shadow-sm'

@@ -253,7 +253,7 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
           <button
             onClick={onOpenLuminar}
             disabled={isLuminarRunning}
-            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap"
+            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md active:scale-[0.96] press font-medium whitespace-nowrap"
             title="在 Luminar AI 中精修当前照片"
             aria-label="Luminar AI 精修"
           >
@@ -272,7 +272,7 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
           <button
             onClick={onRefreshXmp}
             disabled={isRefreshingXmp}
-            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap"
+            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md active:scale-[0.96] press font-medium whitespace-nowrap"
             title="从 XMP 重新读取外部改动（切回窗口时会自动读取）"
             aria-label="从 XMP 重新读取"
           >
@@ -288,7 +288,7 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
         {onOpenAlbum && (
           <button
             onClick={onOpenAlbum}
-            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 text-white rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap"
+            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 text-white rounded-md active:scale-[0.96] press font-medium whitespace-nowrap"
             title="选片集：把这批照片存成清单，或打开已有的清单"
             aria-label="选片集"
           >
@@ -301,7 +301,7 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
         {onImportLrcat && (
           <button
             onClick={onImportLrcat}
-            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 text-white rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap"
+            className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 text-white rounded-md active:scale-[0.96] press font-medium whitespace-nowrap"
             title="导入 Lightroom 目录（.lrcat）：把 LR 里的评级、旗标、色标对齐到当前文件夹"
             aria-label="导入 Lightroom 目录"
           >
@@ -313,7 +313,7 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
         {/* Batch Export */}
         <button
           onClick={onOpenExportModal}
-          className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 text-white rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap"
+          className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 text-white rounded-md active:scale-[0.96] press font-medium whitespace-nowrap"
           title="批量挑选导出"
           aria-label="批量挑选导出照片"
         >

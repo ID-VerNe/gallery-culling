@@ -133,7 +133,7 @@ export const BAR_ICONS = 'bar-icons';
 /** 带标签的按钮：图标 + 文字，padding 恒定。 */
 export const BAR_BUTTON =
   'focus-ring flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-semibold ' +
-  'active:scale-[0.96] transition-colors';
+  'active:scale-[0.96] press';
 
 /**
  * 纯图标按钮（缩放 / 重置等）：图标明暗跟着整条 bar 走。

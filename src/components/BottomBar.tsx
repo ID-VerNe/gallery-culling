@@ -156,7 +156,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
 
         <button
           onClick={onOpenMetadataModal}
-          className="focus-ring hidden lg:flex items-center gap-1.5 px-2.5 py-1 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white rounded-md font-medium transition-colors"
+          className="focus-ring hidden lg:flex items-center gap-1.5 px-2.5 py-1 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white rounded-md font-medium press"
           title="编辑镜头元数据 (M)"
           aria-label="编辑镜头元数据"
         >
@@ -167,7 +167,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         <button
           onClick={onUndo}
           disabled={!canUndo}
-          className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white disabled:bg-background-surface-hover disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-colors"
+          className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white disabled:bg-background-surface-hover disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium press"
           title={canUndo ? `撤销：${undoSummary} (Ctrl+Z)` : '没有可撤销的改动'}
           aria-label={canUndo ? `撤销：${undoSummary}` : '撤销（没有可撤销的改动）'}
         >
@@ -185,7 +185,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         <button
           onClick={onRedo}
           disabled={!canRedo}
-          className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white disabled:bg-background-surface-hover disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium transition-colors"
+          className="focus-ring flex items-center gap-1.5 px-2.5 py-1 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white disabled:bg-background-surface-hover disabled:text-white/40 disabled:cursor-not-allowed rounded-md font-medium press"
           title={canRedo ? `重做：${redoSummary} (Ctrl+Shift+Z)` : '没有可重做的改动'}
           aria-label={canRedo ? `重做：${redoSummary}` : '重做（没有可重做的改动）'}
         >

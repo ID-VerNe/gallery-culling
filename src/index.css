@@ -51,6 +51,27 @@
   }
 
   /* ---------------------------------------------------------------
+     按下反馈的转场（issue #18 · PB-2 + PB-5）。
+
+     `active:scale-*` 的按下缩放原先配 `transition-colors`——后者
+     的 transition-property 不含 transform，按下/回弹 1 帧硬跳，
+     体感「咯一下」（PB-2）。且 43 处全部回落 Tailwind 默认
+     `cubic-bezier(.4,0,.2,1)`，前 40% 是加速段，对用户主动触发、
+     需立即确认的反馈等于先慢半拍（PB-5，原「全站撤销」改为
+     「按下路径局部复活」，不覆写全局 transitionTimingFunction）。
+
+     property 显式列 7 个 color 族 + transform，**不用 bare
+     `transition`**：bare 会把 opacity/box-shadow/filter/
+     backdrop-filter 也纳进来，43 站点里有状态切换的 opacity/
+     shadow 会被顺带动画（collateral 误伤，已用 postcss 实测）。
+     duration-150（按下反馈要快）、ease-out（decelerate，前段快）。
+     --------------------------------------------------------------- */
+  .press {
+    @apply transition-[color,background-color,border-color,text-decoration-color,fill,stroke,transform]
+           duration-150 ease-out;
+  }
+
+  /* ---------------------------------------------------------------
      Tone sliders
      A 4px drawn track on a 24px hit area. The native `h-1` range is
      only 4px tall — well under any comfortable pointer target.
