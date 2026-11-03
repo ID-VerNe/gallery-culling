@@ -324,3 +324,29 @@ describe('BeforeAfterViewport —— 底栏视觉层级（issue #14）', () => {
     expect(hit.className).not.toMatch(/group-(hover|focus-within)\/bar:bg-/);
   });
 });
+
+/** SH-01（issue #32）：前后对照视口的色标入口也必须鼠标可达。 */
+describe('BeforeAfterViewport —— 色标鼠标入口（SH-01）', () => {
+  it('点击紫点把 Purple 交给宿主（紫色不能只靠 Shift+6）', () => {
+    const onLabel = vi.fn();
+    renderBA({ onLabel });
+
+    fireEvent.click(screen.getByRole('button', { name: '紫色标（快捷 Shift+6）' }));
+
+    expect(onLabel).toHaveBeenCalledTimes(1);
+    expect(onLabel).toHaveBeenCalledWith('Purple');
+  });
+
+  it('aria-pressed 跟随当前色标', () => {
+    renderBA({ group: { ...withJpg('IMG_0001'), label: 'Yellow' }, onLabel: vi.fn() });
+
+    expect(screen.getByRole('button', { name: '黄色标（快捷 7）' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByRole('button', { name: '红色标（快捷 6）' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+});

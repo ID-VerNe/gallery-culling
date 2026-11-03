@@ -15,13 +15,14 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
-import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
+import { PhotoGroupInfo, ToneAdjustments, LumenStatus, ColorLabel } from '../types';
 import { getToneFilterString } from '../utils/autoTone';
 import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from '../utils/viewportZoom';
 import { useViewportImage, type ViewportImage } from '../hooks/useViewportImage';
 import { useDualZoomPan } from '../hooks/useDualZoomPan';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
+import { LabelDots } from './LabelDots';
 
 interface SplitCompareViewportProps {
   leftGroup?: PhotoGroupInfo;
@@ -33,6 +34,11 @@ interface SplitCompareViewportProps {
   onSwap: () => void;
   onRate: (group: PhotoGroupInfo, rating: number) => void;
   onFlag: (group: PhotoGroupInfo, flag: 'pick' | 'reject' | 'none') => void;
+  /**
+   * SH-01：每个窗格各自的色点，**必须带上 group** —— 否则给左图点红标会
+   * 落到右图（单图视口只有一个 currentGroup，双图必须按窗格分流）。
+   */
+  onLabel?: (group: PhotoGroupInfo, label: ColorLabel) => void;
   /** LUMEN RAW 引擎握手状态；可用时 RAW-only 分组走真实解码，与单图视图同口径（M-02）。 */
   lumenStatus?: LumenStatus;
   /** 按分组取当前生效的调色（宿主传 `toneMap[id] ?? group.tone`）；缺失 → 不套 CSS 滤镜。 */
@@ -58,6 +64,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
   onSwap,
   onRate,
   onFlag,
+  onLabel,
   lumenStatus,
   getTone,
   onPrev,
@@ -310,6 +317,18 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             <X className="w-3.5 h-3.5" aria-hidden="true" />
             <span className="text-[10px]">淘汰</span>
           </button>
+
+          {/* 色标（SH-01）：每窗格一组，作用到本窗格自己的 group。 */}
+          {onLabel && (
+            <>
+              <div className="w-px h-3.5 bg-white/25" />
+              <LabelDots
+                label={group.label}
+                onSelect={(label) => onLabel(group, label)}
+                scopeName={group.baseName}
+              />
+            </>
+          )}
         </div>
       </div>
     );

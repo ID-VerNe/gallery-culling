@@ -12,7 +12,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
+import { PhotoGroupInfo, ToneAdjustments, LumenStatus, ColorLabel } from '../types';
 import { api } from '../services/api';
 import { getToneFilterString } from '../utils/autoTone';
 import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from '../utils/viewportZoom';
@@ -22,6 +22,7 @@ import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import type { ViewportEmptyState } from './PreviewViewport';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
 import { ExifCapsule } from './ExifCapsule';
+import { LabelDots } from './LabelDots';
 import {
   BAR_BUTTON,
   BAR_DIVIDER,
@@ -40,6 +41,8 @@ interface BeforeAfterViewportProps {
   isHoldOriginal?: boolean;
   onRate: (rating: number) => void;
   onFlag: (flag: 'pick' | 'reject' | 'none') => void;
+  /** SH-01：底栏色点（鼠标可达），与单图视口同语义。 */
+  onLabel?: (label: ColorLabel) => void;
   onOpenLuminar?: () => void;
   onToggleTonalAdjuster?: () => void;
   isLuminarRunning?: boolean;
@@ -61,6 +64,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
   isHoldOriginal = false,
   onRate,
   onFlag,
+  onLabel,
   onOpenLuminar,
   onToggleTonalAdjuster,
   isLuminarRunning = false,
@@ -458,6 +462,13 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
               <span className={BAR_LABEL}>Reject</span>
             </button>
           </div>
+
+          {/* 色标（SH-01）：鼠标可达的五色入口，与 6–9 / Shift+6 同语义。 */}
+          {onLabel && (
+            <div className={BAR_DIVIDER}>
+              <LabelDots label={group.label} onSelect={onLabel} />
+            </div>
+          )}
         </div>
       </div>
     </div>

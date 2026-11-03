@@ -13,7 +13,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
+import { PhotoGroupInfo, ToneAdjustments, LumenStatus, ColorLabel } from '../types';
 import { getToneFilterString } from '../utils/autoTone';
 import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, isFitScale, scaleLabel } from '../utils/viewportZoom';
 import { useZoomPan } from '../hooks/useZoomPan';
@@ -22,6 +22,7 @@ import { useLumenDetail } from '../hooks/useLumenDetail';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
 import { ExifCapsule } from './ExifCapsule';
+import { LabelDots } from './LabelDots';
 import {
   BAR_BUTTON,
   BAR_DIVIDER,
@@ -42,6 +43,8 @@ interface PreviewViewportProps {
   onNext: () => void;
   onRate: (rating: number) => void;
   onFlag: (flag: 'pick' | 'reject' | 'none') => void;
+  /** SH-01：底栏色点（鼠标可达），语义与 `6`–`9` / `Shift+6` 完全一致。 */
+  onLabel?: (label: ColorLabel) => void;
   onOpenExternal: () => void;
   onOpenLuminar?: () => void;
   onToggleTonalAdjuster?: () => void;
@@ -84,6 +87,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
   onNext,
   onRate,
   onFlag,
+  onLabel,
   onOpenExternal,
   onOpenLuminar,
   onToggleTonalAdjuster,
@@ -559,6 +563,13 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
               <span className={BAR_LABEL}>Reject</span>
             </button>
           </div>
+
+          {/* 色标（SH-01）：鼠标可达的五色入口，与 6–9 / Shift+6 同语义。 */}
+          {onLabel && (
+            <div className={BAR_DIVIDER}>
+              <LabelDots label={group.label} onSelect={onLabel} />
+            </div>
+          )}
 
           {/* Zoom: – / readout / reset / +
               Zoom used to live only on wheel and double-click, both of which

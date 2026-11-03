@@ -41,6 +41,8 @@ function setup() {
     onHoldOriginalStart: vi.fn(),
     onHoldOriginalEnd: vi.fn(),
     onFocusSearch: vi.fn(),
+    onNotify: vi.fn(),
+    onLabel: vi.fn(),
   };
   renderHook(() => useKeyboardShortcuts(handlers));
   return handlers;
@@ -64,15 +66,49 @@ describe('useKeyboardShortcuts 守卫作用域', () => {
     expect(h.onRate).toHaveBeenCalledWith(1);
   });
 
-  it('按钮聚焦时空格不触发「设为基准」，且不阻止默认', () => {
+  /**
+   * SH-03（issue #32）：空格必须「不吞键」——点击底栏按钮后焦点留在按钮上，
+   * 此时按空格过去会静默 return（不触发、不阻止默认、无反馈）。现在必须
+   * 照常设为基准、阻止原生重复激活，并给一条可感知反馈。
+   */
+  it('按钮聚焦时空格仍触发「设为基准」，并阻止默认、给出反馈', () => {
     const h = setup();
     const button = mount(document.createElement('button'));
 
     const notPrevented = fireEvent.keyDown(button, { key: ' ' });
 
-    expect(h.onTogglePinCurrent).not.toHaveBeenCalled();
-    // 不 preventDefault，原生按钮才能被空格激活。
-    expect(notPrevented).toBe(true);
+    expect(h.onTogglePinCurrent).toHaveBeenCalledTimes(1);
+    // fireEvent 返回 false = preventDefault 已调用。
+    expect(notPrevented).toBe(false);
+    expect(h.onNotify).toHaveBeenCalledTimes(1);
+    expect(h.onNotify).toHaveBeenCalledWith('已切换对比基准。');
+  });
+
+  it('链接聚焦时空格同样不吞键（设为基准 + 阻止默认）', () => {
+    const h = setup();
+    const link = mount(document.createElement('a'));
+    link.href = '#';
+    link.textContent = '示例链接';
+
+    const notPrevented = fireEvent.keyDown(link, { key: ' ' });
+
+    expect(h.onTogglePinCurrent).toHaveBeenCalledTimes(1);
+    expect(notPrevented).toBe(false);
+    expect(h.onNotify).toHaveBeenCalledTimes(1);
+  });
+
+  it('role=option 聚焦时空格同样不吞键（宫格外层 listbox 之外的选项语义）', () => {
+    const h = setup();
+    const option = mount(document.createElement('div'));
+    option.setAttribute('role', 'option');
+    option.tabIndex = 0;
+    option.focus();
+
+    const notPrevented = fireEvent.keyDown(option, { key: ' ' });
+
+    expect(h.onTogglePinCurrent).toHaveBeenCalledTimes(1);
+    expect(notPrevented).toBe(false);
+    expect(h.onNotify).toHaveBeenCalledTimes(1);
   });
 
   it('宫格 listbox 内空格仍为设为基准（listbox 不进守卫）', () => {
@@ -161,6 +197,39 @@ describe('useKeyboardShortcuts 守卫作用域', () => {
 
     fireEvent.keyDown(document.body, { key: 'f', ctrlKey: true });
     expect(h.onFocusSearch).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * SH-01（issue #32）：色标的鼠标入口不能改变既有键盘路径。
+ *
+ * 6/7/8/9 仍是红/黄/绿/蓝，Shift+6 仍按 `e.code === 'Digit6'` 判紫色 ——
+ * 美式布局下 `Shift+6` 的 `e.key` 是 `^`，所以这里刻意用 `key: '^'`。
+ */
+describe('useKeyboardShortcuts —— 色标键位不受鼠标入口影响', () => {
+  it.each([
+    ['6', 'Red'],
+    ['7', 'Yellow'],
+    ['8', 'Green'],
+    ['9', 'Blue'],
+  ] as const)('按 %s 触发 %s 色标并阻止默认', (key, expected) => {
+    const h = setup();
+    const notPrevented = fireEvent.keyDown(document.body, { key });
+    expect(h.onLabel).toHaveBeenCalledTimes(1);
+    expect(h.onLabel).toHaveBeenCalledWith(expected);
+    expect(notPrevented).toBe(false);
+  });
+
+  it('Shift+6 仍为紫色（按物理键位 Digit6 判定，不依赖 e.key）', () => {
+    const h = setup();
+    const notPrevented = fireEvent.keyDown(document.body, {
+      key: '^',
+      code: 'Digit6',
+      shiftKey: true,
+    });
+    expect(h.onLabel).toHaveBeenCalledTimes(1);
+    expect(h.onLabel).toHaveBeenCalledWith('Purple');
+    expect(notPrevented).toBe(false);
   });
 });
 
