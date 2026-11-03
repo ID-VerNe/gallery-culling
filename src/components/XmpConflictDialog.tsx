@@ -45,7 +45,7 @@ function baseNameOf(path: string): string {
 /** 三项标记的紧凑展示：星级 + 旗标 + 色标点。 */
 const StateView: React.FC<{ state: CullStateSnapshot }> = ({ state }) => (
   <span className="flex items-center gap-2 flex-wrap">
-    <span className="font-mono tracking-tight text-white/85">{stars(state.rating)}</span>
+    <span className="font-mono text-white/85">{stars(state.rating)}</span>
     {state.flag === 'pick' && <span className="text-emerald-300">保留</span>}
     {state.flag === 'reject' && <span className="text-rose-300">淘汰</span>}
     {isColorLabel(state.label) && (

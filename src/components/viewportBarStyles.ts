@@ -95,7 +95,10 @@ export const BAR_PLATE =
 export const BAR_HIT_AREA =
   'absolute -inset-x-3 -inset-y-2 ' +
   'bg-transparent ' +
-  'rounded-xl pointer-events-auto';
+  // PA-8（issue #18）：命中层纯透明、不绘制，不该带圆角——`rounded-xl` 让它在
+  // 悬停瞬间多出一层「形」，与「命中层不该有形」的注释自相矛盾。去掉圆角，
+  // 它只负责把 hit 判定外扩一圈，视觉重量恒为 0。
+  'pointer-events-auto';
 
 /** 分组分隔线：padding 常驻（`pr-3`），展开只让右键线变色。 */
 export const BAR_DIVIDER =

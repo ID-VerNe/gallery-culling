@@ -15,7 +15,7 @@ const ToastRow: React.FC<{ toast: Toast; onDismiss: (id: number) => void }> = ({
       return (
         <div
           key={toast.id}
-          className={`pointer-events-auto w-full flex items-start gap-2.5 rounded-lg border px-3.5 py-2.5 shadow-2xl backdrop-blur-md transition-opacity duration-200 ${style.wrap}`}
+          className={`pointer-events-auto w-full flex items-start gap-2.5 rounded-lg border px-3.5 py-2.5 shadow-2xl backdrop-blur-md ${style.wrap}`}
         >
           {style.icon}
           <span className="sr-only">{style.label}：</span>

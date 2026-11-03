@@ -10,6 +10,12 @@
     -webkit-font-smoothing: antialiased;
     @apply text-white overflow-hidden;
   }
+  /* PC-5：大字负字距兜底。字距须随字号反向变化——18–20px 起字形间隙相对
+     字高变大，观感「散」。本仓 ErrorBoundary 的 h1(text-xl) 与 LrcatDialog
+     的统计数(text-lg)都无 tracking，这里给 h1/h2 一条兜底，不必逐处补。 */
+  h1, h2 {
+    letter-spacing: -0.02em;
+  }
 }
 
 /* Custom scrollbars */
@@ -140,7 +146,15 @@
 
   .active\:scale-95:active,
   .active\:scale-\[0\.96\]:active,
-  .active\:scale-\[0\.98\]:active {
+  .active\:scale-\[0\.98\]:active,
+  .active\:scale-\[0\.99\]:active {
+    transform: none !important;
+  }
+
+  /* PD-11：上面的逐个列举必然漏（AlbumDialog 的 active:scale-[0.99] 就漏过）。
+     通配覆盖所有 active:scale-* 变体——降级时按下缩放一律取消，让颜色/透明度
+     承担状态。列举版保留在上方作历史对照，新增任意 active:scale-[NNN] 都被通配兜住。 */
+  [class*="active:scale-"]:active {
     transform: none !important;
   }
 
@@ -265,7 +279,7 @@
   :root {
     --color-border-subtle: rgb(255 255 255 / 22%);
     --color-border-default: rgb(255 255 255 / 45%);
-    --color-border-strong: rgb(255 255 255 / 70%);
+    /* PD-5：--color-border-strong 令牌零使用已删（issue #18），这里同步去掉覆盖。 */
     --color-scrollbar-thumb: rgb(255 255 255 / 40%);
     /* Toast 底色（issue #18 · PC-3）：基线 28 28 28 在高对比下与 #0A0A0A app
        底色对比不足，这里提到 40 让面板从页面底色里浮起。原先硬编码 #1c1c1c

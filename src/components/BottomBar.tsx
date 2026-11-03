@@ -73,7 +73,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
       <div className="flex items-center gap-3 select-text min-w-0">
         {currentGroup ? (
           <>
-            <div className="flex items-center gap-1.5 font-mono text-white min-w-0">
+            <div className="flex items-center gap-1.5 font-mono tabular-nums text-white min-w-0">
               <span className="font-semibold truncate">{currentGroup.baseName}</span>
               <span className="text-white/60 shrink-0">
                 ({currentGroup.status === 'COMPLETE'

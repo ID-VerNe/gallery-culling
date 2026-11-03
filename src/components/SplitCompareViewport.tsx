@@ -454,7 +454,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             e.stopPropagation();
             onPrev();
           }}
-          className="focus-ring absolute left-3 top-1/2 -translate-y-1/2 p-3 z-20 bg-background-base/70 hover:bg-background-base/90 active:scale-[0.96] text-white rounded-full transition-colors backdrop-blur-sm pointer-events-auto"
+          className="focus-ring absolute left-3 top-1/2 -translate-y-1/2 p-3 z-20 bg-background-base/70 hover:ring-1 hover:ring-white/25 active:scale-[0.96] text-white rounded-full transition-colors backdrop-blur-sm pointer-events-auto"
           title="上一张 (A / ←)"
           aria-label="上一张照片（快捷键 A 或 ←）"
         >
@@ -467,7 +467,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             e.stopPropagation();
             onNext();
           }}
-          className="focus-ring absolute right-3 top-1/2 -translate-y-1/2 p-3 z-20 bg-background-base/70 hover:bg-background-base/90 active:scale-[0.96] text-white rounded-full transition-colors backdrop-blur-sm pointer-events-auto"
+          className="focus-ring absolute right-3 top-1/2 -translate-y-1/2 p-3 z-20 bg-background-base/70 hover:ring-1 hover:ring-white/25 active:scale-[0.96] text-white rounded-full transition-colors backdrop-blur-sm pointer-events-auto"
           title="下一张 (D / →)"
           aria-label="下一张照片（快捷键 D 或 →）"
         >
