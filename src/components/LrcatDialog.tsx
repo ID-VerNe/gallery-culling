@@ -149,15 +149,15 @@ export const LrcatDialog: React.FC<LrcatDialogProps> = ({
             {/* 匹配结果 */}
             <div className="grid grid-cols-3 gap-2 text-center">
               <div className="rounded-md bg-white/5 px-2 py-2">
-                <div className="text-lg font-medium text-white">{plan?.items.length ?? 0}</div>
+                <div className="text-lg font-medium tabular-nums tracking-[-0.01em] text-white">{plan?.items.length ?? 0}</div>
                 <div className="text-[11px] text-white/50">能对上</div>
               </div>
               <div className="rounded-md bg-white/5 px-2 py-2">
-                <div className="text-lg font-medium text-white">{plan?.missingInLr ?? 0}</div>
+                <div className="text-lg font-medium tabular-nums tracking-[-0.01em] text-white">{plan?.missingInLr ?? 0}</div>
                 <div className="text-[11px] text-white/50">LR 里没有</div>
               </div>
               <div className="rounded-md bg-white/5 px-2 py-2">
-                <div className="text-lg font-medium text-white">{plan?.unmatched.length ?? 0}</div>
+                <div className="text-lg font-medium tabular-nums tracking-[-0.01em] text-white">{plan?.unmatched.length ?? 0}</div>
                 <div className="text-[11px] text-white/50">当前目录没有</div>
               </div>
             </div>

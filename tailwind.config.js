@@ -19,7 +19,7 @@ export default {
            * `10 10 10`（即 #0A0A0A），`/NN` 由 Tailwind 填进 `<alpha-value>`。
            * 原令牌 `--color-bg-base` 保留，供内联 style / 直接 var() 引用。
            *
-           * 其余 background/border/button 色零处使用 `/NN`，保持 `var()` 不动
+           * 其余 background/border 色零处使用 `/NN`，保持 `var()` 不动
            * （地盘见 `scripts/check-theme-alpha.mjs` 的动态扫描）。
            */
           base: 'rgb(var(--color-bg-base-rgb) / <alpha-value>)',
@@ -34,14 +34,10 @@ export default {
           toast: 'rgb(var(--color-bg-toast-rgb) / <alpha-value>)',
         },
         border: {
+          // PD-5（issue #18）：strong 零使用已删；只保留 subtle/default。
           subtle: 'var(--color-border-subtle)',
           default: 'var(--color-border-default)',
-          strong: 'var(--color-border-strong)',
         },
-        button: {
-          DEFAULT: 'var(--color-bg-button)',
-          hover: 'var(--color-bg-button-hover)',
-        }
       }
     },
   },

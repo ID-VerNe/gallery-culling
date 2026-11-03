@@ -241,7 +241,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
               从不渲染）—— 用户不知道"批量评级会作用到几张"，只能靠逐个高亮去数。
               与命中数同处一个 live region，一起播报。 */}
           {multiSelectEnabled && activeIds.size > 0 && (
-            <span className="ml-1 text-white/50">· 已选 {activeIds.size}</span>
+            <span className="ml-1 tabular-nums text-white/50">· 已选 {activeIds.size}</span>
           )}
         </span>
 
@@ -796,7 +796,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
               e.stopPropagation();
               onRetrySync(group);
             }}
-            className="absolute top-6 right-1 bg-rose-500/90 hover:bg-rose-500 text-white rounded px-1 min-h-6 text-[10px] font-medium shadow-sm"
+            className="focus-ring absolute top-6 right-1 bg-rose-500/90 hover:bg-rose-500 text-white rounded px-1 min-h-6 text-[10px] font-medium shadow-sm"
             title="未同步到 XMP 侧边栏，点击重试"
             aria-label="未同步到 XMP 侧边栏，点击重试同步"
           >

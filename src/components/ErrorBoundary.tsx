@@ -46,15 +46,15 @@ export class ErrorBoundary extends React.Component<Props, State> {
     return (
       <div
         role="alert"
-        className="flex h-screen w-screen flex-col items-center justify-center gap-4 bg-neutral-900 p-8 text-neutral-100"
+        className="flex h-screen w-screen flex-col items-center justify-center gap-4 bg-background-base p-8 text-white"
       >
         <h1 className="text-xl font-semibold">出了点问题</h1>
-        <p className="max-w-md text-center text-sm text-neutral-400">
+        <p className="max-w-md text-center text-sm text-white/60">
           应用在渲染照片数据时遇到了一个无法恢复的错误，通常是某张照片的元数据
           读取失败所致。你的评级与旗标都已写入 XMP，不会丢失。
         </p>
         {this.state.message ? (
-          <p className="max-w-md break-words text-center font-mono text-xs text-neutral-500">
+          <p className="max-w-md break-words text-center font-mono text-xs text-white/45">
             {this.state.message}
           </p>
         ) : null}
