@@ -28,6 +28,7 @@ import { useXmpRefresh } from './hooks/useXmpRefresh';
 import { useAlbum } from './hooks/useAlbum';
 import { useLrcatImport } from './hooks/useLrcatImport';
 import { useToneEditing } from './hooks/useToneEditing';
+import { useSidebarCrossFade, type SidebarPanel } from './hooks/useSidebarCrossFade';
 import { useToneBatch } from './hooks/useToneBatch';
 import { useTaskMutex, useActivity, TaskMutexProvider } from './hooks/useTaskMutex';
 import { useSessionDebounce } from './hooks/useSessionDebounce';
@@ -317,6 +318,15 @@ function AppShell() {
     toneDirty,
     discardToneEditsFor,
   } = tone;
+
+  /**
+   * PB-13：右侧栏交叉淡入。
+   * `tonalPanelVisible` 是面板可见真值；切换时退场面板在 EXIT_MS 内仍挂载、
+   * 标 `data-exiting`，进场面板同位叠放，由 CSS opacity 过渡完成交叉淡入。
+   * 不做位移（390px 位移会过冲）。presence 机制见 `useSidebarCrossFade`。
+   */
+  const sidebarActive: SidebarPanel = tonalPanelVisible ? 'tonal' : 'grid';
+  const sidebarFade = useSidebarCrossFade(sidebarActive);
 
   /**
    * FR-07：把当前面板的 6 个调色参数套用到其余选中照片。
@@ -723,70 +733,103 @@ function AppShell() {
             onNext={guardedNext}
           />
         )}        {/* Right Sidebar (Thumbnail Grid OR Tonal Adjuster) */}
-        <div className="w-[390px] h-full shrink-0 bg-background-base">
-          {tonalPanelVisible ? (
-            <TonalAdjuster
-              tone={currentTone || DEFAULT_TONE}
-              onChange={handleToneChange}
-              onReset={handleResetTone}
-              onAuto={handleAutoTone}
-              autoTonePending={isAutoToning}
-              onSave={handleSaveTone}
-              isSaving={isSavingTone}
-              divergent={toneDivergent}
-              masks={lumen.masks}
-              onApplyMask={
-                lumen.caps?.aiMasks && lumenAvailable
-                  ? handleApplyLumenMask
-                  : undefined
-              }
-              lumenPresets={lumen.caps?.presets ?? []}
-              aiAvailable={lumen.caps?.aiMasks ?? false}
-              /* 换照片（含箭头键切图，面板不卸载）时重置「已套用预设」显示 */
-              photoId={currentGroup?.id}
-              onApplyPreset={lumenAvailable ? handleApplyLumenPreset : undefined}
-              onClose={closeTonePanel}
-              dirty={toneDirty}
-              selectedCount={selectedIds.size}
-              onApplyToSelected={({ writeLumen }) =>
-                void toneBatch.runApplyTone({ writeLumen })
-              }
-              applying={toneBatch.toneBatchProgress !== null}
-            />
-          ) : (
-            <ThumbnailGrid
-              groups={visibleGroups}
-              selectedIndex={selectedVisibleIndex}
-              pinnedId={pinnedId}
-              onSelect={guardedSelect}
-              searchQuery={gridSearch}
-              searchOpen={gridSearchOpen}
-              searchFocusToken={gridSearchFocusToken}
-              onSearchQueryChange={setGridSearch}
-              onFilterReset={() => setFilterMode('all')}
-              queryParse={queryParse}
-              queryExifMissing={
-                // 只在查询用到相机参数时才算 —— 否则一打开选片集就先提示
-                // 「N 张没参数」，与用户当下要做的事无关。正常情况是 0
-                // （后端读配对 JPG，0.14 ms/张），非 0 才值得说出来。
-                usesExifField(queryParse) ? groups.filter((g) => !g.exif).length : 0
-              }
-              onSearchOpenChange={(open) => {
-                setGridSearchOpen(open);
-                if (!open) setGridSearch('');
-                else setGridSearchFocusToken((t) => t + 1);
-              }}
-              totalLoaded={filteredGroups.length}
-              lumenThumbnails={lumen.gridThumbs}
-              candidateId={rightCompareGroup?.id}
-              /* B1：多选（Ctrl/Shift 点选、Ctrl+A、方向键重置为单选） */
-              selectedIds={selectedIds}
-              onSelectionChange={setSelectedIds}
-              /* B6：写盘失败的照片显示持久"未同步"角标 + 点击重试 */
-              unsyncedIds={unsyncedIds}
-              onRetrySync={handleRetrySync}
-            />
-          )}
+        {/* PB-13：交叉淡入。容器相对定位，两面绝对叠放，opacity 过渡；退场面板
+            在 EXIT_MS 内仍挂载并标 data-exiting，由 useSidebarCrossFade 管理。
+            duration-200 与底栏 viewportBarStyles.ts:83 同层同速。 */}
+        <div
+          data-testid="right-sidebar"
+          className="relative w-[390px] h-full shrink-0 bg-background-base overflow-hidden transition-opacity duration-200"
+        >
+          {sidebarFade.mounted.map((panel) => {
+            const isExiting = panel.exiting;
+            // 进场的 opacity-100；退场的 opacity-0。两者都走 duration-200。
+            const layerClass =
+              'absolute inset-0 transition-opacity duration-200 ease-out ' +
+              (isExiting ? 'opacity-0' : 'opacity-100');
+            const dataExiting = isExiting ? 'true' : null;
+            if (panel.key === 'tonal') {
+              return (
+                <div
+                  key="tonal"
+                  data-testid="sidebar-tonal"
+                  data-exiting={dataExiting}
+                  className={layerClass}
+                  aria-hidden={isExiting ? 'true' : undefined}
+                >
+                  <TonalAdjuster
+                    tone={currentTone || DEFAULT_TONE}
+                    onChange={handleToneChange}
+                    onReset={handleResetTone}
+                    onAuto={handleAutoTone}
+                    autoTonePending={isAutoToning}
+                    onSave={handleSaveTone}
+                    isSaving={isSavingTone}
+                    divergent={toneDivergent}
+                    masks={lumen.masks}
+                    onApplyMask={
+                      lumen.caps?.aiMasks && lumenAvailable
+                        ? handleApplyLumenMask
+                        : undefined
+                    }
+                    lumenPresets={lumen.caps?.presets ?? []}
+                    aiAvailable={lumen.caps?.aiMasks ?? false}
+                    /* 换照片（含箭头键切图，面板不卸载）时重置「已套用预设」显示 */
+                    photoId={currentGroup?.id}
+                    onApplyPreset={lumenAvailable ? handleApplyLumenPreset : undefined}
+                    onClose={closeTonePanel}
+                    dirty={toneDirty}
+                    selectedCount={selectedIds.size}
+                    onApplyToSelected={({ writeLumen }) =>
+                      void toneBatch.runApplyTone({ writeLumen })
+                    }
+                    applying={toneBatch.toneBatchProgress !== null}
+                  />
+                </div>
+              );
+            }
+            return (
+              <div
+                key="grid"
+                data-testid="sidebar-grid"
+                data-exiting={dataExiting}
+                className={layerClass}
+                aria-hidden={isExiting ? 'true' : undefined}
+              >
+                <ThumbnailGrid
+                  groups={visibleGroups}
+                  selectedIndex={selectedVisibleIndex}
+                  pinnedId={pinnedId}
+                  onSelect={guardedSelect}
+                  searchQuery={gridSearch}
+                  searchOpen={gridSearchOpen}
+                  searchFocusToken={gridSearchFocusToken}
+                  onSearchQueryChange={setGridSearch}
+                  onFilterReset={() => setFilterMode('all')}
+                  queryParse={queryParse}
+                  queryExifMissing={
+                    // 只在查询用到相机参数时才算 —— 否则一打开选片集就先提示
+                    // 「N 张没参数」，与用户当下要做的事无关。正常情况是 0
+                    // （后端读配对 JPG，0.14 ms/张），非 0 才值得说出来。
+                    usesExifField(queryParse) ? groups.filter((g) => !g.exif).length : 0
+                  }
+                  onSearchOpenChange={(open) => {
+                    setGridSearchOpen(open);
+                    if (!open) setGridSearch('');
+                    else setGridSearchFocusToken((t) => t + 1);
+                  }}
+                  totalLoaded={filteredGroups.length}
+                  lumenThumbnails={lumen.gridThumbs}
+                  candidateId={rightCompareGroup?.id}
+                  /* B1：多选（Ctrl/Shift 点选、Ctrl+A、方向键重置为单选） */
+                  selectedIds={selectedIds}
+                  onSelectionChange={setSelectedIds}
+                  /* B6：写盘失败的照片显示持久"未同步"角标 + 点击重试 */
+                  unsyncedIds={unsyncedIds}
+                  onRetrySync={handleRetrySync}
+                />
+              </div>
+            );
+          })}
         </div>
       </div>
 
