@@ -62,10 +62,12 @@ export const VARIANT_STYLES: Record<
     label: '错误',
   },
   info: {
-    // E5：原 `border-white/15` + `#141414/95` 与背景 #0A0A0A 仅约 1.48:1 / 1.07:1，
-    // 面板几乎与页面同色。提升边框到 white/35（≈3.1:1）并略提亮面板底色，
-    // 使通知边界可辨；error/success 的既有视觉保持不变。
-    wrap: 'border-white/35 bg-[#1c1c1c]/95 text-white',
+    // E5 / PC-3：原 `border-white/15` + `#141414/95` 与背景 #0A0A0A 仅约 1.48:1 / 1.07:1，
+    // 面板几乎与页面同色。提升边框到 white/35（≈3.1:1）；面板底色改走
+    // `bg-background-toast/95` 令牌（issue #18 · PC-3），原先硬编码 #1c1c1c/95 是
+    // 全仓唯一硬编码色值，绕过 prefers-contrast: more 的 :root 覆盖——令牌化后
+    // 高对比下底色受控，正常态视觉不变（令牌值 28 28 28 = #1c1c1c）。
+    wrap: 'border-white/35 bg-background-toast/95 text-white',
     icon: <Info className="w-4 h-4 shrink-0 text-white/70" />,
     label: '提示',
   },

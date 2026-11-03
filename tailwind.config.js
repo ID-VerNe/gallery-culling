@@ -28,6 +28,10 @@ export default {
           header: 'var(--color-bg-header)',
           panel: 'var(--color-bg-panel)',
           input: 'var(--color-bg-input)',
+          // issue #18 · PC-3：Toast 唯一需要 /NN 的面板底色。与 base 同构——
+          // 通道三元组令牌 + <alpha-value>，否则 bg-background-toast/95 会被
+          // Tailwind 静默丢弃（issue #15 的同一类陷阱）。
+          toast: 'rgb(var(--color-bg-toast-rgb) / <alpha-value>)',
         },
         border: {
           subtle: 'var(--color-border-subtle)',

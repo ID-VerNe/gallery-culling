@@ -140,7 +140,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
 
         <div className="flex items-center gap-2 shrink-0">
           {/* Zoom controls */}
-          <div className="flex items-center gap-0.5 bg-white/10 rounded text-[11px]">
+          <div className="flex items-center gap-0.5 bg-background-surface rounded text-[11px]">
             <button
               onClick={() => zoom.zoomBy(1 / ZOOM_STEP)}
               disabled={effectiveScale <= ZOOM_MIN}

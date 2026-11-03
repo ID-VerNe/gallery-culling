@@ -535,7 +535,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
               className={`${BAR_BUTTON} ${BAR_ICONS} ${
                 group.flag === 'pick'
                   ? 'bg-emerald-600/40 text-emerald-300 border border-emerald-500/50'
-                  : 'bg-white/10 text-white/80 hover:bg-white/20 border border-transparent'
+                  : 'bg-transparent text-white/80 hover:bg-white/20 border border-transparent'
               }`}
               title="保留 (P)"
               aria-label="标记保留 (Pick)"
@@ -549,7 +549,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
               className={`${BAR_BUTTON} ${BAR_ICONS} ${
                 group.flag === 'reject'
                   ? 'bg-rose-600/40 text-rose-300 border border-rose-500/50'
-                  : 'bg-white/10 text-white/80 hover:bg-white/20 border border-transparent'
+                  : 'bg-transparent text-white/80 hover:bg-white/20 border border-transparent'
               }`}
               title="淘汰 (X)"
               aria-label="标记淘汰 (Reject)"
