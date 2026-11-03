@@ -28,7 +28,7 @@ const photo = (i: number) => ({
   label: '', hasXmp: false,
 });
 
-function mockStartup() {
+function mockStartup(groups = [photo(1), photo(2), photo(3), photo(4)]) {
   mockInvokeCommand('get_settings_cmd', {
     defaultJpgFolder: 'D:/shoot/JPG',
     defaultRawFolder: '',
@@ -53,8 +53,8 @@ function mockStartup() {
   });
   mockInvokeCommand('update_rating_flag_cmd', true);
   mockInvokeCommand('scan_folders_cmd', {
-    groups: [photo(1), photo(2), photo(3), photo(4)],
-    totalFiles: 8,
+    groups,
+    totalFiles: groups.length * 2,
     skippedFiles: 0,
   });
 }
@@ -131,5 +131,32 @@ describe('空格设基准 —— 落在当前照片', () => {
     await waitFor(() => expect(pinnedPositions()).toEqual([1]));
     fireEvent.keyDown(document.body, { key: ' ' });
     await waitFor(() => expect(pinnedPositions()).toEqual([]));
+  });
+
+  /**
+   * issue #35：没有当前照片时 `togglePinCurrent` 是 no-op，此时不能播报
+   * 「已切换对比基准。」——否则用户会以为基准变了，而界面上什么都没发生。
+   */
+  it('★扫描出 0 张照片时按空格：不播报「已切换对比基准」', async () => {
+    mockStartup([]);
+    render(<App />);
+    const btn = await screen.findByRole('button', { name: /扫描照片目录/ });
+    await waitFor(() => expect(btn).toBeEnabled());
+    fireEvent.click(btn);
+    await screen.findByText(/扫描完成/);
+
+    fireEvent.keyDown(document.body, { key: ' ' });
+
+    expect(screen.queryByText('已切换对比基准。')).toBeNull();
+  });
+
+  /** 反向锁：真正钉住时 SH-03 的成功反馈必须还在，不能被 #35 一起删掉。 */
+  it('★真正钉住当前照片时仍播报「已切换对比基准」', async () => {
+    await scanTo(1);
+
+    fireEvent.keyDown(document.body, { key: ' ' });
+
+    await screen.findByText('已切换对比基准。');
+    await waitFor(() => expect(pinnedPositions()).toEqual([1]));
   });
 });

@@ -234,6 +234,60 @@ describe('useKeyboardShortcuts —— 色标键位不受鼠标入口影响', () 
 });
 
 /**
+ * issue #35（PR #33 的后续）：空格反馈必须与「pin 是否真的生效」绑定。
+ *
+ * `useComparePin` 在没有 currentGroup 时是 no-op；过去 hook 仍然播报
+ * 「已切换对比基准。」，属于误导性反馈。现在通过回调返回值传递唯一真值：
+ * 返回 `false` = 没生效、不播报；`true` 或历史的 `void` = 播报。
+ */
+describe('useKeyboardShortcuts —— 空格反馈只在真正生效时播报（#35）', () => {
+  function setupPin(pin: () => boolean | void) {
+    const onTogglePinCurrent = vi.fn(pin);
+    const onNotify = vi.fn();
+    renderHook(() =>
+      useKeyboardShortcuts({
+        onPrev: vi.fn(),
+        onNext: vi.fn(),
+        onRate: vi.fn(),
+        onFlag: vi.fn(),
+        onOpenExternal: vi.fn(),
+        onToggleCompare: vi.fn(),
+        onTogglePinCurrent,
+        onNotify,
+      }),
+    );
+    return { onTogglePinCurrent, onNotify };
+  }
+
+  it('pin 为 no-op（返回 false）时不播报「已切换对比基准」', () => {
+    const h = setupPin(() => false);
+
+    fireEvent.keyDown(document.body, { key: ' ' });
+
+    expect(h.onTogglePinCurrent).toHaveBeenCalledTimes(1);
+    expect(h.onNotify).not.toHaveBeenCalled();
+  });
+
+  it('pin 成功（返回 true）时仍播报，防止把 SH-03 的反馈修没', () => {
+    const h = setupPin(() => true);
+
+    fireEvent.keyDown(document.body, { key: ' ' });
+
+    expect(h.onTogglePinCurrent).toHaveBeenCalledTimes(1);
+    expect(h.onNotify).toHaveBeenCalledTimes(1);
+    expect(h.onNotify).toHaveBeenCalledWith('已切换对比基准。');
+  });
+
+  it('旧调用方返回 void 时保持播报（独立使用本 hook 的向后兼容）', () => {
+    const h = setupPin(() => undefined);
+
+    fireEvent.keyDown(document.body, { key: ' ' });
+
+    expect(h.onNotify).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
  * FR-05：`Z` = 1:1 细节开关。
  *
  * 这条键位与 `Ctrl+Z`（撤销）只差一个修饰键，所以最需要锁死的是
