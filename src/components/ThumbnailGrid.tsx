@@ -226,7 +226,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   return (
     <div className="h-full w-full flex flex-col bg-background-base border-l border-border-default select-none">
       {/* Top Header & Column Switcher */}
-      <div className="px-2.5 py-1 bg-background-base border-b border-border-default flex items-center justify-between text-xs text-white/80 shrink-0 gap-2 min-h-9">
+      <div className="px-2.5 py-1 bg-background-base border-b border-border-default flex items-center justify-between text-xs text-white/80 shrink-0 gap-3 min-h-9">
         {/* B8：命中数是"状态"，加 role=status/aria-live 让读屏在搜索收窄时播报。 */}
         <span
           role="status"
@@ -241,11 +241,11 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
               从不渲染）—— 用户不知道"批量评级会作用到几张"，只能靠逐个高亮去数。
               与命中数同处一个 live region，一起播报。 */}
           {multiSelectEnabled && activeIds.size > 0 && (
-            <span className="ml-1.5 text-white/60">· 已选 {activeIds.size}</span>
+            <span className="ml-1 text-white/50">· 已选 {activeIds.size}</span>
           )}
         </span>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
           {/* Search toggle (progressive disclosure) */}
           {onSearchOpenChange && (
             <button
@@ -264,7 +264,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
             </button>
           )}
 
-          <div className="flex items-center bg-background-base p-0.5 rounded-lg border border-border-default">
+          <div className="flex items-center bg-background-base p-0.5 rounded-md border border-border-default">
             <button
               onClick={() => setColumns(3)}
               className={`focus-ring flex items-center gap-1 px-2 min-h-7 rounded text-[10px] transition-colors ${
@@ -372,7 +372,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
         <div
           role="note"
           aria-label="角标图例：R 表示 RAW 原片，X 表示已有 XMP 侧边栏，T 表示已调色，E 表示有精修成果"
-          className="px-2.5 py-1 border-b border-border-default flex items-center gap-2 text-[9px] text-white/60 shrink-0 flex-wrap"
+          className="px-2.5 py-1 border-b border-border-default flex items-center gap-2 text-[10px] text-white/60 shrink-0 flex-wrap"
         >
           <span className="flex items-center gap-0.5">
             <span className="font-medium text-white">R</span>RAW
@@ -663,6 +663,10 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
   // 三态：`null` 加载中 · `undefined` 两条路都失败 · 字符串 有图。
   // 之前用 null 同时表示"加载中"和"失败"，回落也失败时格子会永远显示加载中。
   const [thumbSrc, setThumbSrc] = useState<string | null | undefined>(null);
+  // PB-3：按下即时反馈。原实现只有 onMouseDown preventDefault + onClick 选中，
+  // 按住期间零响应（用户感知「点了没反应」）。onPointerDown 立即加 pressed 态，
+  // pointerUp/Leave 复位 —— 选中态仍在 onClick 落定，避免与点击解耦。
+  const [pressed, setPressed] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -737,8 +741,13 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
       // activedescendant 契约失效）；同时在 mousedown 上 preventDefault，
       // 阻止点击把焦点从容器移走 —— 点击后方向键仍能继续导航。
       onMouseDown={(e) => e.preventDefault()}
+      onPointerDown={() => setPressed(true)}
+      onPointerUp={() => setPressed(false)}
+      onPointerLeave={() => setPressed(false)}
       onClick={onClick}
       className={`relative rounded-lg flex flex-col overflow-hidden cursor-pointer transition-[border-color,transform] border text-left bg-background-surface-hover hover:bg-white/10 ${
+        pressed ? 'scale-[0.985]' : ''
+      } ${
         isPinned
           ? 'border-white/90 ring-1 ring-inset ring-white/90'
           : isSelected
@@ -775,7 +784,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
         )}
 
         {/* Top-Right Index */}
-        <div className="absolute top-1 right-1 bg-background-base/75 backdrop-blur px-1 py-[2px] rounded text-[9px] font-mono text-white/80 tabular-nums">
+        <div className="absolute top-1 right-1 bg-background-base/75 backdrop-blur px-1 py-[2px] rounded text-[10px] font-mono text-white/80 tabular-nums">
           #{index + 1}
         </div>
 
@@ -787,7 +796,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
               e.stopPropagation();
               onRetrySync(group);
             }}
-            className="absolute top-6 right-1 bg-rose-500/90 hover:bg-rose-500 text-white rounded px-1 min-h-6 text-[8px] font-medium shadow-sm"
+            className="absolute top-6 right-1 bg-rose-500/90 hover:bg-rose-500 text-white rounded px-1 min-h-6 text-[10px] font-medium shadow-sm"
             title="未同步到 XMP 侧边栏，点击重试"
             aria-label="未同步到 XMP 侧边栏，点击重试同步"
           >
@@ -798,7 +807,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
         {/* Top-Left: Pinned / Pick / Reject badge + 色标色点 */}
         <div className="absolute top-1 left-1 flex items-center gap-1">
           {isPinned ? (
-            <div className="bg-white text-black rounded px-1 py-[2px] flex items-center gap-0.5 text-[9px] font-medium">
+            <div className="bg-white text-black rounded px-1 py-[2px] flex items-center gap-0.5 text-[10px] font-medium">
               <Pin className="w-2.5 h-2.5 fill-black" aria-hidden="true" />
               <span>基准</span>
             </div>
@@ -845,7 +854,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
         {/* Bottom-Left: 对比候选（与「基准」是不同角色，样式刻意区分） */}
         {isCandidate && !isPinned && (
           <div
-            className="absolute bottom-1 left-1 bg-sky-500/20 border border-sky-400/50 text-sky-200 rounded px-1 py-[2px] flex items-center gap-0.5 text-[9px] font-medium"
+            className="absolute bottom-1 left-1 bg-sky-500/20 border border-sky-400/50 text-sky-200 rounded px-1 py-[2px] flex items-center gap-0.5 text-[10px] font-medium"
             role="img"
             aria-label="当前对比候选"
           >
@@ -866,7 +875,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
         <div className="flex items-center gap-0.5 shrink-0">
           {group.raw && (
             <span
-              className="text-[9px] text-white font-medium"
+              className="text-[9px] tracking-[0.02em] text-white font-medium"
               title="RAW 原片"
               aria-hidden="true"
             >
@@ -875,7 +884,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
           )}
           {group.hasXmp && (
             <span
-              className="text-[9px] text-amber-400 font-medium"
+              className="text-[9px] tracking-[0.02em] text-amber-400 font-medium"
               title="包含 XMP 调色/标记"
               aria-hidden="true"
             >
@@ -884,7 +893,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
           )}
           {group.tone && (
             <span
-              className="text-[9px] text-emerald-400 font-medium"
+              className="text-[9px] tracking-[0.02em] text-emerald-400 font-medium"
               title="已调色"
               aria-hidden="true"
             >
@@ -893,7 +902,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
           )}
           {group.edited && (
             <span
-              className="text-[9px] text-purple-400 font-medium"
+              className="text-[9px] tracking-[0.02em] text-purple-400 font-medium"
               title="包含精修成果 (Luminar AI)"
               aria-hidden="true"
             >

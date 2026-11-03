@@ -1,0 +1,171 @@
+/**
+ * B6：缩略图字号提底 + 格头间距 + 分段圆角同心 + 按下反馈（issue #18 · PA-3 + PA-9 + PB-3 + PC-7）。
+ *
+ * PC-7：序号 / 未同步 / 基准 / 候选 / 图例从 8-9px 提到 10px；R/X/T/E 角标保留 9px
+ *       但补 tracking-[0.02em] 收紧字距。
+ * PA-3：格头标题↔控件组 gap-3、控件组 gap-1.5、已选 ml-1 + 降一档色（text-white/50）。
+ * PA-9：分段控件外壳 rounded-md（配内块 4px 同心，外壳 6px = 内块 4px + padding 2px）。
+ * PB-3：onPointerDown 即时加 pressed 态（scale-[0.985]），不等 onClick 落定。
+ */
+import { describe, expect, it, vi, afterEach } from 'vitest';
+import { render, screen, fireEvent, within } from '@testing-library/react';
+import { ThumbnailGrid } from './ThumbnailGrid';
+import { mockInvokeCommand } from '../test/setup';
+import type { PhotoGroupInfo } from '../types';
+
+function group(id: string, overrides: Partial<PhotoGroupInfo> = {}): PhotoGroupInfo {
+  return {
+    id,
+    baseName: id,
+    raw: { name: `${id}.CR3`, extension: 'CR3', path: `D:/shoot/${id}.CR3`, size: 1, mtime: 0 },
+    status: 'RAW_ONLY',
+    rating: 0,
+    flag: 'none',
+    label: '', hasXmp: false,
+    ...overrides,
+  };
+}
+
+/** 取第一格（选中态）。waitFor 等 virtualizer 把行挂出来。 */
+async function firstCell(): Promise<HTMLElement> {
+  const cells = await screen.findAllByRole('option');
+  return cells[0];
+}
+
+function renderGrid(props: Partial<React.ComponentProps<typeof ThumbnailGrid>> = {}) {
+  mockInvokeCommand('get_thumbnail_cmd', 'thumb.jpg');
+  return render(
+    <ThumbnailGrid
+      groups={[group('a'), group('b'), group('c')]}
+      selectedIndex={0}
+      onSelect={() => {}}
+      lumenThumbnails={false}
+      {...props}
+    />,
+  );
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('B6 · PC-7：缩略图字号提底', () => {
+  it('序号 #{index+1} 用 text-[10px] 而非 text-[9px]', async () => {
+    renderGrid();
+    const cell = await firstCell();
+    const indexBadge = within(cell).getByText('#1');
+    expect(indexBadge.className).toContain('text-[10px]');
+    expect(indexBadge.className).not.toContain('text-[9px]');
+  });
+
+  it('「未同步」按钮用 text-[10px] 而非 text-[8px]', async () => {
+    renderGrid({
+      unsyncedIds: new Set(['a']),
+      onRetrySync: () => {},
+    });
+    const cell = await firstCell();
+    const btn = within(cell).getByRole('button', { name: /未同步/ });
+    expect(btn.className).toContain('text-[10px]');
+    expect(btn.className).not.toContain('text-[8px]');
+  });
+
+  it('「基准」徽标用 text-[10px] 而非 text-[9px]', async () => {
+    renderGrid({ pinnedId: 'a' });
+    const cell = await firstCell();
+    const badge = within(cell).getByText('基准').parentElement!;
+    expect(badge.className).toContain('text-[10px]');
+    expect(badge.className).not.toContain('text-[9px]');
+  });
+
+  it('「候选」徽标用 text-[10px] 而非 text-[9px]', async () => {
+    renderGrid({ candidateId: 'a' });
+    const cell = await firstCell();
+    const badge = within(cell).getByText('候选').parentElement!;
+    expect(badge.className).toContain('text-[10px]');
+    expect(badge.className).not.toContain('text-[9px]');
+  });
+
+  it('R/X/T/E 角标保留 text-[9px] 但补 tracking-[0.02em]', async () => {
+    renderGrid({
+      groups: [
+        group('a', {
+          hasXmp: true,
+          tone: { exposure: 1, highlights: 0, shadows: 0, temperature: 0, tint: 0, contrast: 0 },
+          edited: { name: 'a.tif', extension: 'tif', path: 'D:/shoot/a.tif', size: 1, mtime: 0 },
+        }),
+      ],
+    });
+    const cell = await firstCell();
+    for (const letter of ['R', 'X', 'T', 'E']) {
+      const badge = within(cell).getByText(letter);
+      expect(badge.className).toContain('text-[9px]');
+      expect(badge.className).toContain('tracking-[0.02em]');
+    }
+  });
+
+  it('角标图例用 text-[10px] 而非 text-[9px]', () => {
+    renderGrid();
+    const legend = screen.getByRole('note', { name: /角标图例/ });
+    expect(legend.className).toContain('text-[10px]');
+    expect(legend.className).not.toContain('text-[9px]');
+  });
+});
+
+describe('B6 · PA-3：格头间距服从邻近原则', () => {
+  function renderWithSelection() {
+    return renderGrid({
+      selectedIds: new Set(['a']),
+      onSelectionChange: () => {},
+    });
+  }
+
+  it('格头容器标题↔控件组用 gap-3（不是 gap-2）', () => {
+    renderWithSelection();
+    const status = screen.getByText(/宫格列表/);
+    const header = status.parentElement!;
+    expect(header.className).toContain('gap-3');
+    expect(header.className).not.toContain('gap-2');
+  });
+
+  it('控件组用 gap-1.5（不是 gap-1）', () => {
+    renderWithSelection();
+    const status = screen.getByText(/宫格列表/);
+    const header = status.parentElement!;
+    const controls = header.children[1] as HTMLElement;
+    expect(controls.className).toContain('gap-1.5');
+  });
+
+  it('已选计数用 ml-1（不是 ml-1.5）', () => {
+    renderWithSelection();
+    const selected = screen.getByText(/已选 1/);
+    expect(selected.className).toContain('ml-1');
+    expect(selected.className).not.toContain('ml-1.5');
+  });
+
+  it('已选计数降一档色（text-white/50，不是 text-white/60）', () => {
+    renderWithSelection();
+    const selected = screen.getByText(/已选 1/);
+    expect(selected.className).toContain('text-white/50');
+    expect(selected.className).not.toContain('text-white/60');
+  });
+});
+
+describe('B6 · PA-9：分段控件圆角同心', () => {
+  it('外壳用 rounded-md（不是 rounded-lg）', () => {
+    renderGrid();
+    const btn = screen.getByRole('button', { name: '切换为一行 3 张缩略图' });
+    const shell = btn.parentElement!;
+    expect(shell.className).toContain('rounded-md');
+    expect(shell.className).not.toContain('rounded-lg');
+  });
+});
+
+describe('B6 · PB-3：按下即时反馈', () => {
+  it('单元格 onPointerDown 按下时加 pressed 态（scale-[0.985]）', async () => {
+    renderGrid();
+    const cell = await firstCell();
+    expect(cell.className).not.toContain('scale-[0.985]');
+    fireEvent.pointerDown(cell);
+    expect(cell.className).toContain('scale-[0.985]');
+  });
+});
