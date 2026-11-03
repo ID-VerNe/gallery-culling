@@ -3,7 +3,7 @@
  *
  * ## 防的是什么
  *
- * 37 处 `active:scale-*` 按下缩放按钮原先配 `transition-colors`——
+ * 43 处 `active:scale-*` 按下缩放按钮原先配 `transition-colors`——
  * `transition-colors` 的 transition-property 不含 transform，按下/回弹
  * 1 帧硬跳（PB-2）。修法是抽 `.press` 组件类，property 显式列 7 个 color
  * 族 + transform，duration-150 ease-out。
@@ -18,7 +18,7 @@
  * ## 断言 3 的 collateral 边界
  *
  * `.press` 若被贪方便改成 bare `transition`，property 会扩到
- * opacity/box-shadow/filter/backdrop-filter——37 站点里有状态切换的
+ * opacity/box-shadow/filter/backdrop-filter——43 站点里有状态切换的
  * opacity/shadow 会被顺带动画。断言 3 钉住「不用 bare transition」。
  */
 import { describe, it, expect } from 'vitest';
