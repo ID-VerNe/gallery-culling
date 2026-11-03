@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
  *
  * 背景：原先 `tonalPanelVisible` 的三元直接换树，390px 整体硬切；底栏
  * (`viewportBarStyles.ts:83`) 同一层级已经做了 200ms 三属性联动，两套标准。
- * 这里给换面板加 180ms 交叉淡入——**不做位移**（390px 位移会过冲）。
+ * 这里给换面板加 200ms 交叉淡入——**不做位移**（390px 位移会过冲）。
  *
  * 为什么不抽成全局 presence：
  * PB-12（issue #18 另列）要做模态 presence，与本机制的需求不同（模态有 scrim、
@@ -18,7 +18,7 @@ import { useEffect, useRef, useState } from 'react';
  *   让 CSS 把它淡出（`opacity-0`）。进场面板挂载即 `opacity-100`。
  * - 切换瞬间两面都在 DOM 里（绝对定位叠放），交叉淡入。
  * - 不在测试里改时长：测试用 `vi.useFakeTimers` + `advanceTimersByTime` 推进，
- *   时长仍是 180ms（`EXIT_MS`），保持与真实一致。
+ *   时长仍是 200ms（`EXIT_MS`），保持与真实一致。
  */
 export type SidebarPanel = 'grid' | 'tonal';
 

@@ -9,7 +9,7 @@
  * 不钉：过渡看着顺不顺（jsdom 不渲染像素，由真机回签）。
  *
  * 计时器说明：不用 `vi.useFakeTimers()`——它会卡住 RTL 的 `findByText/findByRole`
- * 轮询（那些内部也走 setTimeout）。退场延迟只有 180ms，直接用真实计时器 +
+ * 轮询（那些内部也走 setTimeout）。退场延迟只有 200ms（`EXIT_MS`），直接用真实计时器 +
  * `waitFor`（默认 1s 足够覆盖）。
  */
 import { describe, expect, it } from 'vitest';
@@ -121,7 +121,7 @@ describe('App 右侧栏交叉淡入（PB-13）', () => {
     togglePanel();
     // 切换瞬间宫格仍在
     expect(document.querySelector('[data-testid="sidebar-grid"]')).not.toBeNull();
-    // 退场延迟只有 180ms；waitFor 默认 1s 足够覆盖
+    // 退场延迟只有 200ms（EXIT_MS）；waitFor 默认 1s 足够覆盖
     await waitFor(() => {
       expect(document.querySelector('[data-testid="sidebar-grid"]')).toBeNull();
     });
