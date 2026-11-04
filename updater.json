@@ -1,11 +1,11 @@
 {
-  "version": "v2.0.4",
-  "notes": "🚀 v2.0.4：常用手动镜头快捷预设改为自定义——可新增、编辑、删除自己的预设，删空后不再回填出厂值。",
-  "pub_date": "2026-11-01T03:29:08.532Z",
+  "version": "v2.0.5",
+  "notes": "🚀 v2.0.5：修复快捷键反馈——色标补上鼠标入口，空格设为基准只在真正生效时才给提示；另有若干界面细节修复。",
+  "pub_date": "2026-11-04T07:55:59.026Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNHQ0Y3ZRMG5YM3VLUEQ5UnBHWUlQd2ViR3Y0eXZKa0ZwSTIxOG9OYnQxWmRIUVY1RUJjQ3o3WFpwKytBNGg5eFJVOWxMdlZHQi9meUVQaHJBdmVmelFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNTAzNzQ4CWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC40X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjAuNApBa0NySjJ6S1g1ZFdRaU5uaWw2akRhRTJxZzBIdjVZbUc4SEExNjdEdFVkQXJLYzh5L0djbXVhRmlEWXZOTytMTEVHRWU2SE53Qlo5YXFGcTN0RlpDUT09Cg==",
-      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.4/gallery-culling_2.0.4_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNHFPMzBtV080K1F2T0NXUzB5eHhCa0RuTERuK3lQdDFHemVBR0NUKzZhMjIvekhKYnRmQUNPamlmT01kKzB0NW02T09Ed2lPVERHWWxCTzF1UHZCUFFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzc4OTU4CWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC41X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjAuNQpWL2N4OGZnMjh5NmF2RnBodkNzZm5iRUN4bUNTUlQ4aE43b1g1cHUxSDVHVnpoNExVWVlxVE1WdDdJeXZ6SXdFY0VQVTB2RGo0MXVEQ1B2cUNVb0dDdz09Cg==",
+      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.5/gallery-culling_2.0.5_x64-setup.exe"
     }
   }
 }
