@@ -8,6 +8,7 @@
   "permissions": [
     "core:default",
     "core:window:allow-destroy",
+    "process:allow-restart",
     "dialog:default",
     "opener:default",
     "fs:default"

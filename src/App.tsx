@@ -59,7 +59,14 @@ function AppShell() {
       if (s.defaultRawFolder) setRawFolder(s.defaultRawFolder);
       if (s.sortOrder) setSortOrder(s.sortOrder as SortOrder);
     });
-  const { dialog: updateDialog } = useAutoUpdate();
+  const {
+    dialog: updateDialog,
+    currentVersion,
+    checkState: updateCheckState,
+    skippedVersion,
+    checkNow,
+    restoreSkipped,
+  } = useAutoUpdate();
 
   // 模态框开关（导出 / 设置 / 元数据 / 快捷键帮助）。
   const [isExportOpen, setIsExportOpen] = useState(false);
@@ -881,6 +888,11 @@ function AppShell() {
         capabilities={lumen.caps}
         onSyncRatings={lumenAvailable ? lumen.syncRatings : undefined}
         savedLumenEnabled={settings?.lumenEnabled ?? false}
+        currentVersion={currentVersion}
+        updateCheckState={updateCheckState}
+        skippedVersion={skippedVersion}
+        onCheckUpdate={checkNow}
+        onRestoreSkipped={restoreSkipped}
       />
 
       {/* Manual Lens Metadata Editor Modal */}

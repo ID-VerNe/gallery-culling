@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Settings, Save } from 'lucide-react';
-import { EditorPathSection, LumenSettingsSection, ThumbnailSection } from './SettingsSections';
+import { AboutSection, EditorPathSection, LumenSettingsSection, ThumbnailSection, type UpdateCheckState } from './SettingsSections';
 import { AppSettings, LumenCapabilities, LumenStatus } from '../types';
 import { api } from '../services/api';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -25,6 +25,14 @@ interface SettingsModalProps {
    * 缺省时退回本地值（保持向后兼容）。
    */
   savedLumenEnabled?: boolean;
+  /** 当前版本号（更新「关于」段）；由 `useAutoUpdate` 读出。 */
+  currentVersion?: string | null;
+  /** 主动检查更新的展示状态（issue #43-PB）。 */
+  updateCheckState?: UpdateCheckState;
+  /** 已被用户跳过的版本；非空时「关于」段出现「恢复提示」入口。 */
+  skippedVersion?: string | null;
+  onCheckUpdate?: () => void;
+  onRestoreSkipped?: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -36,6 +44,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   capabilities,
   onSyncRatings,
   savedLumenEnabled,
+  currentVersion,
+  updateCheckState,
+  skippedVersion,
+  onCheckUpdate,
+  onRestoreSkipped,
 }) => {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -198,6 +211,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <ThumbnailSection
             width={settings.thumbnailWidth}
             onChange={(v) => setSettings({ ...settings, thumbnailWidth: v })}
+          />
+
+          <AboutSection
+            currentVersion={currentVersion ?? null}
+            checkState={updateCheckState ?? { status: 'idle' }}
+            skippedVersion={skippedVersion ?? null}
+            onCheck={onCheckUpdate}
+            onRestoreSkipped={onRestoreSkipped}
           />
         </>
       )}

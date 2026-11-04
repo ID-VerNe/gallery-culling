@@ -362,3 +362,106 @@ export const LumenSettingsSection: React.FC<{
   </>
   );
 };
+
+/**
+ * 更新检查的展示状态（issue #43-PB）。hook 产出，`AboutSection` 与弹窗消费。
+ *
+ * `skipped` 不是错误：它表示「这个版本被用户主动跳过」，所以文案不能写成失败，
+ * 并且必须同时给出「恢复提示」这条反悔路径。
+ */
+export type UpdateCheckState =
+  | { status: 'idle' }
+  | { status: 'checking' }
+  | { status: 'latest'; version: string }
+  | { status: 'found'; version: string }
+  | { status: 'skipped'; version: string }
+  | { status: 'error'; error: string };
+
+/**
+ * 设置弹窗的「关于」段：当前版本 + 主动检查更新 + 跳过态的撤销入口。
+ *
+ * 存在理由：跳过不能被做成死胡同。启动探测被抑制时，这里是用户唯一能主动
+ * 重新进入更新流程的地方；`skippedVersion` 非空时还提供「恢复提示」。
+ */
+export const AboutSection: React.FC<{
+  currentVersion: string | null;
+  checkState: UpdateCheckState;
+  skippedVersion: string | null;
+  onCheck?: () => void;
+  onRestoreSkipped?: () => void;
+}> = ({ currentVersion, checkState, skippedVersion, onCheck, onRestoreSkipped }) => {
+  const checking = checkState.status === 'checking';
+  let statusLine: React.ReactNode = null;
+
+  switch (checkState.status) {
+    case 'checking':
+      statusLine = <p className="text-[10px] leading-relaxed text-white/60">正在检查更新…</p>;
+      break;
+    case 'latest':
+      statusLine = (
+        <p className="text-[10px] leading-relaxed text-white/60">
+          {`已是最新版本 v${checkState.version}`}
+        </p>
+      );
+      break;
+    case 'found':
+      statusLine = (
+        <p className="text-[10px] leading-relaxed text-emerald-200/80">
+          {`发现 v${checkState.version}，点「下载并安装」开始更新。`}
+        </p>
+      );
+      break;
+    case 'skipped':
+      statusLine = (
+        <p className="text-[10px] leading-relaxed text-amber-200/80">
+          {`已跳过 v${checkState.version}；恢复提示后会再次弹出更新窗口。`}
+        </p>
+      );
+      break;
+    case 'error':
+      statusLine = (
+        <p
+          role="alert"
+          className="text-[10px] leading-relaxed text-rose-200/90 rounded-md border border-rose-800/50 bg-rose-950/30 px-2 py-1.5"
+        >
+          {`检查更新失败：${checkState.error}。请检查网络后重试。`}
+        </p>
+      );
+      break;
+    default:
+      statusLine = skippedVersion ? (
+        <p className="text-[10px] leading-relaxed text-white/60">
+          {`已跳过 v${skippedVersion}，有新版本发布时会再次提醒。`}
+        </p>
+      ) : null;
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-white/80 font-medium">关于</span>
+      <p className="text-[11px] leading-relaxed text-white/60">
+        {`当前版本 v${currentVersion ?? '未知'}`}
+      </p>
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          type="button"
+          onClick={onCheck}
+          disabled={checking || !onCheck}
+          className="focus-ring px-3 py-1.5 rounded-md bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white/80 press disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {checking ? '检查中…' : '检查更新'}
+        </button>
+        {skippedVersion && onRestoreSkipped && (
+          <button
+            type="button"
+            onClick={onRestoreSkipped}
+            className="focus-ring px-3 py-1.5 rounded-md text-white/70 hover:text-white hover:bg-white/10 active:scale-[0.96] press"
+          >
+            {`恢复提示 v${skippedVersion}`}
+          </button>
+        )}
+      </div>
+      {statusLine}
+    </div>
+  );
+};
