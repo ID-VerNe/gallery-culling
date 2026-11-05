@@ -682,6 +682,35 @@ async function scenarioUiContract(jpgFolder: string, el: () => string) {
     }`,
   );
 
+  // ── 星级 toggle：同键再按清零；不同键仍改分（issue #65）──────
+  // R 之后读数为 00000，从 0 起步：1 → 1 星，1 → 0 星，再 1→2 → 2 星。
+  pressKey('1', 'Digit1');
+  await sleep(400);
+  const ratingAfterOne = readPressed(RATING_GROUP);
+  pressKey('1', 'Digit1');
+  await sleep(700);
+  const ratingAfterSameOne = readPressed(RATING_GROUP);
+  pressKey('1', 'Digit1');
+  await sleep(400);
+  pressKey('2', 'Digit2');
+  await sleep(700);
+  const ratingAfterOneTwo = readPressed(RATING_GROUP);
+  raw(
+    `[${el()}] 星级 toggle：1 后=${ratingAfterOne} 再 1 后=${ratingAfterSameOne} 1→2 后=${ratingAfterOneTwo}`,
+  );
+  raw(
+    `[${el()}] >>> 断言U12b 同键再按清零（1→1 回到 0 星）= ${
+      ratingAfterOne === '10000' && ratingAfterSameOne === '00000'
+    }`,
+  );
+  raw(
+    `[${el()}] >>> 断言U12c 不同键仍改分（1→2 为 2 星）= ${
+      ratingAfterOneTwo === '11000'
+    }`,
+  );
+  pressKey('r', 'KeyR'); // 回到无星级/无旗标，避免影响后续色标用例
+  await sleep(400);
+
   // ── 左手键：Shift+1…5 色标；6–9 / Shift+6 已删除（#61）───
   const leftLabelKeys: Array<[string, string]> = [
     ['!', 'Digit1'],
