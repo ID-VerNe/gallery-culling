@@ -15,8 +15,9 @@
  *   - `render-export`：调色成片导出（`VITE_E2E_JPG` + `VITE_E2E_RAW` + `VITE_E2E_OUT`）
  *   - `detail-1to1`：RAW-only 1:1 细节（`VITE_E2E_RAW` 必须是**真实 ARW**，
  *     `VITE_E2E_NAMES` 给两张的 baseName）
+ *   - `ui-contract`：主视口底栏的命中 / 静息收起 / 左手别名真窗口契约（issue #53）
  *
- * 触发：`npm run e2e:render` / `npm run e2e:preset`（见 `e2e/run-inapp.mjs`），
+ * 触发：`npm run e2e:render` / `npm run e2e:preset` / `npm run e2e:ui`（见 `e2e/run-inapp.mjs`），
  * 或手动 `VITE_E2E_SCENARIO=<场景> … npm run tauri dev`。
  * 生产构建不包含本模块（`import.meta.env.DEV` 为 false 时被 tree-shake）。
  */
@@ -136,10 +137,26 @@ function readSelectedCells(): string {
 
 const sameSliders = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
-/** 派发键盘事件到 window（应用在 window 上监听 keydown）。 */
-function pressKey(key: string) {
-  window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
-  window.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true }));
+/**
+ * 派发单次键盘事件到 window（应用在 window 上监听 keydown）。
+ *
+ * `code` 必须显式传入：快捷键里所有「物理键位」分支（`Shift+1…5`、`Shift+6`）
+ * 只看 `e.code`（`src/hooks/useKeyboardShortcuts.ts:262`），而合成事件不会自带
+ * `code`。此前本函数只给 `key`，等于让真窗口 e2e 永远测不到那两条分支（issue #53）。
+ */
+function keyEvent(
+  type: 'keydown' | 'keyup',
+  key: string,
+  code = '',
+  shiftKey = false,
+) {
+  window.dispatchEvent(new KeyboardEvent(type, { key, code, shiftKey, bubbles: true }));
+}
+
+/** 一次完整的按键（down + up）。 */
+function pressKey(key: string, code = '', shiftKey = false) {
+  keyEvent('keydown', key, code, shiftKey);
+  keyEvent('keyup', key, code, shiftKey);
 }
 
 /** 点宫格里 baseName 命中的单元格；返回是否点到。 */
@@ -443,6 +460,310 @@ async function scenarioRenderExport(
   const ok = resultText.match(/已生成\s*(\d+)\s*张/);
   const bad = resultText.match(/失败\s*(\d+)\s*张/);
   raw(`[${el()}] >>> 读数 exported=${ok ? ok[1] : '?'} failed=${bad ? bad[1] : '0'}`);
+  raw(`[${el()}] 场景结束`);
+}
+
+/**
+ * 读主视口底栏底板的**真实布局**（`getBoundingClientRect` 已含 transform）。
+ *
+ * jsdom 不跑层叠与布局，`PreviewViewport.test.tsx` 只能断言 class 串里「有没有
+ * 那个类」；这里读的是浏览器算出来的矩形与透明度 —— issue #47 的「整条移出
+ * 视口」只有这一步能证明。
+ */
+interface BarPlateState {
+  top: number;
+  bottom: number;
+  opacity: number;
+}
+
+function readBarPlateState(): BarPlateState | null {
+  const plate = document.querySelector<HTMLElement>('[data-bar-plate]');
+  if (!plate) return null;
+  const r = plate.getBoundingClientRect();
+  return { top: r.top, bottom: r.bottom, opacity: Number(getComputedStyle(plate).opacity) };
+}
+
+/** 按 DOM 顺序读一组元素 `aria-pressed` 快照（`1`/`0` 串，便于整体比较）。 */
+function readPressed(selector: string): string {
+  return Array.from(document.querySelectorAll<HTMLElement>(selector))
+    .map((node) => (node.getAttribute('aria-pressed') === 'true' ? '1' : '0'))
+    .join('');
+}
+
+const RATING_GROUP = '[aria-label="照片星级打分"] button';
+const FLAG_GROUP = 'button[aria-label="标记保留 (Pick)"], button[aria-label="标记淘汰 (Reject)"]';
+const LABEL_GROUP = '[aria-label="照片色标"] button';
+const BEFORE_AFTER_BTN = 'button[aria-label="本张照片前后对照 (快捷键 Y)"]';
+
+/**
+ * 场景：主视口底栏的可交互契约（issue #53）。
+ *
+ * 为什么需要它：#46（按钮点不动）、#47（静息没整条收起）、#45（左手别名）
+ * 都是**只在真实浏览器里成立**的契约 —— 命中、层叠、几何。既有 vitest 用
+ * jsdom，只能断言 `className` 里有没有某个类（`PreviewViewport.test.tsx:903`），
+ * 类在不在 ≠ 浏览器里矩形在不在视口外、按钮能不能被 `elementFromPoint` 命中。
+ *
+ * 三段断言：
+ *   U1–U4  静息：底板整条在视口外 + 透明；手柄在视口内且可聚焦（#47）
+ *   U5–U8  唤回：聚焦手柄后底板回正；逐按钮中心 `elementFromPoint` 命中按钮自身（#46）
+ *   U9–U14 左手别名与旧键在同一张照片上产生同一状态（#45）
+ *
+ * 明确不做：#49 更新装完不自动重启依赖 NSIS 安装器与提权进程，应用内 e2e
+ * 驱动不到，继续留人工回签。
+ */
+async function scenarioUiContract(jpgFolder: string, el: () => string) {
+  // 只填 JPG（12 组）；RAW 留空，避免 RAW-only 分组干扰宫格下限。
+  if (!(await scanFolders(jpgFolder, '', 12, el))) return;
+  if (!(await clickCell('IMG_006', el))) return;
+
+  const mounted = await waitFor(
+    () => {
+      const plate = document.querySelector('[data-bar-plate]');
+      const handle = document.querySelector('[data-bar-handle]');
+      return plate && handle ? true : null;
+    },
+    20_000,
+    300,
+  );
+  raw(`[${el()}] >>> 断言U0 单图视口底栏挂载 = ${!!mounted}`);
+  if (!mounted) {
+    raw(`[${el()}] body 快照: ${document.body.innerText.replace(/\s+/g, ' ').slice(0, 500)}`);
+    return;
+  }
+  // 200ms 过渡 + 视口图片首帧
+  await sleep(800);
+
+  // ── 静息：整条移出照片区（#47）────────────────────────
+  // 参照物必须是底栏的定位容器（照片区），不是 window.innerHeight：
+  // 容器下方还有 36px 的窗口底栏，`translate-y-[calc(100%+1rem)]` 把底板
+  // 停在容器下沿（实测 top=864 / 容器 bottom=864 / innerHeight=900）。
+  // 拿 innerHeight 当基准会把「已腾出照片区」误判成「还在视口里」。
+  const plateEl = document.querySelector<HTMLElement>('[data-bar-plate]');
+  const viewportBox = plateEl?.parentElement?.offsetParent as HTMLElement | null;
+  const viewportBottom = viewportBox
+    ? viewportBox.getBoundingClientRect().bottom
+    : window.innerHeight;
+
+  const rest = readBarPlateState();
+  raw(
+    `[${el()}] 静息底板 top=${rest ? rest.top.toFixed(1) : '?'} bottom=${
+      rest ? rest.bottom.toFixed(1) : '?'
+    } opacity=${rest ? rest.opacity.toFixed(3) : '?'} 照片区bottom=${viewportBottom.toFixed(
+      1,
+    )} innerHeight=${window.innerHeight}`,
+  );
+  raw(
+    `[${el()}] >>> 断言U1 静息底板整条落在照片区下沿之外 = ${
+      !!rest && rest.top >= viewportBottom - 1
+    }`,
+  );
+  raw(`[${el()}] >>> 断言U2 静息底板不可见 = ${!!rest && rest.opacity <= 0.05}`);
+
+  // 「腾出空间」的直接证据：照片区底部内侧一点不能被底栏吞掉。
+  // 探针取照片区下沿往上 18px —— 底栏静止时高度约 36px，若只挪了几像素
+  // （#47 的旧行为），这 18px 仍会被透明底板盖住，U2b 就会红。
+  const probeY = viewportBottom - 18;
+  const probe = document.elementFromPoint(window.innerWidth / 2, probeY);
+  const probeHitsPlate = !!(probe && plateEl?.contains(probe));
+  raw(
+    `[${el()}] 照片区底部探针 y=${probeY.toFixed(1)} 命中=${
+      probe ? probe.tagName : 'null'
+    }`,
+  );
+  raw(`[${el()}] >>> 断言U2b 静息底板不拦截照片区点击 = ${!probeHitsPlate}`);
+
+  const handle = document.querySelector<HTMLElement>('[data-bar-handle]');
+  const handleRect = handle?.getBoundingClientRect();
+  raw(
+    `[${el()}] 手柄 top=${handleRect ? handleRect.top.toFixed(1) : '?'} h=${
+      handleRect ? handleRect.height.toFixed(1) : '?'
+    } tabIndex=${handle?.tabIndex ?? '?'}`,
+  );
+  raw(
+    `[${el()}] >>> 断言U3 静息手柄留在视口内 = ${
+      !!handleRect &&
+      handleRect.height > 0 &&
+      handleRect.top < window.innerHeight &&
+      handleRect.bottom > 0
+    }`,
+  );
+  raw(`[${el()}] >>> 断言U4 手柄可聚焦 = ${handle?.tabIndex === 0}`);
+  if (!handle) return;
+
+  // ── 聚焦手柄：底板回正（#47 的可发现性入口）──────────
+  handle.focus();
+  await sleep(600);
+  const shown = readBarPlateState();
+  raw(
+    `[${el()}] 唤回后 top=${shown ? shown.top.toFixed(1) : '?'} opacity=${
+      shown ? shown.opacity.toFixed(3) : '?'
+    } activeElement=${document.activeElement === handle}`,
+  );
+  // 「唤回」必须是相对静息位置的回退，而不是「只要还在视口里」——
+  // 静息态本身也满足 top < innerHeight，单看它证明不了底板被唤回。
+  const revealed = !!rest && !!shown && shown.top < rest.top - 1 && shown.bottom > 0;
+  raw(
+    `[${el()}] >>> 断言U5 聚焦手柄相对静息上移 = ${revealed}`,
+  );
+  raw(`[${el()}] >>> 断言U6 唤回后底板可见 = ${!!shown && shown.opacity >= 0.95}`);
+
+  // ── 命中：每个按钮中心必须命中按钮自身（#46）─────────
+  const plate = document.querySelector<HTMLElement>('[data-bar-plate]');
+  const buttons = plate
+    ? Array.from(plate.querySelectorAll<HTMLButtonElement>('button')).filter((btn) => {
+        const r = btn.getBoundingClientRect();
+        return !btn.disabled && r.width > 0 && r.height > 0;
+      })
+    : [];
+  const misses: string[] = [];
+  for (const btn of buttons) {
+    const r = btn.getBoundingClientRect();
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
+    const name =
+      btn.getAttribute('aria-label') || (btn.textContent || '').trim().slice(0, 12) || '(无标签)';
+    if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) {
+      misses.push(`${name}@视口外(${x.toFixed(0)},${y.toFixed(0)})`);
+      continue;
+    }
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || !btn.contains(hit)) {
+      const hitName = hit
+        ? `${hit.tagName}${hit.getAttribute('aria-label') ? `[${hit.getAttribute('aria-label')}]` : ''}`
+        : 'null';
+      misses.push(`${name}→${hitName}`);
+    }
+  }
+  raw(
+    `[${el()}] 命中检查：可点按钮 ${buttons.length} 个，未命中 ${misses.length} 个${
+      misses.length ? `；明细=${JSON.stringify(misses.slice(0, 8))}` : ''
+    }`,
+  );
+  raw(`[${el()}] >>> 断言U7 底栏可点按钮数量达标 = ${buttons.length >= 8}`);
+  raw(`[${el()}] >>> 断言U8 每个按钮中心命中自身 = ${misses.length === 0}`);
+
+  // ── 左手别名：按住 V ≡ \（#45）──────────────────────────
+  const bannerVisible = () => /正在查看原片/.test(document.body.innerText);
+  keyEvent('keydown', 'v', 'KeyV');
+  await sleep(400);
+  const holdV = bannerVisible();
+  keyEvent('keyup', 'v', 'KeyV');
+  await sleep(300);
+  const holdVEnded = !bannerVisible();
+
+  keyEvent('keydown', '\\', 'Backslash');
+  await sleep(400);
+  const holdBackslash = bannerVisible();
+  keyEvent('keyup', '\\', 'Backslash');
+  await sleep(300);
+  const holdBackslashEnded = !bannerVisible();
+  raw(`[${el()}] 按住 V=${holdV}/${holdVEnded} \\=${holdBackslash}/${holdBackslashEnded}`);
+  raw(
+    `[${el()}] >>> 断言U9 V 与反斜杠按住都出原片横幅 = ${holdV && holdBackslash}`,
+  );
+  raw(`[${el()}] >>> 断言U10 松开后横幅消失 = ${holdVEnded && holdBackslashEnded}`);
+
+  // ── 左手别名：F ≡ P（#45）──────────────────────────────
+  // 先设成淘汰，确保别名真的改写了状态，而不是「本来就是 pick」。
+  pressKey('x', 'KeyX');
+  await sleep(300);
+  pressKey('p', 'KeyP');
+  await sleep(400);
+  const pickByP = readPressed(FLAG_GROUP);
+  pressKey('x', 'KeyX');
+  await sleep(300);
+  pressKey('f', 'KeyF');
+  await sleep(400);
+  const pickByF = readPressed(FLAG_GROUP);
+  raw(`[${el()}] 保留：P=${pickByP} F=${pickByF}`);
+  raw(
+    `[${el()}] >>> 断言U11 F 与 P 保留等价 = ${pickByP === pickByF && pickByP === '10'}`,
+  );
+
+  // ── 左手别名：R ≡ 0（#45）──────────────────────────────
+  pressKey('5', 'Digit5');
+  await sleep(300);
+  pressKey('0', 'Digit0');
+  await sleep(400);
+  const clearByZero = readPressed(RATING_GROUP);
+  pressKey('5', 'Digit5');
+  await sleep(300);
+  pressKey('r', 'KeyR');
+  await sleep(400);
+  const clearByR = readPressed(RATING_GROUP);
+  raw(`[${el()}] 清零：0=${clearByZero} R=${clearByR}`);
+  raw(
+    `[${el()}] >>> 断言U12 R 与 0 清零等价 = ${clearByZero === clearByR && clearByZero === '00000'}`,
+  );
+
+  // ── 左手别名：Shift+1…5 ≡ 6–9 / Shift+6（#45）───────────
+  const labelPairs: Array<[string, string, boolean, string, string, boolean]> = [
+    ['6', 'Digit6', false, '!', 'Digit1', true],
+    ['7', 'Digit7', false, '@', 'Digit2', true],
+    ['8', 'Digit8', false, '#', 'Digit3', true],
+    ['9', 'Digit9', false, '$', 'Digit4', true],
+    ['^', 'Digit6', true, '%', 'Digit5', true],
+  ];
+  const clearLabel = async () => {
+    const state = readPressed(LABEL_GROUP);
+    const idx = state.indexOf('1');
+    if (idx < 0) return;
+    const oldKeys: Array<[string, string, boolean]> = [
+      ['6', 'Digit6', false],
+      ['7', 'Digit7', false],
+      ['8', 'Digit8', false],
+      ['9', 'Digit9', false],
+      ['^', 'Digit6', true],
+    ];
+    const [key, code, shift] = oldKeys[idx];
+    pressKey(key, code, shift);
+    await sleep(300);
+  };
+
+  const labelMismatches: string[] = [];
+  for (const [oldKey, oldCode, oldShift, newKey, newCode, newShift] of labelPairs) {
+    await clearLabel();
+    pressKey(oldKey, oldCode, oldShift);
+    await sleep(500);
+    const oldState = readPressed(LABEL_GROUP);
+    await clearLabel();
+    pressKey(newKey, newCode, newShift);
+    await sleep(500);
+    const newState = readPressed(LABEL_GROUP);
+    const ok =
+      oldState === newState && oldState.split('').filter((c) => c === '1').length === 1;
+    raw(
+      `[${el()}] 色标 ${oldKey}/${newKey}：旧=${oldState} 新=${newState} 等价=${ok}`,
+    );
+    if (!ok) labelMismatches.push(`${oldKey} vs ${newKey}: ${oldState}/${newState}`);
+  }
+  raw(
+    `[${el()}] >>> 断言U13 Shift+1…5 与 6–9/Shift+6 等价 = ${labelMismatches.length === 0}`,
+  );
+
+  // ── 左手别名：T ≡ Y（#45）──────────────────────────────
+  // 放在最后：切前后对照会卸载单图视口，先做完底栏相关断言再动视图模式。
+  const beforeAfterPressed = () =>
+    document.querySelector<HTMLElement>(BEFORE_AFTER_BTN)?.getAttribute('aria-pressed') ===
+    'true';
+
+  pressKey('y', 'KeyY');
+  await sleep(600);
+  const baByY = beforeAfterPressed();
+  pressKey('y', 'KeyY');
+  await sleep(600);
+  const backToSingleByY = !beforeAfterPressed();
+  pressKey('t', 'KeyT');
+  await sleep(600);
+  const baByT = beforeAfterPressed();
+  raw(`[${el()}] 前后对照：Y=${baByY} 退回=${backToSingleByY} T=${baByT}`);
+  raw(
+    `[${el()}] >>> 断言U14 T 与 Y 前后对照等价 = ${baByY && baByT && backToSingleByY}`,
+  );
+  // 还原单图，保证下一次运行从同一状态开始（夹具会重建，但视图模式不该漂移）。
+  pressKey('t', 'KeyT');
+  await sleep(400);
+
   raw(`[${el()}] 场景结束`);
 }
 
@@ -915,6 +1236,8 @@ export async function runE2E(
       await scenarioRenderExport(jpgFolder, opts.raw || '', opts.out || '', el);
     } else if (scenario === 'detail-1to1') {
       await scenarioDetailOneToOne(jpgFolder, opts.raw || '', opts.names || '', el);
+    } else if (scenario === 'ui-contract') {
+      await scenarioUiContract(jpgFolder, el);
     } else {
       raw(`[${el()}] 未知场景: ${scenario}`);
     }
