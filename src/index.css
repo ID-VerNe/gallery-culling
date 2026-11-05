@@ -280,13 +280,16 @@
   }
 }
 
-/* 减少动态效果（issue #14）：去掉位移，只保留透明度过渡。 */
+/* 减少动态效果（issue #14 → #47）：保留状态切换，只去掉过渡时间。
+   注意**不能**像 #14 那样把底栏的 translate 取消掉：静息收起就是靠
+   `translate-y-[calc(100%_+_1rem)]` 移出视口，取消位移会让透明底板停在
+   原地继续挡住点击（issue #46 刚修好的命中问题会被它复现）。 */
 @media (prefers-reduced-motion: reduce) {
-  /* 底栏整条的浮起位移在这里取消（Tailwind 的 translate-y-* 走 CSS 变量）。
-     用属性选择器而不是 `.group\/bar`：类名里带 `/` 的变体手写转义容易失效，
+  /* 底栏宿主的所有子层（手柄 + 底板）都立即切换，不播放过渡。
+     用属性选择器而不是 `.group\/bar`：类名里带 `/` 的写法手写转义容易失效，
      属性写法不依赖转义。 */
-  [class~="group/bar"] > [class*="translate-y"] {
-    transform: translate(var(--tw-translate-x, 0), 0) !important;
+  [class~="group/bar"] > * {
+    transition-duration: 0ms !important;
   }
 
   .bar-icons,

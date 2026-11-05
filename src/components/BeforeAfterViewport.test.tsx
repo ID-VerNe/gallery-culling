@@ -183,7 +183,7 @@ describe('BeforeAfterViewport —— 底栏几何冻结（issue #12）', () => {
   /** 底栏底板：分组宿主的直接子层（命中层所在的那一层）。 */
   function barOf(container: HTMLElement): HTMLElement {
     const host = groupHostOf(container);
-    const plate = host.querySelector('[data-bar-hit-area]')?.parentElement;
+    const plate = host.querySelector('[data-bar-plate]');
     expect(plate, '底栏底板应为分组宿主的子层').toBeTruthy();
     expect(plate).not.toBe(host);
     return plate as HTMLElement;
@@ -233,15 +233,17 @@ describe('BeforeAfterViewport —— 底栏几何冻结（issue #12）', () => {
     expect(called).toContain('group-focus-within/bar:bg-background-base/90');
   });
 
-  it('悬停热区是独立层，比底板更大且不受 hover 影响', () => {
+  it('底板必须能接点击、且不存在自动命中层（issue #46）', () => {
     const { container } = renderBA();
-    const hit = barOf(container).querySelector('[data-bar-hit-area]');
+    const bar = barOf(container);
+    const called = classTokens(bar);
 
-    expect(hit, '底栏应有独立的透明命中层').not.toBeNull();
-    const called = classTokens(hit!);
-    expect(called).toContain('-inset-x-3');
-    expect(called).toContain('-inset-y-2');
-    expect(geometryLeaks(hit!)).toEqual([]);
+    expect(called, '底板不得把 none 继承给按钮').not.toContain('pointer-events-none');
+    expect(called, '底板必须接收点击').toContain('pointer-events-auto');
+    expect(bar.querySelector('[data-bar-hit-area]')).toBeNull();
+    const autoEmptyLayers = Array.from(bar.querySelectorAll<HTMLElement>('[aria-hidden="true"]'))
+      .filter((el) => classTokens(el).includes('pointer-events-auto'));
+    expect(autoEmptyLayers, '透明命中层不得再挂 pointer-events-auto').toEqual([]);
   });
 
   it('星标不再用 hover 改尺寸', () => {
@@ -271,7 +273,7 @@ describe('BeforeAfterViewport —— 底栏视觉层级（issue #14）', () => {
 
   function barOf(container: HTMLElement): HTMLElement {
     const host = groupHostOf(container);
-    const plate = host.querySelector('[data-bar-hit-area]')?.parentElement;
+    const plate = host.querySelector('[data-bar-plate]');
     expect(plate, '底栏底板应为分组宿主的子层').toBeTruthy();
     return plate as HTMLElement;
   }
@@ -296,14 +298,18 @@ describe('BeforeAfterViewport —— 底栏视觉层级（issue #14）', () => {
     expect(barOf(container as HTMLElement).parentElement).toBe(host);
   });
 
-  it('整条 bar 静息下沉、悬停回正（只用 translate）', () => {
+  it('整条 bar 静息移出视口、悬停/聚焦回正（issue #47）', () => {
     const { container } = renderBA();
     const bar = barOf(container as HTMLElement);
     const called = tokens(bar);
 
-    expect(called).toContain('translate-y-1');
+    expect(called, '静息应整条移出视口').toContain('translate-y-[calc(100%_+_1rem)]');
+    expect(called, '静息应不可见').toContain('opacity-0');
+    expect(called, '旧的 4px 下沉必须消失').not.toContain('translate-y-1');
     expect(called).toContain('group-hover/bar:translate-y-0');
     expect(called).toContain('group-focus-within/bar:translate-y-0');
+    expect(called).toContain('group-hover/bar:opacity-100');
+    expect(called).toContain('group-focus-within/bar:opacity-100');
     expect(bar.className).not.toMatch(/group-(hover|focus-within)\/bar:scale-/);
   });
 
@@ -317,11 +323,18 @@ describe('BeforeAfterViewport —— 底栏视觉层级（issue #14）', () => {
     expect(bar.querySelectorAll('[class*="bar-icons"]').length).toBeGreaterThanOrEqual(7);
   });
 
-  it('命中层纯透明，悬停不自绘背景', () => {
+  it('静息保留可聚焦的展开手柄（issue #47 · F-02）', () => {
     const { container } = renderBA();
-    const hit = barOf(container as HTMLElement).querySelector('[data-bar-hit-area]')!;
+    const host = groupHostOf(container as HTMLElement);
+    const handle = host.querySelector('[data-bar-handle]');
 
-    expect(hit.className).not.toMatch(/group-(hover|focus-within)\/bar:bg-/);
+    expect(handle, '底栏应有展开手柄').not.toBeNull();
+    expect(handle!.getAttribute('tabindex')).toBe('0');
+    expect(handle!.getAttribute('aria-label')).toBe('展开底栏工具栏');
+    expect(handle!.className, '手柄必须能接指针').toContain('pointer-events-auto');
+    expect(handle!.className, '展开后手柄应让位').toContain('group-hover/bar:opacity-0');
+    expect(handle!.className).not.toMatch(/group-(hover|focus-within)\/bar:(w|h)-/);
+    expect(barOf(container as HTMLElement).previousElementSibling, '手柄应在底板之前').toBe(handle);
   });
 });
 

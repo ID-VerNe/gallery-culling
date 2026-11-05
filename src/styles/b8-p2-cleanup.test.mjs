@@ -154,13 +154,12 @@ describe('B8 P2 收敛（issue #18）', () => {
     });
   });
 
-  describe('PA-8 BAR_HIT_AREA 去掉圆角（透明命中层不该有形）', () => {
-    it('viewportBarStyles 的 BAR_HIT_AREA 不再含 rounded-xl', () => {
+  describe('PA-8 透明命中层已移除（issue #46）', () => {
+    it('viewportBarStyles 不再导出 BAR_HIT_AREA（自动命中层会吞掉底栏点击）', () => {
       const vbs = readSrc('src/components/viewportBarStyles.ts');
-      const hit = vbs.match(/BAR_HIT_AREA\s*=\s*['"]([^'"]*)/);
-      expect(hit).not.toBeNull();
-      expect(hit[1]).not.toContain('rounded-xl');
-      expect(hit[1]).not.toMatch(/\brounded\b/);
+      // PA-8 当时去的是命中层的圆角；#46 证明这一层本身就是吞点击的根因
+      // （绝对定位 + pointer-events-auto，绘制在按钮之上），整层删除。
+      expect(vbs).not.toMatch(/export const BAR_HIT_AREA/);
     });
   });
 

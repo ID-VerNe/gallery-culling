@@ -19,10 +19,11 @@
  *    要动外观，先换一个不触发重排的属性。
  * 2. **文字标签占的槽位宽度恒定**（`.bar-label`，见 index.css），折叠只把
  *    `opacity` 与 `translate` 收起来。这样「展开」不会让盒子变宽。
- * 3. **命中层比底板大**（`BAR_HIT_AREA`）：指针在底板边缘 ±12/±8px 内都算
- *    「在里面」，进一步消除边缘抖动。
- * 4. 静息态**无底色**：底板透明（F-02：核心动词常驻可见，但视觉重量
- *    降到最低，不压照片）。
+ * 3. **底板上不许盖自动命中层**（issue #46）：`pointer-events` 可继承，底板
+ *    一旦是 `none`，内部按钮全是 `none`；而绝对定位 + `pointer-events-auto`
+ *    的透明层会绘制在按钮之上、把点击接走。原先的 `BAR_HIT_AREA` 已删除。
+ * 4. 静息态**整条移出视口**（issue #47）：只收文字会让容器、图标与标签槽位
+ *    继续遮挡照片下沿。收起用 `translate` + `opacity`，不碰几何。
  *
  * 标签必须带 `whitespace-nowrap`：`w-0 overflow-hidden` 只压宽度、不禁止换行，
  * 中文会被断成竖排方块（实测静息态按钮高 87px 就是这么来的）。
@@ -30,21 +31,25 @@
  * 这些不变量的机器检查在 `PreviewViewport.test.tsx` /
  * `BeforeAfterViewport.test.tsx` 的「底栏几何冻结」组里。
  *
- * ## 视觉层级：整条 bar 淡入淡出（issue #14）
+ * ## 视觉层级：整条 bar 收起（issue #14 → #47）
  *
  * #12 修完几何后发现「隐藏了跟没隐藏一模一样」：它只把**文字**收成
- * `opacity-0`，图标与底板盒子仍常驻绘制。几何冻结不该以牺牲层级为代价，
- * 所以这里把「隐藏」提升到整条 bar 一级：
+ * `opacity-0`，图标与底板盒子仍常驻绘制。#14 把不透明度压到 45% 仍然不够：
+ * 容器、图标、标签预留槽位都还在画面上（实测静息外接盒 887.09px 常驻）。
+ * #47 把收起提升到容器级：
  *
- * - 底板：底色 / 边框 / 阴影随悬停淡入（已有，不变）；
- * - 整条 bar：静息 `translate-y-1` 下沉 4px，悬停 `translate-y-0` 浮现。
- *   `translate` 走合成层，**不进几何**，所以上面第 1 条依然成立；
- * - 图标：静息 `opacity-45`，悬停 `opacity-100`（`.bar-icons`）。不是 0 ——
- *   F-02 要求核心动词可发现，全隐会把旧缺陷改回来；
- * - 三者共用一条 `ease-out` 曲线，不做错峰，避免「底板先亮、图标后亮」。
+ * - 整条底板：静息 `translate-y-[calc(100% + 1rem)]` + `opacity-0`，悬停 /
+ *   聚焦回 `translate-y-0` + `opacity-100`。**为什么用 transform**：底板是
+ *   宿主里的绝对定位浮层，位移只走合成层、不参与文档流，照片不重排、不跳动；
+ *   `display:none` / 卸载会让 `:focus-within` 与 Tab 失去落脚点，`height:0`
+ *   会触发重排。`calc(100% + 1rem)` 把 `bottom-4` 留的 1rem 也一并移出视口。
+ * - 展开手柄 `BAR_HANDLE`：静息时唯一留在屏幕上的痕迹（约 48×4px），指针
+ *   悬停或 Tab 聚焦它就唤回整条。它只是揭示手柄，不绑动作。
+ * - 图标静息 45% 的规则（`.bar-icons`）保留，但整条已不可见，它只在过渡
+ *   瞬间起作用，不再承担「让用户看见底栏」的职责。
  *
- * 不支持 `prefers-reduced-motion` 的浏览器以外，降级规则写在 `index.css`
- * 的 `.bar-icons` 与 `@media (prefers-reduced-motion: reduce)` 里。
+ * `prefers-reduced-motion` 的降级写在 `index.css`：只把过渡时长压到 0，
+ * **不能**取消位移本身（否则透明底板会停在原地挡住点击）。
  *
  * ## 为什么 `group/bar` 必须挂在**包裹层**上（issue #14 根因）
  *
@@ -68,37 +73,49 @@
 export const BAR_GROUP_HOST =
   'group/bar absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-none';
 
-/** 底栏外框：尺寸恒定。悬停淡入底板 + 回正位移，不碰任何几何属性。 */
+/**
+ * 底栏外框：尺寸恒定，静息整条移出视口（issue #47）。
+ *
+ * `pointer-events-auto` 是 issue #46 的修复：`pointer-events` 会继承，底板
+ * 一旦 `none`，内部所有按钮都收不到点击。静息时底板整体在视口外，因此不会
+ * 挡住照片的点击。
+ */
 export const BAR_PLATE =
   'relative ' +
   'flex items-center gap-3 rounded-lg px-3 py-1 ' +
   'border border-white/0 ' +
-  // 浮起：位移不重排，跟底色一起走同一条曲线（issue #14）。
-  'translate-y-1 group-hover/bar:translate-y-0 group-focus-within/bar:translate-y-0 ' +
+  // issue #46：底板自己接点击，内部按钮继承 auto。
+  'pointer-events-auto ' +
+  // issue #47：收起 = 整条位移出视口 + 透明。calc(100% + 1rem) 连 bottom-4
+  // 留的 1rem 一起移出；位移不参与文档流，照片不重排。
+  'translate-y-[calc(100%_+_1rem)] opacity-0 ' +
+  'group-hover/bar:translate-y-0 group-focus-within/bar:translate-y-0 ' +
+  'group-hover/bar:opacity-100 group-focus-within/bar:opacity-100 ' +
   'group-hover/bar:border-white/15 group-focus-within/bar:border-white/15 ' +
   'group-hover/bar:bg-background-base/90 group-focus-within/bar:bg-background-base/90 ' +
   'group-hover/bar:shadow-2xl group-focus-within/bar:shadow-2xl ' +
   'backdrop-blur-xl ' +
-  // 只过渡可合成/不重排的属性：颜色、边框、阴影、位移。（padding 已从几何里消失。）
-  'transition-[background-color,border-color,box-shadow,transform] duration-200 ease-out';
+  // 只过渡可合成/不重排的属性：颜色、边框、阴影、位移、透明度。
+  'transition-[background-color,border-color,box-shadow,transform,opacity] duration-200 ease-out';
 
 /**
- * 悬停热区：比可视底板四周各外扩一圈的透明层。
+ * 展开手柄（issue #47）：静息时唯一留在屏幕上的底栏痕迹。
  *
- * 它本身不画任何东西、也不改尺寸；只是为了「指针接近底板就算悬停」，
- * 让边缘不再有机会在 hover / 非 hover 之间来回跳。尺寸写死成 class，
- * 不随状态变化。
+ * 约 48×4px 的细条，`pointer-events-auto` 且可聚焦（调用点 `tabIndex={0}`
+ * + `aria-label`）。指针悬停或 Tab 聚焦它，宿主 `group/bar` 的 `:hover` /
+ * `:focus-within` 就把整条底板唤回，F-02 的「核心动词可发现」不回退。
  *
- * issue #14：**纯透明**。原先悬停时自绘 `bg-white/[0.03]`，那是悬停瞬间
- * 多出来的一层亮面，观感上就是「闪一下」。命中层只负责判 hit，不该有形。
+ * 它是**揭示手柄**而不是动作按钮：不绑 `onClick`，避免做成「点了不知道
+ * 干嘛」的伪按钮。DOM 顺序必须放在底板之前 —— 底板展开后绘制在它之上，
+ * 不会出现细条压在按钮上的观感。
  */
-export const BAR_HIT_AREA =
-  'absolute -inset-x-3 -inset-y-2 ' +
-  'bg-transparent ' +
-  // PA-8（issue #18）：命中层纯透明、不绘制，不该带圆角——`rounded-xl` 让它在
-  // 悬停瞬间多出一层「形」，与「命中层不该有形」的注释自相矛盾。去掉圆角，
-  // 它只负责把 hit 判定外扩一圈，视觉重量恒为 0。
-  'pointer-events-auto';
+export const BAR_HANDLE =
+  'absolute bottom-0 left-1/2 -translate-x-1/2 ' +
+  'focus-ring h-1 w-12 rounded-full ' +
+  'bg-white/25 ' +
+  'pointer-events-auto ' +
+  'group-hover/bar:opacity-0 group-focus-within/bar:opacity-0 ' +
+  'transition-opacity duration-200 ease-out';
 
 /** 分组分隔线：padding 常驻（`pr-3`），展开只让右键线变色。 */
 export const BAR_DIVIDER =
