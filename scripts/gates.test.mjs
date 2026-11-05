@@ -7,6 +7,7 @@
  * 最后一组直接拿仓库现状跑一遍：门禁清单漂移应该在本机就被发现，而不是等 CI。
  */
 import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -604,6 +605,74 @@ describe('main —— 退出码契约（SKIP / fail-closed / 判定）', () => {
     const { rc, output } = quiet({ argv: ['--base', 'HEAD'], env: {} });
     expect(rc).toBe(0);
     expect(output).toContain('门禁链无改动');
+  });
+
+  /**
+   * issue #56：push 是落地事件，没有 PR 正文可读；旧实现用
+   * `PR_NUMBER === undefined && body === null` 判定，而 push 上
+   * `${{ github.event.pull_request.* }}` 求值为空字符串，分支永远进不去。
+   * 现在改由 `GATE_CHANGE_REVIEW_EVENT=push` 显式分流，且必须留痕。
+   */
+  const gateChainBase = () => {
+    // 不写死 sha：取「引入 scripts/gates.json 的那个提交」的父提交，其 diff 必然命中门禁链。
+    const sha = execFileSync('git', ['log', '--format=%H', '--diff-filter=A', '--', 'scripts/gates.json'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    })
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .pop();
+    return `${sha}^`;
+  };
+
+  it('push 事件（有 base）→ 通过且逐条留痕', () => {
+    const base = gateChainBase();
+    const { rc, output } = quiet({
+      argv: [],
+      env: {
+        GATE_CHANGE_REVIEW_EVENT: 'push',
+        GATE_CHANGES: '1',
+        PR_BASE_SHA: base,
+        PR_NUMBER: '',
+        PR_BODY: '',
+      },
+    });
+    expect(rc).toBe(0);
+    expect(output).toContain('push 事件');
+    expect(output).toContain('门禁链改动');
+    expect(output).not.toContain('fail-closed');
+  });
+
+  it('push 事件（拿不到 base）→ 通过且留痕，不再 fail-closed', () => {
+    const { rc, output } = quiet({
+      argv: [],
+      env: { GATE_CHANGE_REVIEW_EVENT: 'push', GATE_CHANGES: '1' },
+    });
+    expect(rc).toBe(0);
+    expect(output).toContain('push 事件');
+    expect(output).toContain('拿不到 base');
+    expect(output).not.toContain('fail-closed');
+  });
+
+  it('同一 base 下 PR 事件、无正文 → 仍然红（push 分支不削弱 PR 闸门）', () => {
+    const base = gateChainBase();
+    const { rc, output } = quiet({
+      argv: ['--base', base],
+      env: { GATE_CHANGE_REVIEW_EVENT: 'pull_request' },
+    });
+    expect(rc).toBe(1);
+    expect(output).toContain('门禁改动段缺失');
+  });
+
+  it('PR 事件、正文是空字符串（≠ null）→ 仍然红（缺 `## 门禁改动` 段）', () => {
+    const base = gateChainBase();
+    const { rc, output } = quiet({
+      argv: ['--base', base],
+      env: { GATE_CHANGE_REVIEW_EVENT: 'pull_request', PR_BODY: '' },
+    });
+    expect(rc).toBe(1);
+    expect(output).toContain('门禁改动段缺失');
   });
 });
 

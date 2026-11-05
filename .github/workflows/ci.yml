@@ -69,12 +69,15 @@ jobs:
       - name: 门禁（scripts/gates.json）
         # issue #8：check-gate-change-review.mjs 需要 PR 上下文。
         # pull_request 事件下 PR_BASE_SHA 是 base 分支的 sha（merge-base 可算到）；
-        # push 事件没有 PR_NUMBER / PR_BODY，基线上界由 GATE_CHANGES + github.event.before 兜住。
+        # push 事件没有 PR_NUMBER / PR_BODY，用 `github.event.before` 兜住 base（issue #56），
+        # 并显式注入事件类型：脚本据此走「push 无正文、留痕放行」分支，
+        # 不再靠「空值是 '' 还是 undefined」猜上下文。
         env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           GATE_CHANGES: ${{ github.event_name == 'push' && '1' || '' }}
+          GATE_CHANGE_REVIEW_EVENT: ${{ github.event_name }}
         run: node scripts/run-gates.mjs ci --shard ${{ matrix.shard }}
 
   checks:
