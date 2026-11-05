@@ -471,7 +471,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
             </button>
           </div>
 
-          {/* 色标（SH-01）：鼠标可达的五色入口，与 6–9 / Shift+6 同语义。 */}
+          {/* 色标（SH-01）：鼠标可达的五色入口，与 Shift+1…5 同语义。 */}
           {onLabel && (
             <div className={BAR_DIVIDER}>
               <LabelDots label={group.label} onSelect={onLabel} />

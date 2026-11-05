@@ -2,13 +2,13 @@ import { useEffect, useRef } from 'react';
 import type { ColorLabel } from '../types';
 
 /**
- * 左手色标别名（issue #45）：`Shift+1…5` = 红 / 黄 / 绿 / 蓝 / 紫。
+ * 左手色标（issue #61）：`Shift+1…5` = 红 / 黄 / 绿 / 蓝 / 紫。
  *
  * 必须按物理键位 `e.code` 判定：美式布局下 `Shift+1` 的 `e.key` 是 `!`、
- * `Shift+5` 是 `%`，按字符匹配永远落空（与 `Shift+6` 判紫色的理由相同）。
- * 旧键 `6`–`9` / `Shift+6` 保留，这里只做新增，不迁移。
+ * `Shift+5` 是 `%`，按字符匹配永远落空。
+ * 右手 `6`–`9` / `Shift+6` 已随 issue #61 删除，色标只剩左手这一路。
  */
-const LEFT_HAND_LABEL_BY_CODE: Record<string, ColorLabel> = {
+const LABEL_BY_DIGIT_CODE: Record<string, ColorLabel> = {
   Digit1: 'Red',
   Digit2: 'Yellow',
   Digit3: 'Green',
@@ -22,12 +22,12 @@ interface KeyboardShortcutsProps {
   onRate: (rating: number) => void;
   onFlag: (flag: 'pick' | 'reject' | 'none') => void;
   /**
-   * 五色色标：`6`/`7`/`8`/`9` = 红/黄/绿/蓝，`Shift+6` = 紫。
+   * 五色色标：`Shift+1…5` = 红/黄/绿/蓝/紫（issue #61，右手 6–9 已删除）。
    * 重复按同一个色标由宿主实现为"取消"。
    */
   onLabel?: (label: ColorLabel) => void;
   /**
-   * B2：清除评级与旗标（绑定 `0` / `U`）。
+   * B2：清除评级与旗标（绑定左手 `R`）。
    *
    * 提供时走这一个回调（宿主把"清零 + 清旗标"合并成**单次写盘**，避免两次 IPC
    * 各写一遍 XMP 造成闪烁与两次磁盘写入）；未提供时退回旧的 `onRate(0)` +
@@ -85,8 +85,9 @@ interface KeyboardShortcutsProps {
    */
   onUndo?: () => void;
   /**
-   * 重做（FR-04），绑定 `Ctrl/Cmd+Shift+Z`，并额外接受 Windows 习惯的
-   * `Ctrl+Y`（本项目只跑 Windows，`Ctrl+Y` 是那里更常见的肌肉记忆）。
+   * 重做（FR-04），绑定 `Ctrl/Cmd+Shift+Z`。
+   *
+   * issue #61 删除了 `Ctrl+Y`：`Y` 在键盘右半区，不属于左手可达入口。
    */
   onRedo?: () => void;
 }
@@ -118,7 +119,7 @@ export function useKeyboardShortcuts({
   onUndo,
   onRedo,
 }: KeyboardShortcutsProps) {
-  /** `\` 是否处于按住态 —— 供 blur / visibilitychange 复位兜底判断，避免误复位。 */
+  /** `V` 是否处于按住态 —— 供 blur / visibilitychange 复位兜底判断，避免误复位。 */
   const holdActiveRef = useRef(false);
 
   useEffect(() => {
@@ -134,30 +135,11 @@ export function useKeyboardShortcuts({
       document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
 
     /**
-     * 仅「文本录入类」控件 —— **唯一用途**是 `\` 的让位判断（允许在路径/文本
-     * 框里键入 Windows 路径分隔符）。刻意排除 range/checkbox/radio 等非文本
-     * input：它们不以键入文本为语义，仍应触发「按住查看原片」。
-     *
-     * 注意：不要把这里的「按 type 过滤」语义继承到通用守卫，否则会漏掉
-     * `input[type=range]`，导致调色滑杆的箭头键被全局 handler 劫持（回归）。
-     */
-    const isTextEntry = (el: Element | null): boolean => {
-      if (!el) return false;
-      if (el.tagName === 'TEXTAREA') return true;
-      if ((el as HTMLElement).isContentEditable) return true;
-      if (el.tagName !== 'INPUT') return false;
-      const type = (el as HTMLInputElement).type;
-      return !['range', 'checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'color', 'image'].includes(
-        type,
-      );
-    };
-
-    /**
      * 通用守卫：**任意** INPUT（含 range/checkbox/radio，不得按 type 过滤）+
      * TEXTAREA + contentEditable + SELECT。
      *
      * 唯一命名（勿改名为 isValueOrText）。**绝不加入 `[role="listbox"]`**：项目
-     * 唯一的 listbox 是缩略图宫格，其 `a/d/←/→/1..5/x/p` 依赖本全局 handler。
+     * 唯一的 listbox 是缩略图宫格，其全局单键都依赖本 handler。
      */
     const isFormControlOrEditing = (el: Element | null): boolean =>
       !!el &&
@@ -175,18 +157,14 @@ export function useKeyboardShortcuts({
 
       const el = e.target as Element | null;
 
-      // 3 `\` 按住查看原片：**必须早于通用守卫**，否则 range/宫格聚焦时无法触发。
-      //   文本录入内让位以允许键入路径分隔符。
+      // 3 `V` 按住查看原片：**必须早于通用守卫**，否则 range/宫格聚焦时无法触发。
+      //   文本/表单控件内让位，避免抢 `Ctrl+V` 粘贴或 SELECT 的首字母跳转。
       //
-      //   issue #45：`V` 是左手别名（右手区 `\` 左手够不到）。两者共用同一路
-      //   按住态；`V` 额外要求无 Ctrl/Meta/Alt，避免抢走 `Ctrl+V` 粘贴。
+      //   issue #61：右手的 `\` 已删除，按住键只剩左手 `V`。
       const isHoldOriginalKey =
-        e.key === '\\' ||
-        ((e.key === 'v' || e.key === 'V') && !e.ctrlKey && !e.metaKey && !e.altKey);
+        (e.key === 'v' || e.key === 'V') && !e.ctrlKey && !e.metaKey && !e.altKey;
       if (isHoldOriginalKey) {
-        // 旧键 `\` 只让位给文本录入（range 上仍可按住预览）；`V` 是字母键，
-        // 额外让位给全部表单控件，避免抢 SELECT 的首字母跳转。
-        if (e.key === '\\' ? isTextEntry(el) : isFormControlOrEditing(el)) return;
+        if (isFormControlOrEditing(el)) return;
         if (!e.repeat && onHoldOriginalStart) {
           e.preventDefault();
           holdActiveRef.current = true;
@@ -207,14 +185,14 @@ export function useKeyboardShortcuts({
       //   代价：BUTTON/SUMMARY 上空格不再触发原生激活（Enter 仍可激活）——
       //   这是「空格不吞键」的取舍，写进 PR 影响面。
 
-      // 5.4 重做：Ctrl/Cmd+Shift+Z（Windows 习惯的 Ctrl+Y 同样接受）。
+      // 5.4 重做：Ctrl/Cmd+Shift+Z（issue #61 删除了右手 `Ctrl+Y`）。
       //     必须排在撤销分支**之前** —— 撤销只判 key，会连 Shift+Z 一起吞掉。
-      //     同理也排在通用守卫之后：输入框里的 Ctrl+Y 是原生重做输入。
+      //     同理也排在通用守卫之后：输入框里保持原生重做输入。
       if (
         (e.ctrlKey || e.metaKey) &&
         !e.altKey &&
-        ((e.shiftKey && (e.key === 'z' || e.key === 'Z')) ||
-          (!e.shiftKey && (e.key === 'y' || e.key === 'Y')))
+        e.shiftKey &&
+        (e.key === 'z' || e.key === 'Z')
       ) {
         if (onRedo) {
           e.preventDefault();
@@ -256,36 +234,21 @@ export function useKeyboardShortcuts({
       // 6 组合键让路（Ctrl+X/Ctrl+P 等不再误触评级/旗标并写盘）；Ctrl/Cmd+F 显式豁免。
       if ((e.ctrlKey || e.metaKey || e.altKey) && e.key !== 'f') return;
 
-      // 6.4 左手色标：Shift+1…5 = 红/黄/绿/蓝/紫（issue #45）。
-      //     与 Shift+6 一样按物理键位判断（Shift+1 的 e.key 是 `!`）。
-      //     旧键 6–9 / Shift+6 原样保留，这里只新增别名。
-      if (e.shiftKey && LEFT_HAND_LABEL_BY_CODE[e.code]) {
+      // 6.4 左手色标：Shift+1…5 = 红/黄/绿/蓝/紫（issue #61）。
+      //     按物理键位判断（Shift+1 的 e.key 是 `!`）。右手 6–9 / Shift+6 已删除。
+      if (e.shiftKey && LABEL_BY_DIGIT_CODE[e.code]) {
         if (onLabel) {
           e.preventDefault();
-          onLabel(LEFT_HAND_LABEL_BY_CODE[e.code]);
+          onLabel(LABEL_BY_DIGIT_CODE[e.code]);
         }
         return;
       }
 
-      // 6.5 紫色色标：Shift+6。
+      // Focus the grid search field via Ctrl/Cmd+F（issue #61 删除了右手 `/`）。
       //
-      // 必须按**物理键位**判断：`Shift+6` 在美式布局下 `e.key` 是 `^`，中文输入法
-      // 或其他布局还可能给出别的字符；只有 `e.code` 稳定是 `Digit6`。
-      // 位置在组合键让路之后：Ctrl/Alt+Shift+6 不抢。
-      if (e.shiftKey && e.code === 'Digit6') {
-        if (onLabel) {
-          e.preventDefault();
-          onLabel('Purple');
-        }
-        return;
-      }
-
-      // Focus the grid search field. `/` is the convention; Ctrl/Cmd+F also
-      // works because the OS find bar is useless inside a photo grid.
-      //
-      // issue #45：即使调用方没有接线 onFocusSearch，也必须在这里 return；
-      // 否则 Ctrl+F 会穿过第 6 步例外落进新增的 `case 'f'`，误触「保留」。
-      if (e.key === '/' || ((e.ctrlKey || e.metaKey) && e.key === 'f')) {
+      // 即使调用方没有接线 onFocusSearch，也必须在这里 return；否则 Ctrl+F
+      // 会穿过第 6 步例外落进 `case 'f'`，误触「保留」。
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
         if (onFocusSearch) {
           e.preventDefault();
           onFocusSearch();
@@ -298,21 +261,37 @@ export function useKeyboardShortcuts({
       //     这里把 Alt+F 关掉，否则浏览器菜单键会误触保留。
       if (e.altKey) return;
 
-      if (e.key === '?' && onOpenShortcutHelp) {
-        e.preventDefault();
-        onOpenShortcutHelp();
+      // 6.7 钉左 / 钉右基准：Q / Shift+Q（issue #61，替代右手 `[` / `]`）。
+      //     用物理键位 `e.code` 判定；Shift+Q 的 `e.key` 仍是 `Q`，靠 shiftKey 分流。
+      if (e.code === 'KeyQ') {
+        if (e.shiftKey) {
+          if (onPinRight) {
+            e.preventDefault();
+            onPinRight();
+          }
+        } else if (onPinLeft) {
+          e.preventDefault();
+          onPinLeft();
+        }
+        return;
+      }
+
+      // 6.8 F1 打开帮助（issue #61，替代右手 `?` = Shift+/）。
+      if (e.key === 'F1') {
+        if (onOpenShortcutHelp) {
+          e.preventDefault();
+          onOpenShortcutHelp();
+        }
         return;
       }
 
       switch (e.key) {
-        // Navigation
-        case 'ArrowLeft':
+        // Navigation（issue #61：右手 `←` / `→` 已删除，只保留 A / D）
         case 'a':
         case 'A':
           e.preventDefault();
           onPrev();
           break;
-        case 'ArrowRight':
         case 'd':
         case 'D':
           e.preventDefault();
@@ -340,10 +319,7 @@ export function useKeyboardShortcuts({
           e.preventDefault();
           onRate(5);
           break;
-        case '0':
-        case 'u':
-        case 'U':
-        // issue #45：`R` 是清除的左手别名（0 在数字区最右、U 为右手上排）。
+        // issue #61：清除只保留左手 `R`（右手 `0` / `U` 已删除）。
         case 'r':
         case 'R':
           e.preventDefault();
@@ -355,10 +331,7 @@ export function useKeyboardShortcuts({
           }
           break;
 
-        // Pick / Reject
-        case 'p':
-        case 'P':
-        // issue #45：`F` 是保留（Pick/Flag）的左手别名。
+        // Pick / Reject（issue #61：保留只留左手 `F`，右手 `P` 已删除）
         case 'f':
         case 'F':
           e.preventDefault();
@@ -370,24 +343,7 @@ export function useKeyboardShortcuts({
           onFlag('reject');
           break;
 
-        // 五色色标：6/7/8/9 = 红/黄/绿/蓝（紫色走上面的 Shift+6）。
-        // 与 1..5 星级分开：数字键上半排是星级，6..9 是色标，语义不重叠。
-        case '6':
-          e.preventDefault();
-          onLabel?.('Red');
-          break;
-        case '7':
-          e.preventDefault();
-          onLabel?.('Yellow');
-          break;
-        case '8':
-          e.preventDefault();
-          onLabel?.('Green');
-          break;
-        case '9':
-          e.preventDefault();
-          onLabel?.('Blue');
-          break;
+        // 色标只走上面的 Shift+1…5（issue #61 删除了右手 6–9 / Shift+6）。
 
         // 1:1 细节开关 (Z)。与 Ctrl+Z 撤销只差一个修饰键 —— 那两条已在
         // 更早的分支 return，这里到不了带修饰键的 z。
@@ -399,9 +355,9 @@ export function useKeyboardShortcuts({
           }
           break;
 
-        // Open in Photoshop / External app
-        case 'o':
-        case 'O':
+        // Open in Photoshop / External app（issue #61：W 替代右手 O）
+        case 'w':
+        case 'W':
           e.preventDefault();
           onOpenExternal();
           break;
@@ -431,28 +387,12 @@ export function useKeyboardShortcuts({
           }
           break;
 
-        // Pin Left as Baseline ([)
-        case '[':
-          if (onPinLeft) {
-            e.preventDefault();
-            onPinLeft();
-          }
-          break;
-
-        // Pin Right as Baseline (])
-        case ']':
-          if (onPinRight) {
-            e.preventDefault();
-            onPinRight();
-          }
-          break;
-
         // 空格 = 把**当前照片**设为对比基准（已钉住则取消）。
         //
         // 曾复用 onPinRight，但无基准时 deriveCompareGroups 总让 right = compareIndex
         // 那张，于是单图视口下按空格会把**另一张**照片钉为基准，界面上完全看不出
         // 发生了什么 —— 与 ShortcutHelpModal 承诺的「空格 = 设为基准」矛盾。
-        // `]` 仍是"钉右窗格"，语义与空格不同，故这里走独立回调。
+        // `Shift+Q` 仍是"钉右窗格"（见上面的 KeyQ 分支），语义与空格不同。
         case ' ':
           if (onTogglePinCurrent) {
             e.preventDefault();
@@ -464,19 +404,17 @@ export function useKeyboardShortcuts({
           }
           break;
 
-        // Metadata Editor (M)
-        case 'm':
-        case 'M':
+        // Metadata Editor（issue #61：G 替代右手 M）
+        case 'g':
+        case 'G':
           if (onOpenMetadataModal) {
             e.preventDefault();
             onOpenMetadataModal();
           }
           break;
 
-        // Before / After Intra-Photo View Toggle (Y)
-        // issue #45：`T`（Toggle）是左手别名。
-        case 'y':
-        case 'Y':
+        // Before / After Intra-Photo View Toggle（issue #61：只留左手 T，
+        // 右手 Y 已删除）。
         case 't':
         case 'T':
           if (onToggleBeforeAfter) {
@@ -502,20 +440,15 @@ export function useKeyboardShortcuts({
     const handleKeyUp = (e: KeyboardEvent) => {
       const el = e.target as Element | null;
 
-      // 反斜杠复位必须早于 isDialogOpen 守卫（S-03）。按住期间若打开了任何
-      // 弹窗，松键会被守卫整段吞掉 -> holdActiveRef 复位不了 -> 预览横幅常亮。
-      // 原注释自称「必须早于通用守卫」，但 isDialogOpen() 就在它上面 ——
-      // 注释与实现不符。松键复位是幂等的，故上提到守卫之前是安全的。
+      // 按住 `V` 的复位必须早于 isDialogOpen 守卫（S-03）。按住期间若打开了
+      // 任何弹窗，松键会被守卫整段吞掉 -> holdActiveRef 复位不了 -> 预览横幅常亮。
+      // 松键复位是幂等的，故上提到守卫之前是安全的。
       //
-      // issue #45：`V` 是左手别名。只有 holdActiveRef 为真时才复位，这样
+      // issue #61：右手的 `\` 已删除；只有 holdActiveRef 为真时才复位，这样
       // `Ctrl+V` / 在文本框里键入 v 的松键不会误触；若按住期间弹窗抢走焦点，
       // 仍能正常结束（不依赖 keyup 目标）。
-      if (e.key === '\\' || e.key === 'v' || e.key === 'V') {
-        if (e.key === '\\') {
-          if (isTextEntry(el)) return;
-        } else if (!holdActiveRef.current) {
-          return;
-        }
+      if (e.key === 'v' || e.key === 'V') {
+        if (!holdActiveRef.current) return;
         e.preventDefault();
         holdActiveRef.current = false;
         onHoldOriginalEnd?.();
@@ -526,7 +459,7 @@ export function useKeyboardShortcuts({
       if (isFormControlOrEditing(el)) return;
     };
 
-    // 复位兜底：窗口失焦 / 页面隐藏时若 `\` 仍处于按住态，强制结束预览，
+    // 复位兜底：窗口失焦 / 页面隐藏时若 `V` 仍处于按住态，强制结束预览，
     // 避免「松手事件丢失」导致横幅常亮。仅在真正按住时才调用（防误复位）。
     const resetHold = () => {
       if (!holdActiveRef.current) return;

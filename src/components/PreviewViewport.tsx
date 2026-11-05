@@ -43,7 +43,7 @@ interface PreviewViewportProps {
   onNext: () => void;
   onRate: (rating: number) => void;
   onFlag: (flag: 'pick' | 'reject' | 'none') => void;
-  /** SH-01：底栏色点（鼠标可达），语义与 `6`–`9` / `Shift+6` 完全一致。 */
+  /** SH-01：底栏色点（鼠标可达），语义与 `Shift+1…5` 完全一致。 */
   onLabel?: (label: ColorLabel) => void;
   onOpenExternal: () => void;
   onOpenLuminar?: () => void;
@@ -443,7 +443,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           role="status"
           className="absolute top-4 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3.5 py-1.5 rounded-md text-xs font-semibold text-amber-300 border border-amber-500/40 flex items-center gap-2 pointer-events-none"
         >
-          <span>正在查看原片（松开 V / \ 键恢复）</span>
+          <span>正在查看原片（松开 V 键恢复）</span>
         </div>
       )}
 
@@ -456,8 +456,8 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           onPrev();
         }}
         className="focus-ring absolute left-3 top-1/2 -translate-y-1/2 p-3 bg-background-base/70 hover:ring-1 hover:ring-white/25 active:scale-[0.96] text-white rounded-full press backdrop-blur-sm pointer-events-auto"
-        title="上一张 (A / ←)"
-        aria-label="上一张照片（快捷键 A 或 ←）"
+        title="上一张 (A)"
+        aria-label="上一张照片（快捷键 A）"
       >
         <ChevronLeft className="w-6 h-6" aria-hidden="true" />
       </button>
@@ -467,8 +467,8 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           onNext();
         }}
         className="focus-ring absolute right-3 top-1/2 -translate-y-1/2 p-3 bg-background-base/70 hover:ring-1 hover:ring-white/25 active:scale-[0.96] text-white rounded-full press backdrop-blur-sm pointer-events-auto"
-        title="下一张 (D / →)"
-        aria-label="下一张照片（快捷键 D 或 →）"
+        title="下一张 (D)"
+        aria-label="下一张照片（快捷键 D）"
       >
         <ChevronRight className="w-6 h-6" aria-hidden="true" />
       </button>
@@ -570,7 +570,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
             </button>
           </div>
 
-          {/* 色标（SH-01）：鼠标可达的五色入口，与 6–9 / Shift+6 同语义。 */}
+          {/* 色标（SH-01）：鼠标可达的五色入口，与 Shift+1…5 同语义。 */}
           {onLabel && (
             <div className={BAR_DIVIDER}>
               <LabelDots label={group.label} onSelect={onLabel} />
@@ -657,7 +657,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           <button
             onClick={onOpenExternal}
             className={`${BAR_BUTTON} bg-white/10 hover:bg-white/20 text-white`}
-            title="外部打开 (O)"
+            title="外部打开 (W)"
             aria-label="在修图或外部程序中打开"
           >
             <ExternalLink className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />

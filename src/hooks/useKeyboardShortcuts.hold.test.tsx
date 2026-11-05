@@ -1,10 +1,12 @@
 /**
- * S-03：按住反斜杠期间打开弹窗，松键仍必须复位预览横幅。
+ * S-03：按住查看原片期间打开弹窗，松键仍必须复位预览横幅。
  *
- * 原实现 handleKeyUp 的第一行就是 `if (isDialogOpen()) return;`，而反斜杠
- * 分支排在它下面 —— 按住后打开任何弹窗，松键就被整段吞掉，holdActiveRef
+ * 原实现 handleKeyUp 的第一行就是 `if (isDialogOpen()) return;`，而按住分支
+ * 排在它下面 —— 按住后打开任何弹窗，松键就被整段吞掉，holdActiveRef
  * 永远不复位，原始照片横幅常亮。原注释还自称该分支「必须早于通用守卫」，
  * 注释与实现不符。
+ *
+ * issue #61 起按住键只剩左手 `V`；右手的反斜杠已删除，按下不得开始查看原片。
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
@@ -12,7 +14,8 @@ import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 
 function setup() {
   const onHoldOriginalEnd = vi.fn();
-  const handlers = { onHoldOriginalEnd, onHoldOriginalStart: vi.fn() };
+  const onHoldOriginalStart = vi.fn();
+  const handlers = { onHoldOriginalEnd, onHoldOriginalStart };
   renderHook(() => useKeyboardShortcuts(handlers as never));
   return handlers;
 }
@@ -25,7 +28,7 @@ function openDialog() {
   return () => d.remove();
 }
 
-describe('S-03 —— hold 反斜杠与弹窗共存', () => {
+describe('S-03 —— hold V 与弹窗共存（issue #61）', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
   });
@@ -35,21 +38,30 @@ describe('S-03 —— hold 反斜杠与弹窗共存', () => {
 
   it('无弹窗时松键正常复位', () => {
     const h = setup();
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: '\\' }));
-    window.dispatchEvent(new KeyboardEvent('keyup', { key: '\\' }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'v' }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'v' }));
     expect(h.onHoldOriginalEnd).toHaveBeenCalledTimes(1);
   });
 
   it('★按住期间打开弹窗，松键仍复位（回归：修复前被守卫吞掉）', () => {
     const h = setup();
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: '\\' }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'v' }));
 
     const close = openDialog();
     // 松键发生在弹窗打开期间
-    window.dispatchEvent(new KeyboardEvent('keyup', { key: '\\' }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'v' }));
 
     expect(h.onHoldOriginalEnd).toHaveBeenCalledTimes(1);
     close();
+  });
+
+  it('右手反斜杠已删除：按下/松开都不触发查看原片', () => {
+    const h = setup();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '\\' }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: '\\' }));
+
+    expect(h.onHoldOriginalStart).not.toHaveBeenCalled();
+    expect(h.onHoldOriginalEnd).not.toHaveBeenCalled();
   });
 
   it('弹窗打开时其它按键仍被守卫拦下（不误触发）', () => {

@@ -33,13 +33,18 @@ export const LABEL_DOT_CLASS: Record<ColorLabel, string> = {
   Purple: 'bg-violet-400',
 };
 
-/** 快捷键：6/7/8/9 依次对应前四色，紫色走 Shift+6。 */
+/**
+ * 快捷键：`Shift+1…5` 依次对应红/黄/绿/蓝/紫（issue #61）。
+ *
+ * 右手 `6`–`9` / `Shift+6` 已删除，色点的 title 只能宣传左手键，
+ * 否则会继续把用户往右手引导。
+ */
 export const LABEL_SHORTCUTS: Record<ColorLabel, string> = {
-  Red: '6',
-  Yellow: '7',
-  Green: '8',
-  Blue: '9',
-  Purple: 'Shift+6',
+  Red: 'Shift+1',
+  Yellow: 'Shift+2',
+  Green: 'Shift+3',
+  Blue: 'Shift+4',
+  Purple: 'Shift+5',
 };
 
 /** 运行时收窄：后端字段是字符串，只有这五个值才当色标处理。 */

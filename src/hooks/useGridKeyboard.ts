@@ -7,12 +7,16 @@ import type { PhotoGroupInfo } from '../types';
  *
  * 三处原实现互相耦合，必须**放在同一个 hook** 里，否则会出现跨 hook 状态同步：
  * - `handleCellClick`（点击/Ctrl/Shift 选区）
- * - `handleListKeyDown`（上下/Home/End/Page 导航）
+ * - `handleListKeyDown`（上下键跨行导航）
  * - `handleSearchKeyDown`（搜索框 Esc）
  * 它们共享 `anchorIndexRef`（Shift 范围选择的起点）与 `activeIds`（当前选区）。
  *
- * 导航语义：上下键按**行**跨（±columns），与视觉行列一致；左右键不在这里处理
- * —— 它们由全局快捷键绑到「上/下一张照片」，避免同一个按键在两个层级各动一次。
+ * 导航语义：上下键按**行**跨（±columns），与视觉行列一致。这是 WAI-ARIA
+ * listbox 在焦点内必须提供的标准导航，因此保留（issue #61 也不删）。
+ * 左右键不在这里处理：`←`/`→` 的全局绑定已随 issue #61 删除（它们在键盘
+ * 右半区），逐张移动统一走全局左手 `A`/`D`。Home/End/PageUp/PageDown 也已
+ * 删除——四个键都在右手区且无免费左手键可替代，代价是失去「跳首尾 / 翻三行」，
+ * 改用点击或连续 `A`/`D`（见 issue #61 裁决表）。
  */
 export function useGridKeyboard(opts: {
   groups: PhotoGroupInfo[];
@@ -119,25 +123,13 @@ export function useGridKeyboard(opts: {
       let next = selectedIndex;
 
       switch (e.key) {
-        // B3：宫格是"按行"排列的，上下键应跨行（±columns），与视觉行列一致；
-        // 左右键由全局 handler 绑到上/下一张照片。
+        // B3：宫格是"按行"排列的，上下键应跨行（±columns），与视觉行列一致。
+        // issue #61：左右键与 Home/End/PageUp/PageDown 已删除（右手区）。
         case 'ArrowDown':
           next = Math.min(selectedIndex + columns, last);
           break;
         case 'ArrowUp':
           next = Math.max(selectedIndex - columns, 0);
-          break;
-        case 'Home':
-          next = 0;
-          break;
-        case 'End':
-          next = last;
-          break;
-        case 'PageDown':
-          next = Math.min(selectedIndex + columns * 3, last);
-          break;
-        case 'PageUp':
-          next = Math.max(selectedIndex - columns * 3, 0);
           break;
         default:
           return;

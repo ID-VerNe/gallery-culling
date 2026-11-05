@@ -180,7 +180,7 @@ describe('SplitCompareViewport —— 色标鼠标入口（SH-01）', () => {
     const onLabel = vi.fn();
     renderSplit({ leftGroup: left, rightGroup: right, onLabel });
 
-    fireEvent.click(screen.getByRole('button', { name: 'left：红色标（快捷 6）' }));
+    fireEvent.click(screen.getByRole('button', { name: 'left：红色标（快捷 Shift+1）' }));
 
     expect(onLabel).toHaveBeenCalledTimes(1);
     expect(onLabel).toHaveBeenCalledWith(left, 'Red');
@@ -192,16 +192,16 @@ describe('SplitCompareViewport —— 色标鼠标入口（SH-01）', () => {
     const onLabel = vi.fn();
     renderSplit({ leftGroup: left, rightGroup: right, onLabel });
 
-    fireEvent.click(screen.getByRole('button', { name: 'right：蓝色标（快捷 9）' }));
+    fireEvent.click(screen.getByRole('button', { name: 'right：蓝色标（快捷 Shift+4）' }));
 
     expect(onLabel).toHaveBeenCalledTimes(1);
     expect(onLabel).toHaveBeenCalledWith(right, 'Blue');
 
-    expect(screen.getByRole('button', { name: 'right：绿色标（快捷 8）' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'right：绿色标（快捷 Shift+3）' })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
-    expect(screen.getByRole('button', { name: 'left：绿色标（快捷 8）' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'left：绿色标（快捷 Shift+3）' })).toHaveAttribute(
       'aria-pressed',
       'false',
     );
