@@ -312,6 +312,18 @@ export interface TaskProgress {
   current?: string;
 }
 
+/** 单目录识别结果（#66）：只按扩展名分类，不读 EXIF/XMP。 */
+export type FolderMode = 'jpg_only' | 'raw_only' | 'mixed' | 'empty';
+
+/** `probe_folder_cmd` 返回：一次 read_dir 的扩展名计数。 */
+export interface FolderProbe {
+  mode: FolderMode;
+  jpgCount: number;
+  rawCount: number;
+  /** 根层子目录数量；仅用于「根层为空但有子目录」的可操作提示。 */
+  subdirCount: number;
+}
+
 export interface FolderScanResult {
   groups: PhotoGroupInfo[];
   totalCount: number;

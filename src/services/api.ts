@@ -7,6 +7,7 @@ import {
   AppSettings,
   ExportItem,
   ExportOutcome,
+  FolderProbe,
   FolderScanResult,
   LumenCapabilities,
   LumenDetailResult,
@@ -30,6 +31,15 @@ import {
 } from '../types';
 
 export const api = {
+  /**
+   * 识别一个目录是只有 JPG / 只有 RAW / 混合 / 空（#66）。
+   *
+   * 只数扩展名，不读 EXIF/XMP、不递归；扩展名白名单在 Rust 侧唯一一份。
+   */
+  probeFolder: async (folder: string): Promise<FolderProbe> => {
+    return await invoke<FolderProbe>('probe_folder_cmd', { folder });
+  },
+
   /**
    * Scan JPG and RAW folders
    */

@@ -82,6 +82,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::scan_folders_cmd,
+            commands::probe_folder_cmd,
             commands::cancel_scan_cmd,
             commands::get_thumbnail_cmd,
             commands::update_rating_flag_cmd,

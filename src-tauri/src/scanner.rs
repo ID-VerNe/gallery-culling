@@ -13,8 +13,8 @@ mod real_smoke;
 
 use crate::cullstore::{self, Entry, Store};
 use crate::models::{
-    ExifData, FolderScanResult, PhotoFileInfo, PhotoGroupInfo, PhotoGroupStatus, ToneAdjustments,
-    TASK_CANCELLED,
+    ExifData, FolderMode, FolderProbe, FolderScanResult, PhotoFileInfo, PhotoGroupInfo,
+    PhotoGroupStatus, ToneAdjustments, TASK_CANCELLED,
 };
 use crate::xmp::{
     check_sidecar_exists, flag_from_xmp, get_xmp_path, legacy_flag_from_label, read_xmp_full,
@@ -167,22 +167,7 @@ fn scan_directory(
                 let ext_lower = ext.to_lowercase();
                 if allowed_exts.contains(&ext_lower.as_str()) {
                     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        let name = path
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let metadata = entry.metadata().ok();
-                        let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
-                        let mtime = secs_from_meta(metadata.as_ref());
-
-                        let info = PhotoFileInfo {
-                            name,
-                            extension: ext_lower,
-                            path: path.to_string_lossy().to_string(),
-                            size,
-                            mtime,
-                        };
+                        let info = build_photo_file_info(&entry, &path, &ext_lower);
                         map.insert(stem.to_lowercase(), info);
                     }
                 }
@@ -190,6 +175,152 @@ fn scan_directory(
         }
     }
     map
+}
+
+/// 由目录项构造 `PhotoFileInfo`；单表扫描与双表扫描共用，避免两套文件名/元数据规则漂移。
+fn build_photo_file_info(entry: &fs::DirEntry, path: &Path, ext_lower: &str) -> PhotoFileInfo {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    let metadata = entry.metadata().ok();
+    let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+    let mtime = secs_from_meta(metadata.as_ref());
+    PhotoFileInfo {
+        name,
+        extension: ext_lower.to_string(),
+        path: path.to_string_lossy().to_string(),
+        size,
+        mtime,
+    }
+}
+
+/// 单目录双白名单扫描：一次 `read_dir` 同时产出 JPG 与 RAW 两张表。
+///
+/// 「选一个目录就够了」的关键性能约束：同一目录绝不能按两张白名单各枚举一遍。
+/// 分类复用上方唯一一份 `JPG_EXTENSIONS` / `RAW_EXTENSIONS`，不在前端或别处另抄。
+fn scan_directory_dual(
+    dir_path: &Path,
+    cancel: &AtomicBool,
+) -> (
+    HashMap<String, PhotoFileInfo>,
+    HashMap<String, PhotoFileInfo>,
+) {
+    let mut jpg_map = HashMap::new();
+    let mut raw_map = HashMap::new();
+    if let Ok(entries) = fs::read_dir(dir_path) {
+        for entry in entries.flatten() {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(ext_lower) = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase())
+            else {
+                continue;
+            };
+            let target = if JPG_EXTENSIONS.contains(&ext_lower.as_str()) {
+                &mut jpg_map
+            } else if RAW_EXTENSIONS.contains(&ext_lower.as_str()) {
+                &mut raw_map
+            } else {
+                continue;
+            };
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                target.insert(
+                    stem.to_lowercase(),
+                    build_photo_file_info(&entry, &path, &ext_lower),
+                );
+            }
+        }
+    }
+    (jpg_map, raw_map)
+}
+
+/// 两个路径是否指向同一个目录。Windows 路径大小写不敏感、`/` 与 `\` 可混用，
+/// 先尝试 `canonicalize`，失败时退化为归一化字符串比较（不额外 IO）。
+fn dirs_are_same(a: &Path, b: &Path) -> bool {
+    if let (Ok(ca), Ok(cb)) = (a.canonicalize(), b.canonicalize()) {
+        return ca == cb;
+    }
+    let norm = |p: &Path| {
+        p.to_string_lossy()
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .to_lowercase()
+    };
+    norm(a) == norm(b)
+}
+
+fn folder_mode(jpg_count: usize, raw_count: usize) -> FolderMode {
+    match (jpg_count > 0, raw_count > 0) {
+        (true, true) => FolderMode::Mixed,
+        (true, false) => FolderMode::JpgOnly,
+        (false, true) => FolderMode::RawOnly,
+        (false, false) => FolderMode::Empty,
+    }
+}
+
+/// 识别一个目录的内容构成（#66）：只数扩展名，不读 EXIF/XMP、不递归子目录。
+///
+/// 供「打开文件夹」按钮在选目录后自动配置 JPG / RAW 两个源。目录不存在、
+/// 无权限都返回带下一步的错误文案，而不是让前端猜。
+pub fn probe_folder(folder: &str) -> Result<FolderProbe, String> {
+    let trimmed = folder.trim();
+    if trimmed.is_empty() {
+        return Err(
+            "还没有选择文件夹。请点击「打开文件夹」选择一个包含 JPG 或 RAW 照片的目录。"
+                .to_string(),
+        );
+    }
+    let path = Path::new(trimmed);
+    if !path.is_dir() {
+        return Err(format!(
+            "文件夹不存在或不是有效目录：{}。请重新选择文件夹。",
+            trimmed
+        ));
+    }
+    let entries = fs::read_dir(path).map_err(|e| {
+        format!(
+            "无法读取文件夹（可能没有权限）：{}。系统返回：{}。请换一个文件夹，或在系统里检查该目录的读取权限。",
+            trimmed, e
+        )
+    })?;
+
+    let mut jpg_count = 0usize;
+    let mut raw_count = 0usize;
+    let mut subdir_count = 0usize;
+    for entry in entries.flatten() {
+        let entry_path = entry.path();
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            subdir_count += 1;
+            continue;
+        }
+        if !entry_path.is_file() {
+            continue;
+        }
+        if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
+            let ext_lower = ext.to_lowercase();
+            if JPG_EXTENSIONS.contains(&ext_lower.as_str()) {
+                jpg_count += 1;
+            } else if RAW_EXTENSIONS.contains(&ext_lower.as_str()) {
+                raw_count += 1;
+            }
+        }
+    }
+
+    Ok(FolderProbe {
+        mode: folder_mode(jpg_count, raw_count),
+        jpg_count,
+        raw_count,
+        subdir_count,
+    })
 }
 
 /// Scan JPG and optional RAW folder and assemble pairs.
@@ -208,13 +339,14 @@ pub fn scan_folders(
     cancel: &AtomicBool,
     mut report: impl FnMut(&str, usize, usize),
 ) -> Result<FolderScanResult, String> {
-    let jpg_path = Path::new(jpg_folder);
+    let jpg_path = Path::new(jpg_folder.trim());
     if !jpg_path.is_dir() {
-        return Err(format!("JPG 文件夹不存在或不是有效目录: {}", jpg_folder));
+        return Err(format!(
+            "照片文件夹不存在或不是有效目录：{}。请重新选择文件夹。",
+            jpg_folder
+        ));
     }
 
-    let is_viewer_mode =
-        raw_folder.is_none() || raw_folder.map(|s| s.trim().is_empty()).unwrap_or(true);
     let raw_path_buf = raw_folder.and_then(|s| {
         let trimmed = s.trim();
         if trimmed.is_empty() {
@@ -223,28 +355,49 @@ pub fn scan_folders(
             Some(Path::new(trimmed))
         }
     });
-
-    let jpg_files = scan_directory(jpg_path, JPG_EXTENSIONS, cancel);
-    if cancel.load(Ordering::Relaxed) {
-        return Err(TASK_CANCELLED.to_string());
-    }
-    let raw_files = if let Some(p) = raw_path_buf {
-        if p.is_dir() {
-            scan_directory(p, RAW_EXTENSIONS, cancel)
-        } else {
-            HashMap::new()
+    // 显式给了 RAW 目录却不存在：旧实现静默降级成 viewer，用户只会看到「少了一堆 RAW」。
+    // 直接失败并把下一步写清楚。
+    if let Some(p) = raw_path_buf {
+        if !p.is_dir() {
+            return Err(format!(
+                "RAW 文件夹不存在或不是有效目录：{}。请重新选择 RAW 文件夹，或清空 RAW 路径后只扫 JPG。",
+                p.display()
+            ));
         }
+    }
+
+    // 同一目录（或根本没给 RAW 源）只枚举一次，两张白名单一起分类；
+    // 只有「JPG / RAW 是两个不同目录」时才各扫一次。
+    let scan_single_dir = match raw_path_buf {
+        None => true,
+        Some(p) => dirs_are_same(jpg_path, p),
+    };
+    let (jpg_files, raw_files) = if scan_single_dir {
+        scan_directory_dual(jpg_path, cancel)
     } else {
-        HashMap::new()
+        let jpg_files = scan_directory(jpg_path, JPG_EXTENSIONS, cancel);
+        if cancel.load(Ordering::Relaxed) {
+            return Err(TASK_CANCELLED.to_string());
+        }
+        let raw_files = scan_directory(raw_path_buf.unwrap(), RAW_EXTENSIONS, cancel);
+        (jpg_files, raw_files)
     };
     if cancel.load(Ordering::Relaxed) {
         return Err(TASK_CANCELLED.to_string());
     }
 
+    // viewer 模式 = 没有配置独立 RAW 源，且目录里也确实没有 RAW。
+    // 单目录里扫到 RAW 时自动进入配对分支，这是「选一个目录就够了」的核心。
+    let is_viewer_mode = raw_path_buf.is_none() && raw_files.is_empty();
+
     // 旗标存储：每个文件夹一份，整次扫描只读两次（不按组读）。
     // 缺失/损坏都返回空 store —— 一份坏文件绝不能把整个文件夹扫不出来。
     let jpg_store = cullstore::load(jpg_path);
-    let raw_store = raw_path_buf.map(cullstore::load).unwrap_or_default();
+    // 同一目录时 jpg_store 已经覆盖，RAW store 不必再读一遍同一个文件。
+    let raw_store = match raw_path_buf {
+        Some(p) if !dirs_are_same(p, jpg_path) => cullstore::load(p),
+        _ => Store::default(),
+    };
 
     fn merge_xmp_metadata_into_exif(exif: &mut Option<ExifData>, xmp_meta: &XmpMetadata) {
         if let Some(e) = exif.as_mut() {
@@ -896,6 +1049,245 @@ mod tests {
             elapsed,
             elapsed.as_secs_f64() * 1000.0 / N as f64
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// #66：识别只看扩展名与目录构成，覆盖四种模式 + 子目录计数 + 大小写。
+    #[test]
+    fn probe_folder_detects_modes_counts_and_subdirs() {
+        let root = unique_dir("probe_modes");
+        let jpg_only = root.join("jpg_only");
+        let raw_only = root.join("raw_only");
+        let mixed = root.join("mixed");
+        let empty = root.join("empty");
+        let root_empty_with_subdirs = root.join("parent");
+        for d in [&jpg_only, &raw_only, &mixed, &empty] {
+            fs::create_dir_all(d).unwrap();
+        }
+        fs::create_dir_all(root_empty_with_subdirs.join("2026-11-05")).unwrap();
+
+        // 纯 JPG：大写 .JPG、.JPEG、png 都算 JPG；不该混进 RAW 计数
+        fs::write(jpg_only.join("A.JPG"), b"jpeg").unwrap();
+        fs::write(jpg_only.join("B.jpeg"), b"jpeg").unwrap();
+        fs::write(jpg_only.join("C.png"), b"png").unwrap();
+        fs::write(jpg_only.join("notes.txt"), b"txt").unwrap();
+
+        // 纯 RAW：大小写混合的扩展名都要认
+        fs::write(raw_only.join("D.NEF"), b"raw").unwrap();
+        fs::write(raw_only.join("E.cr3"), b"raw").unwrap();
+
+        // 混合
+        fs::write(mixed.join("F.jpg"), b"jpeg").unwrap();
+        fs::write(mixed.join("F.NEF"), b"raw").unwrap();
+
+        // 空目录：只有一个非照片文件
+        fs::write(empty.join("readme.txt"), b"txt").unwrap();
+
+        let jpg = probe_folder(jpg_only.to_str().unwrap()).unwrap();
+        assert_eq!(jpg.mode, FolderMode::JpgOnly);
+        assert_eq!((jpg.jpg_count, jpg.raw_count, jpg.subdir_count), (3, 0, 0));
+
+        let raw = probe_folder(raw_only.to_str().unwrap()).unwrap();
+        assert_eq!(raw.mode, FolderMode::RawOnly);
+        assert_eq!((raw.jpg_count, raw.raw_count, raw.subdir_count), (0, 2, 0));
+
+        let both = probe_folder(mixed.to_str().unwrap()).unwrap();
+        assert_eq!(both.mode, FolderMode::Mixed);
+        assert_eq!(
+            (both.jpg_count, both.raw_count, both.subdir_count),
+            (1, 1, 0)
+        );
+
+        let none = probe_folder(empty.to_str().unwrap()).unwrap();
+        assert_eq!(none.mode, FolderMode::Empty);
+        assert_eq!(
+            (none.jpg_count, none.raw_count, none.subdir_count),
+            (0, 0, 0)
+        );
+
+        // 根层没有照片、但有子目录：不递归，返回 Empty + 子目录数量供 UI 提示
+        let parent = probe_folder(root_empty_with_subdirs.to_str().unwrap()).unwrap();
+        assert_eq!(parent.mode, FolderMode::Empty);
+        assert_eq!(parent.subdir_count, 1);
+
+        let missing = probe_folder(root.join("nope").to_str().unwrap()).unwrap_err();
+        assert!(
+            missing.contains("文件夹不存在") && missing.contains("重新选择"),
+            "目录不存在要给下一步，实际: {missing}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// #66：前端自动配置会把同一个目录同时填进 JPG 与 RAW；这条路径必须等价于单目录扫描。
+    #[test]
+    fn same_path_raw_folder_pairs_without_second_enumeration() {
+        let dir = unique_dir("same_path");
+        fs::write(dir.join("G001.jpg"), b"jpeg").unwrap();
+        fs::write(dir.join("G001.NEF"), b"raw").unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let res = scan_folders(
+            dir.to_str().unwrap(),
+            Some(dir.to_str().unwrap()),
+            "filename",
+            &cancel,
+            |_, _, _| {},
+        )
+        .unwrap();
+
+        assert_eq!(res.total_count, 1);
+        assert_eq!(res.groups[0].status, PhotoGroupStatus::Complete);
+        assert!(!res.is_viewer_mode);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// #66：只传一个目录（RAW 源为空）时，混合目录里的 JPG 与 RAW 必须按词干配对。
+    ///
+    /// 旧实现把「RAW 源为空」翻译成 viewer 模式并只枚举 JPG 扩展名，
+    /// 目录里的 RAW 被整批丢弃 —— 这正是「选一个目录就够了」要解决的主症状。
+    #[test]
+    fn single_folder_mixed_pairs_raw_and_jpg_without_second_input() {
+        let dir = unique_dir("single_mixed");
+
+        // 大写扩展名同时覆盖「大小写不能漏判」
+        fs::write(dir.join("IMG_001.JPG"), b"jpeg").unwrap();
+        fs::write(dir.join("IMG_001.NEF"), b"raw").unwrap();
+        fs::write(dir.join("IMG_002.jpg"), b"jpeg").unwrap();
+        fs::write(dir.join("IMG_003.nef"), b"raw").unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let res = scan_folders(
+            dir.to_str().unwrap(),
+            None,
+            "filename",
+            &cancel,
+            |_, _, _| {},
+        )
+        .expect("单目录扫描应成功");
+
+        assert_eq!(res.total_count, 3, "同词干应合成一组，共 3 组");
+        assert!(!res.is_viewer_mode, "目录里有 RAW，不能按纯 JPG 视图处理");
+
+        let by_name = |n: &str| {
+            res.groups
+                .iter()
+                .find(|g| g.base_name.eq_ignore_ascii_case(n))
+                .unwrap_or_else(|| panic!("缺少 {n} 组"))
+        };
+        let complete = by_name("IMG_001");
+        assert_eq!(
+            complete.status,
+            PhotoGroupStatus::Complete,
+            "同名 RAW+JPG 必须合成 Complete 组"
+        );
+        assert!(complete.jpg.is_some() && complete.raw.is_some());
+
+        assert_eq!(
+            by_name("IMG_002").status,
+            PhotoGroupStatus::JpgOnly,
+            "只有 JPG 的组仍按 JpgOnly 显示"
+        );
+        assert_eq!(
+            by_name("IMG_003").status,
+            PhotoGroupStatus::RawOnly,
+            "只有 RAW 的组仍按 RawOnly 处理"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// #66：纯 RAW 目录只传一个路径时也必须产出 RawOnly 组，而不是 0 组。
+    #[test]
+    fn single_folder_raw_only_produces_raw_only_groups() {
+        let dir = unique_dir("single_raw_only");
+        fs::write(dir.join("A001.ARW"), b"raw").unwrap();
+        fs::write(dir.join("A002.cr3"), b"raw").unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let res = scan_folders(
+            dir.to_str().unwrap(),
+            None,
+            "filename",
+            &cancel,
+            |_, _, _| {},
+        )
+        .expect("单目录扫描应成功");
+
+        assert!(!res.is_viewer_mode, "纯 RAW 目录不是 JPG 视图");
+        assert_eq!(res.total_count, 2);
+        for g in &res.groups {
+            assert_eq!(g.status, PhotoGroupStatus::RawOnly);
+            assert!(g.jpg.is_none(), "纯 RAW 组不得被塞进 JPG 文件");
+            assert!(g.raw.is_some());
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// #66：用户手填的 RAW 目录不存在时必须报错并给下一步，不能静默降级成 viewer。
+    #[test]
+    fn missing_raw_folder_returns_actionable_error() {
+        let dir = unique_dir("missing_raw");
+        fs::write(dir.join("B001.jpg"), b"jpeg").unwrap();
+        let missing = dir.join("not_a_dir");
+
+        let cancel = AtomicBool::new(false);
+        let err = scan_folders(
+            dir.to_str().unwrap(),
+            Some(missing.to_str().unwrap()),
+            "filename",
+            &cancel,
+            |_, _, _| {},
+        )
+        .expect_err("RAW 目录不存在时必须失败");
+
+        assert!(
+            err.contains("RAW 文件夹不存在") && err.contains("清空 RAW"),
+            "错误文案要说明原因与下一步，实际: {err}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// #66 性能基准：5000 组（5000 JPG + 5000 同名 RAW）的单目录扫描耗时。
+    ///
+    /// 必须 release 口径（AGENTS §4：debug 数字无效）。
+    /// 运行：`cargo test --release --lib bench_single_folder_mixed_scan -- --ignored --nocapture`
+    #[test]
+    #[ignore = "性能基准，需 --release 手动运行"]
+    fn bench_single_folder_mixed_scan() {
+        use std::time::Instant;
+
+        let dir = unique_dir("bench_single");
+        let bytes = b"jpeg-bytes";
+        let t_create = Instant::now();
+        for i in 0..5000 {
+            let stem = format!("IMG_{i:05}");
+            fs::write(dir.join(format!("{stem}.JPG")), bytes).unwrap();
+            fs::write(dir.join(format!("{stem}.NEF")), bytes).unwrap();
+        }
+        let create = t_create.elapsed();
+
+        let cancel = AtomicBool::new(false);
+        let t_scan = Instant::now();
+        let res = scan_folders(
+            dir.to_str().unwrap(),
+            None,
+            "filename",
+            &cancel,
+            |_, _, _| {},
+        )
+        .unwrap();
+        let scan = t_scan.elapsed();
+
+        eprintln!(
+            "bench_single_folder_mixed_scan: 创建 10000 个文件 {:?}；单目录扫描 {:?}，产出 {} 组",
+            create, scan, res.total_count
+        );
+        assert_eq!(res.total_count, 5000);
 
         let _ = fs::remove_dir_all(&dir);
     }

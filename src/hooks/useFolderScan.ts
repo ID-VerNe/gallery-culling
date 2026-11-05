@@ -3,10 +3,37 @@ import { api } from '../services/api';
 import { useToast } from '../components/Toast';
 import { useTaskProgress } from './useTaskProgress';
 import { isTaskCancelled } from '../services/taskApi';
-import type { SortOrder, ToneAdjustments } from '../types';
+import type {
+  FolderMode,
+  FolderProbe,
+  PhotoGroupInfo,
+  SortOrder,
+  ToneAdjustments,
+} from '../types';
+import { folderDisplayName, folderProbeSummary } from '../utils/folderDetection';
 
 interface ScanResult {
-  groups: import('../types').PhotoGroupInfo[];
+  groups: PhotoGroupInfo[];
+}
+
+/**
+ * 从扫描结果反推目录构成（#66）。
+ *
+ * 用分组而不是文件数做判定：一组最多一个 JPG/RAW，含 jpg 的组数就是 JPG 文件数。
+ * 空结果一律视为空目录 —— 此时文案要提醒检查子目录，而不是谎报「扫描成功 0 组」。
+ */
+function deriveDetection(groups: ScanResult['groups']): FolderProbe {
+  const jpgCount = groups.filter((g) => g.jpg).length;
+  const rawCount = groups.filter((g) => g.raw).length;
+  const mode: FolderMode =
+    groups.length === 0
+      ? 'empty'
+      : jpgCount > 0 && rawCount > 0
+        ? 'mixed'
+        : rawCount > 0
+          ? 'raw_only'
+          : 'jpg_only';
+  return { mode, jpgCount, rawCount, subdirCount: 0 };
 }
 
 /**
@@ -56,6 +83,13 @@ export function useFolderScan(opts: {
    * 用户主动取消**不**算失败（后端以 `任务已取消` 哨兵返回）。
    */
   const [scanError, setScanError] = useState<string | null>(null);
+  /**
+   * #66：最近一次「自动识别」结果（选目录时的 probe，或扫描结果回填）。
+   *
+   * `null` = 用户正在手动填路径，顶栏不显示自动识别标记。任何手动编辑都会
+   * 清空它，避免把「自动识别」的牌子挂在用户手填的配置上。
+   */
+  const [folderDetection, setFolderDetection] = useState<FolderProbe | null>(null);
 
   const scanTask = useTaskProgress('scan');
   // 解构出**稳定引用**的成员：`start/finish/isCancelRequested` 都不随进度
@@ -93,15 +127,27 @@ export function useFolderScan(opts: {
       // Save as default in settings
       persistFolders(jpgFolder, rawFolder, sortOrder);
 
-      toast.success(
-        `扫描完成，共 ${res.groups.length} 组照片。已按${
-          sortOrder === 'time_filename'
-            ? '拍摄时间'
-            : sortOrder === 'filename'
-            ? '文件名'
-            : '星级'
-        }排序。`,
-      );
+      // #66：扫描结果同样是识别真值 —— 手填路径（不经过 browse）也能看到
+      // 「这次到底扫到了什么」，避免「RAW 被静默忽略」再次发生。
+      const detection = deriveDetection(res.groups);
+      setFolderDetection(detection);
+
+      if (res.groups.length === 0) {
+        // 0 组不是「成功」，需要给下一步：换目录 / 选具体子目录。
+        toast.info(
+          '扫描完成，但这个文件夹里没有可识别的 JPG / RAW 照片。\n如果照片在子文件夹里，请选择具体子文件夹（本应用不递归扫描子目录）。',
+        );
+      } else {
+        toast.success(
+          `扫描完成，共 ${res.groups.length} 组照片。已按${
+            sortOrder === 'time_filename'
+              ? '拍摄时间'
+              : sortOrder === 'filename'
+              ? '文件名'
+              : '星级'
+          }排序。`,
+        );
+      }
     } catch (err) {
       // 取消不是失败：后端以哨兵文案 `任务已取消` 返回，必须按「已取消」呈现，
       // 否则用户主动取消会被读成"扫描坏了"。按哨兵而非「点过取消按钮」判断，
@@ -181,7 +227,11 @@ export function useFolderScan(opts: {
   const handleBrowseJpg = useCallback(async () => {
     try {
       const selected = await api.selectFolderDialog(jpgFolder);
-      if (selected) setJpgFolder(selected);
+      if (selected) {
+        setJpgFolder(selected);
+        // 浏览按钮同样是手动接管：不能把上一次「自动识别」的标记留在旧路径上。
+        setFolderDetection(null);
+      }
     } catch (err) {
       toast.error(`无法打开文件夹选择器：${String(err)}`);
     }
@@ -190,11 +240,70 @@ export function useFolderScan(opts: {
   const handleBrowseRaw = useCallback(async () => {
     try {
       const selected = await api.selectFolderDialog(rawFolder);
-      if (selected) setRawFolder(selected);
+      if (selected) {
+        setRawFolder(selected);
+        setFolderDetection(null);
+      }
     } catch (err) {
       toast.error(`无法打开文件夹选择器：${String(err)}`);
     }
   }, [rawFolder, toast]);
+
+  /**
+   * #66「选一个目录就够了」：选一个文件夹 → 识别 → 自动填两个源。
+   *
+   * 判定表：
+   * - 仅 JPG：JPG = dir，RAW 留空（保持 viewer 模式）
+   * - 仅 RAW / 混合：JPG = dir，RAW = dir（后端同路径只枚举一次）
+   * - 空目录：**不改动**原路径（自动识别不能静默清掉用户已有的配置），
+   *   只把识别结果与下一步文案画出来。
+   *
+   * 识别结果会写入 `folderDetection`，顶栏常驻显示；用户手动改任一输入框即清除。
+   */
+  const handleBrowseAuto = useCallback(async () => {
+    try {
+      const selected = await api.selectFolderDialog(jpgFolder || rawFolder);
+      if (!selected) return;
+      const probe = await api.probeFolder(selected);
+
+      if (probe.mode === 'empty') {
+        setFolderDetection(probe);
+        const name = folderDisplayName(selected);
+        if (probe.subdirCount > 0) {
+          toast.error(
+            `「${name}」根目录没有 JPG 或 RAW 照片，但它下面有 ${probe.subdirCount} 个子文件夹。\n请选择具体拍摄子文件夹（本应用不递归扫描子目录）。`,
+          );
+        } else {
+          toast.error(`「${name}」里没有 JPG 或 RAW 照片。请换一个包含照片的文件夹。`);
+        }
+        return;
+      }
+
+      // 识别成功才改路径；这里是一次显式用户动作，且结果会同时画在顶栏上，
+      // 不属于「静默替用户改路径」。
+      setJpgFolder(selected);
+      setRawFolder(probe.mode === 'jpg_only' ? '' : selected);
+      setFolderDetection(probe);
+      toast.success(
+        `已识别「${folderDisplayName(selected)}」：${folderProbeSummary(probe)}。\n已自动填入扫描源；也可以直接改下面两个路径手动覆盖。`,
+      );
+    } catch (err) {
+      toast.error(
+        `识别文件夹失败：${String(err)}\n请确认路径存在且有读取权限，或直接用两个输入框手动指定。`,
+      );
+    }
+  }, [jpgFolder, rawFolder, toast]);
+
+  // 手动编辑 = 用户接管：清掉「自动识别」标记，避免标记与手填配置自相矛盾。
+  const handleJpgFolderChange = useCallback((val: string) => {
+    setJpgFolder(val);
+    setFolderDetection(null);
+  }, []);
+
+  const handleRawFolderChange = useCallback((val: string) => {
+    setRawFolder(val);
+    setFolderDetection(null);
+  }, []);
 
   return {
     jpgFolder,
@@ -207,6 +316,10 @@ export function useFolderScan(opts: {
     handleCancelScan,
     handleBrowseJpg,
     handleBrowseRaw,
+    handleBrowseAuto,
+    handleJpgFolderChange,
+    handleRawFolderChange,
+    folderDetection,
     setJpgFolder,
     setRawFolder,
     /** 裸 setter：settings 回填专用（不触发重扫）。用户改排序走 handleSortOrderChange。 */
