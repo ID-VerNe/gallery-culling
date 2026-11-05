@@ -282,12 +282,14 @@ export function useKeyboardShortcuts({
 
       // Focus the grid search field. `/` is the convention; Ctrl/Cmd+F also
       // works because the OS find bar is useless inside a photo grid.
-      if (
-        (e.key === '/' || ((e.ctrlKey || e.metaKey) && e.key === 'f')) &&
-        onFocusSearch
-      ) {
-        e.preventDefault();
-        onFocusSearch();
+      //
+      // issue #45：即使调用方没有接线 onFocusSearch，也必须在这里 return；
+      // 否则 Ctrl+F 会穿过第 6 步例外落进新增的 `case 'f'`，误触「保留」。
+      if (e.key === '/' || ((e.ctrlKey || e.metaKey) && e.key === 'f')) {
+        if (onFocusSearch) {
+          e.preventDefault();
+          onFocusSearch();
+        }
         return;
       }
 

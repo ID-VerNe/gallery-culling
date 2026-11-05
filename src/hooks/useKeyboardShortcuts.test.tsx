@@ -518,6 +518,24 @@ describe('useKeyboardShortcuts —— 左手别名（issue #45）', () => {
     expect(h.onFlag).not.toHaveBeenCalled();
   });
 
+  it('调用方未接线 onFocusSearch 时，Ctrl+F 也不得回落成保留', () => {
+    const onFlag = vi.fn();
+    renderHook(() =>
+      useKeyboardShortcuts({
+        onPrev: vi.fn(),
+        onNext: vi.fn(),
+        onRate: vi.fn(),
+        onFlag,
+        onOpenExternal: vi.fn(),
+        onToggleCompare: vi.fn(),
+      }),
+    );
+
+    fireEvent.keyDown(document.body, { key: 'f', ctrlKey: true });
+
+    expect(onFlag).not.toHaveBeenCalled();
+  });
+
   it('Ctrl/Alt + 别名不触发（既有组合键让路不失效）', () => {
     const h = setupAliases();
 
