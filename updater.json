@@ -1,11 +1,11 @@
 {
-  "version": "v2.0.5",
-  "notes": "🚀 v2.0.5：修复快捷键反馈——色标补上鼠标入口，空格设为基准只在真正生效时才给提示；另有若干界面细节修复。",
-  "pub_date": "2026-11-04T07:55:59.026Z",
+  "version": "v2.0.6",
+  "notes": "v2.0.6\n\n- 底栏按钮恢复正常可点，不再有点不动的死区。\n- 静息时底栏整条收起，只留一根手柄；需要时点一下手柄即可展开。\n- 左手单键别名上线：F 保留原作用，Shift+1~5 直接标色，R 清除，T 切换前后对照，按住 V 看原片。\n- 更新弹窗新增「本次暂不更新」与「不再提示 v2.0.6」两个选择，不想升级时可以明确拒绝而不是只能点稍后。\n- 修复安装完成后应用没有自动启动的问题：安装器会主动拉起新版本；若提权上下文启动失败，会给出兜底并弹出「重试启动」对话框，不会静默失败。",
+  "pub_date": "2026-11-05T04:32:21.428Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNHFPMzBtV080K1F2T0NXUzB5eHhCa0RuTERuK3lQdDFHemVBR0NUKzZhMjIvekhKYnRmQUNPamlmT01kKzB0NW02T09Ed2lPVERHWWxCTzF1UHZCUFFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzc4OTU4CWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC41X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjAuNQpWL2N4OGZnMjh5NmF2RnBodkNzZm5iRUN4bUNTUlQ4aE43b1g1cHUxSDVHVnpoNExVWVlxVE1WdDdJeXZ6SXdFY0VQVTB2RGo0MXVEQ1B2cUNVb0dDdz09Cg==",
-      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.5/gallery-culling_2.0.5_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNG9hMFZqa09rN2Fwb2JuNy82ZUJyMmVORzVWYVdxQnVrRkk5dTU5SzFSR3haSHp3QzZqaVhLNzRVMXQyMmxkS0RMRGY2NktXYTZRYzRWODNpVzV5TkFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzODUzMTQxCWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC42X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjAuNgpWRGp0b29XQkRoR1BQV2xJVHphYVdqWmMwaUxibWo5azhMWTlFcVV3em9GVm94cWowa01vOXhtV0NxbFhSWkFKMHhBeElhZ3FBUXVqS3phRlBVekpDdz09Cg==",
+      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.6/gallery-culling_2.0.6_x64-setup.exe"
     }
   }
 }
