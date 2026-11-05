@@ -182,11 +182,11 @@ describe('App —— 选片集', () => {
     await openAlbum();
     await screen.findAllByText('DSC04339');
 
-    // 弹窗开着时 `isDialogOpen` 会拦掉所有单键快捷键，先关掉再按 `/`。
+    // 弹窗开着时 `isDialogOpen` 会拦掉所有单键快捷键，先关掉再按 Ctrl+F。
     fireEvent.click(screen.getByRole('button', { name: '关闭' }));
 
-    // `/` 是打开宫格搜索的约定键位
-    fireEvent.keyDown(window, { key: '/' });
+    // issue #61：右手 `/` 已删除，打开宫格搜索只剩左手 `Ctrl/Cmd+F`
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
     fireEvent.change(await screen.findByLabelText('按查询条件筛选照片'), {
       target: { value: 'iso:800' },
     });

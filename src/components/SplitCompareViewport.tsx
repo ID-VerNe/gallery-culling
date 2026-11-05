@@ -136,7 +136,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
 
     const isPinned = isLeft ? isLeftPinned : isRightPinned;
     const onTogglePin = isLeft ? onTogglePinLeft : onTogglePinRight;
-    const shortcutHint = isLeft ? '[ 或 B' : '] 或 空格';
+    const shortcutHint = isLeft ? 'Q 或 B' : 'Shift + Q';
     const pane = isLeft ? 'left' : 'right';
     const bind = zoom.bindPane(pane);
     const isFocused = !zoom.sync && zoom.activePane === pane;
@@ -455,8 +455,8 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             onPrev();
           }}
           className="focus-ring absolute left-3 top-1/2 -translate-y-1/2 p-3 z-20 bg-background-base/70 hover:ring-1 hover:ring-white/25 active:scale-[0.96] text-white rounded-full press backdrop-blur-sm pointer-events-auto"
-          title="上一张 (A / ←)"
-          aria-label="上一张照片（快捷键 A 或 ←）"
+          title="上一张 (A)"
+          aria-label="上一张照片（快捷键 A）"
         >
           <ChevronLeft className="w-6 h-6" aria-hidden="true" />
         </button>
@@ -468,8 +468,8 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             onNext();
           }}
           className="focus-ring absolute right-3 top-1/2 -translate-y-1/2 p-3 z-20 bg-background-base/70 hover:ring-1 hover:ring-white/25 active:scale-[0.96] text-white rounded-full press backdrop-blur-sm pointer-events-auto"
-          title="下一张 (D / →)"
-          aria-label="下一张照片（快捷键 D 或 →）"
+          title="下一张 (D)"
+          aria-label="下一张照片（快捷键 D）"
         >
           <ChevronRight className="w-6 h-6" aria-hidden="true" />
         </button>

@@ -38,7 +38,7 @@ const VIEW_MODES: ViewModeOption[] = [
   {
     mode: 'before_after',
     label: '前后',
-    hint: '本张照片前后对照 (快捷键 Y)',
+    hint: '本张照片前后对照 (快捷键 T)',
     icon: <Split className="w-3.5 h-3.5" aria-hidden="true" />,
   },
 ];

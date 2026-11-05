@@ -20,7 +20,7 @@ export interface UseExternalAppsResult {
   setViewMode: React.Dispatch<React.SetStateAction<ViewMode>>;
   toggleCompare: () => void;
   toggleBeforeAfter: () => void;
-  /** Photoshop / 默认程序打开当前照片（快捷键 O）。PS 失败自动回落默认程序。 */
+  /** Photoshop / 默认程序打开当前照片（快捷键 W）。PS 失败自动回落默认程序。 */
   openExternal: () => Promise<void>;
   /** Luminar AI 往返：成功后把 edited 落回集合并切到前后对照视图。 */
   openLuminar: () => Promise<void>;

@@ -1,11 +1,13 @@
 /**
- * 键位目录（issue #51）—— 快捷键字符串与文案的**单一事实来源**。
+ * 键位目录（issue #51 / #61）—— 快捷键字符串与文案的**单一事实来源**。
  *
- * 背景：帮助弹窗与底栏速查曾各写一份键位表。#45 把左手别名（`F` / `Shift+1~5`
- * / `T` / `V`）上线后，帮助弹窗改了、底栏还写着 `P` / `6~9` / `Y`，用户会
- * 以为别名不存在。这里把「键位 + 全量文案」收在一处，两个入口只按 id 引用；
- * 底栏用可选的 `barLabel` 拿短标签，避免把帮助弹窗的长句塞进 36px 高的底栏。
+ * 背景：帮助弹窗与底栏速查曾各写一份键位表。#45 把左手别名上线后，帮助弹窗
+ * 改了、底栏还写着旧键，用户会以为别名不存在。这里把「键位 + 全量文案」收在
+ * 一处，两个入口只按 id 引用；底栏用可选的 `barLabel` 拿短标签，避免把帮助
+ * 弹窗的长句塞进 36px 高的底栏。
  *
+ * issue #61：右手键（`6–9`、`0`、`U`、`P`、`Y`、`O`、`M`、`[`、`]`、`\`、`?`、
+ * `/`、`←`/`→`、`Ctrl+Y`）全部删除，每个动作只留左手单键/左半区可达键位。
  * 新增/修改键位只改本文件；`src/utils/shortcutCatalog.test.ts` 会核对底栏
  * 引用的 id 与 `keys` 是否与本表逐字一致。
  */
@@ -31,29 +33,27 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
   {
     title: '浏览',
     items: [
-      { id: 'prev', keys: 'A / ←', label: '上一张' },
-      { id: 'next', keys: 'D / →', label: '下一张' },
-      { id: 'search', keys: '/', label: '搜索宫格列表' },
-      { id: 'open-external', keys: 'O', label: '在 Photoshop / 默认程序中打开' },
+      { id: 'prev', keys: 'A', label: '上一张' },
+      { id: 'next', keys: 'D', label: '下一张' },
+      { id: 'search', keys: 'Ctrl/⌘ + F', label: '搜索宫格列表' },
+      { id: 'open-external', keys: 'W', label: '在 Photoshop / 默认程序中打开' },
     ],
   },
   {
     title: '标记',
     items: [
       { id: 'rating', keys: '1 ~ 5', label: '打 1-5 星（再按一次同星取消）', barLabel: '打分' },
-      { id: 'clear', keys: 'R / 0 / U', label: '清除星级与标记' },
-      { id: 'pick', keys: 'F / P', label: '标记保留 (Pick)', barLabel: '保留', tone: 'emerald' },
+      { id: 'clear', keys: 'R', label: '清除星级与标记' },
+      { id: 'pick', keys: 'F', label: '标记保留 (Pick)', barLabel: '保留', tone: 'emerald' },
       { id: 'reject', keys: 'X', label: '标记淘汰 (Reject)', barLabel: '淘汰', tone: 'rose' },
       {
         id: 'label-left',
         keys: 'Shift + 1 ~ 5',
-        label: '色标：红 / 黄 / 绿 / 蓝 / 紫（左手，依次对应）',
+        label: '色标：红 / 黄 / 绿 / 蓝 / 紫（依次对应，再按一次取消）',
         barLabel: '色标',
       },
-      { id: 'label-legacy', keys: '6 / 7 / 8 / 9', label: '色标：红 / 黄 / 绿 / 蓝（右手旧键，再按一次取消）' },
-      { id: 'label-purple', keys: 'Shift + 6', label: '色标：紫（右手旧键）' },
       { id: 'undo', keys: 'Ctrl/⌘ + Z', label: '撤销上一步（最多 50 步，批量算一步）' },
-      { id: 'redo', keys: 'Ctrl/⌘ + Shift + Z', label: '重做（Ctrl + Y 亦可）' },
+      { id: 'redo', keys: 'Ctrl/⌘ + Shift + Z', label: '重做' },
       { id: 'batch-export', keys: 'Ctrl/⌘ + E', label: '打开批量导出' },
     ],
   },
@@ -61,19 +61,21 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
     title: '视图',
     items: [
       { id: 'compare', keys: 'C', label: '切换单图 / 双图对比' },
-      { id: 'before-after', keys: 'T / Y', label: '切换前后对照', barLabel: '前后' },
+      { id: 'before-after', keys: 'T', label: '切换前后对照', barLabel: '前后' },
       { id: 'tone', keys: 'E', label: '打开 / 关闭调色面板' },
       { id: 'zoom-1to1', keys: 'Z', label: '1:1 细节（RAW-only 首次需 6–8 秒，再按回适应）' },
-      { id: 'hold-original', keys: 'V / \\（按住）', label: '临时查看原片', barLabel: '看原片' },
+      { id: 'hold-original', keys: 'V（按住）', label: '临时查看原片', barLabel: '看原片' },
+      { id: 'help', keys: 'F1', label: '打开 / 关闭快捷键帮助' },
     ],
   },
   {
     title: '对比',
     items: [
-      { id: 'base-left', keys: '[ 或 B', label: '将左图设为基准' },
-      { id: 'base-right', keys: '] 或 空格', label: '将右图设为新基准' },
+      { id: 'base-left', keys: 'Q / B', label: '将左图设为基准' },
+      { id: 'base-right', keys: 'Shift + Q', label: '将右图设为新基准' },
+      { id: 'base-current', keys: '空格', label: '将当前照片设为基准（再按取消）' },
       { id: 'swap', keys: 'S', label: '左右互换' },
-      { id: 'lens-meta', keys: 'M', label: '手动镜头元数据编辑' },
+      { id: 'lens-meta', keys: 'G', label: '手动镜头元数据编辑' },
     ],
   },
   {

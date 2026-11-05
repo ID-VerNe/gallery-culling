@@ -24,8 +24,9 @@ interface LabelDotsProps {
 /**
  * SH-01（issue #32）：五色色标的鼠标入口。
  *
- * 色标此前只有 `6`–`9` / `Shift+6` 两条键盘路径，`git grep "onLabel:" -- src/components`
- * 无任何命中 —— mouse-only / 严格单手用户根本无法设置色标。本组件把
+ * 色标此前只有 `6`–`9` / `Shift+6` 两条键盘路径（issue #61 后只剩左手
+ * `Shift+1…5`），`git grep "onLabel:" -- src/components` 无任何命中 ——
+ * mouse-only / 严格单手用户根本无法设置色标。本组件把
  * `src/utils/labels.ts` 的展示真值（色名、色点 class、快捷键）复用到按钮上，
  * 三个视口共用，避免各写一份导致「有紫色但没有紫色按钮」。
  */

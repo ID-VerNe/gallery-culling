@@ -949,8 +949,8 @@ describe('PreviewViewport —— 底栏视觉层级（issue #14）', () => {
 /**
  * SH-01（issue #32）：单图视口底栏必须有鼠标可达的色标入口。
  *
- * 修复前 `git grep "onLabel:" -- src/components` 无命中，色标只能靠 6–9 /
- * Shift+6 键盘操作，mouse-only 用户完全无法设置色标。
+ * 修复前 `git grep "onLabel:" -- src/components` 无命中，色标只能靠键盘操作
+ * （issue #61 后仅剩左手 `Shift+1…5`），mouse-only 用户完全无法设置色标。
  */
 describe('PreviewViewport —— 色标鼠标入口（SH-01）', () => {
   it('点击红点把 Red 交给宿主，aria-pressed 跟随当前色标', () => {
@@ -965,16 +965,16 @@ describe('PreviewViewport —— 色标鼠标入口（SH-01）', () => {
     };
     const { rerender } = render(<PreviewViewport group={group} {...props} />);
 
-    fireEvent.click(screen.getByRole('button', { name: '红色标（快捷 6）' }));
+    fireEvent.click(screen.getByRole('button', { name: '红色标（快捷 Shift+1）' }));
     expect(onLabel).toHaveBeenCalledTimes(1);
     expect(onLabel).toHaveBeenCalledWith('Red');
 
     rerender(<PreviewViewport group={{ ...group, label: 'Red' }} {...props} />);
-    expect(screen.getByRole('button', { name: '红色标（快捷 6）' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: '红色标（快捷 Shift+1）' })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
-    expect(screen.getByRole('button', { name: '蓝色标（快捷 9）' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: '蓝色标（快捷 Shift+4）' })).toHaveAttribute(
       'aria-pressed',
       'false',
     );

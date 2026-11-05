@@ -12,6 +12,10 @@ import {
 // 键位表单一归属（issue #51）：速查行按 id 从目录取，不在此另写一份文案。
 import { BAR_SHORTCUT_IDS, findShortcut } from '../utils/shortcutCatalog';
 
+/** 帮助 / 元数据入口的键帽也从目录派生（issue #61 起 `?` → `F1`、`M` → `G`）。 */
+const HELP_KEYS = findShortcut('help')?.keys ?? 'F1';
+const LENS_META_KEYS = findShortcut('lens-meta')?.keys ?? 'G';
+
 interface BottomBarProps {
   currentGroup?: PhotoGroupInfo;
   currentIndex: number;
@@ -28,7 +32,7 @@ interface BottomBarProps {
   /** 宫格搜索的命中数（用于「宫格筛选 X/Y」口径）。 */
   searchResultCount?: number;
   /**
-   * 多步撤销/重做（FR-04）。`1..5/p/x/6..9/0` 按下即写 `.xmp`，键盘有
+   * 多步撤销/重做（FR-04）。`1..5/f/x/r` 按下即写 `.xmp`，键盘有
    * `Ctrl/Cmd+Z` 与 `Ctrl/Cmd+Shift+Z`，这里给鼠标用户同样的入口 —— 否则
    * "能回退"只对键盘用户成立。
    */
@@ -100,14 +104,14 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         )}
       </div>
 
-      {/* Center: Keyboard Cheat Sheet (abridged — full list behind "?") */}
+      {/* Center: Keyboard Cheat Sheet (abridged — full list behind F1) */}
       <div
         className="hidden md:flex items-center gap-2 text-white/70 select-none"
         role="group"
         aria-label="常用快捷键提示"
       >
         {/* issue #51：文案来自 `src/utils/shortcutCatalog.ts`，这里只按 id 取。
-            36px 高 + md 断点的横向预算只够 6 条最高频项，其余交给「?」帮助弹窗。 */}
+            36px 高 + md 断点的横向预算只够 6 条最高频项，其余交给 F1 帮助弹窗。 */}
         {BAR_SHORTCUT_IDS.map((id) => {
           const item = findShortcut(id);
           if (!item) return null;
@@ -121,10 +125,10 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         <button
           onClick={onOpenShortcutHelp}
           className="focus-ring flex items-center gap-1 hover:text-white transition-colors rounded px-0.5"
-          title="查看全部快捷键 (?)"
+          title={`查看全部快捷键（${HELP_KEYS}）`}
           aria-label="查看全部快捷键"
         >
-          <KeyCap>?</KeyCap>
+          <KeyCap>{HELP_KEYS}</KeyCap>
           <span>全部快捷键</span>
         </button>
       </div>
@@ -152,7 +156,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         <button
           onClick={onOpenMetadataModal}
           className="focus-ring hidden lg:flex items-center gap-1.5 px-2.5 py-1 bg-background-surface-hover hover:bg-white/10 active:scale-[0.96] text-white rounded-md font-medium press"
-          title="编辑镜头元数据 (M)"
+          title={`编辑镜头元数据（${LENS_META_KEYS}）`}
           aria-label="编辑镜头元数据"
         >
           <Sliders className="w-3 h-3" aria-hidden="true" />
@@ -201,7 +205,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         <button
           onClick={onOpenShortcutHelp}
           className="focus-ring md:hidden p-1 text-white/60 hover:text-white hover:bg-background-surface-hover rounded transition-colors"
-          title="查看全部快捷键 (?)"
+          title={`查看全部快捷键（${HELP_KEYS}）`}
           aria-label="查看全部快捷键"
         >
           <Keyboard className="w-3.5 h-3.5" aria-hidden="true" />

@@ -255,7 +255,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
                   ? 'bg-white text-black font-medium'
                   : 'text-white/60 hover:text-white hover:bg-white/10'
               }`}
-              title="按条件筛选 (快捷键 /)"
+              title="按条件筛选 (快捷键 Ctrl+F)"
               aria-label="按条件筛选照片"
               aria-pressed={searchOpen}
             >

@@ -37,19 +37,19 @@ describe('底栏速查（issue #51）', () => {
     );
   });
 
-  it('左手单手可读：F / P、Shift + 1 ~ 5、T / Y、V / \\（按住）都在', () => {
+  it('左手单手可读：F、Shift + 1 ~ 5、T、V（按住）都在，旧右手键不回流', () => {
     renderBar();
     const keys = barKeyCaps();
-    expect(keys).toContain('F / P');
+    expect(keys).toContain('F');
     expect(keys).toContain('Shift + 1 ~ 5');
-    expect(keys).toContain('T / Y');
-    expect(keys).toContain('V / \\（按住）');
+    expect(keys).toContain('T');
+    expect(keys).toContain('V（按住）');
   });
 
-  it('不再出现旧键独有写法（裸 P / 6~9 / 裸 Y）', () => {
+  it('不再出现旧右手键写法（P / Y / 0 / U / 反斜杠）', () => {
     renderBar();
     const keys = barKeyCaps();
-    for (const legacy of ['P', '6~9', '6 ~ 9', 'Y']) {
+    for (const legacy of ['P', 'Y', '0', 'U', '\\']) {
       expect(keys).not.toContain(legacy);
     }
   });
@@ -64,9 +64,10 @@ describe('底栏速查（issue #51）', () => {
     }
   });
 
-  it('「全部快捷键」入口仍可用', () => {
+  it('「全部快捷键」入口仍可用，且键帽来自 catalog（F1）', () => {
     const onOpenShortcutHelp = renderBar();
     const [entry] = screen.getAllByRole('button', { name: '查看全部快捷键' });
+    expect(entry).toHaveAttribute('title', '查看全部快捷键（F1）');
     fireEvent.click(entry);
     expect(onOpenShortcutHelp).toHaveBeenCalledTimes(1);
   });
