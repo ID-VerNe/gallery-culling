@@ -19,14 +19,17 @@
  *  4. 复核行之后不许再有实质内容——先写结论后补证据是**自审**的形状，不是复核的形状；
  *  5. 没有 PR 上下文（本机直跑）时 SKIP 并通过；显式声明 `--gate-changes` / `GATE_CHANGES=1`
  *     却拿不到 base 时 **fail-closed**（`base...HEAD` 在无 base 时会退化成空集，
- *     「直接推上来绕过 PR」的口子只能靠这条守）。
+ *     「直接推上来绕过 PR」的口子只能靠这条守）；
+ *  6. `GATE_CHANGE_REVIEW_EVENT=push`（CI 显式注入事件类型）时是**落地事件**：push 上
+ *     没有 PR 正文可读，改动已经过 PR 闸门 → 有 base 就列出命中的门禁链文件留痕后放行，
+ *     无 base 也留痕放行；不因「没有 PR base」判红（issue #56）。
  *
  * **时点边界**：闸门上界是 `APPROVED_AT`。基线早于该时刻（或不可得）的 PR 属于
  * 「闸门建立之前」，复核行只提示不判红——#8 自身就是这种 PR，否则它会把自己打红。
  *
- * CI 由 `.github/workflows/ci.yml` 注入 `PR_BASE_SHA` / `PR_BODY`（仅 pull_request 有值）、
- * `GATE_CHANGES`（push 事件为 `1`）与 push 回退值 `github.event.before`——push 也有 base
- * 可算，合并后的 push 不会因为「读不到正文」被误判成红。
+ * CI 由 `.github/workflows/ci.yml` 注入 `PR_BASE_SHA`（pull_request 用 base 分支 sha，
+ * push 回退 `github.event.before`）、`PR_BODY` / `PR_NUMBER`（仅 pull_request 有值）、
+ * `GATE_CHANGES`（push 事件为 `1`）与 `GATE_CHANGE_REVIEW_EVENT`（原始事件名）。
  *
  * 每条规则都有单测（scripts/gates.test.mjs），成对的「坏形态红 / 同形好形态绿」。
  */
@@ -268,6 +271,32 @@ export function main(argv, env = process.env) {
   const args = argv.slice(2);
   const base = argValue(args, '--base') ?? env.PR_BASE_SHA ?? '';
   const declared = args.includes('--gate-changes') || env.GATE_CHANGES === '1';
+  // 事件类型由 ci.yml 显式注入（issue #56）：push 是落地事件，没有 PR 正文可读。
+  // 不靠 env 空值语义（push 上 `${{ github.event.pull_request.* }}` 求值为 ''，
+  // 旧实现用 `=== undefined` / `body === null` 判定，永远进不了 push 分支）。
+  const isPush = env.GATE_CHANGE_REVIEW_EVENT === 'push';
+
+  if (isPush) {
+    // push 上不做正文披露校验（披露在 PR 闸门完成），但必须留痕：不是静默 SKIP。
+    console.log('  note push 事件：push 上无 PR 正文可读，门禁链改动的披露由 PR 闸门负责');
+    if (base) {
+      try {
+        const touched = gateChain(changedFiles(base));
+        if (touched.length === 0) {
+          console.log(`     ${base.slice(0, 7)}...HEAD 门禁链无改动`);
+        } else {
+          console.log(`     ${base.slice(0, 7)}...HEAD 改动集含 ${touched.length} 个门禁链改动：`);
+          for (const path of touched) console.log(`     ${path}`);
+        }
+      } catch (error) {
+        console.log(`     无法计算 ${base}...HEAD 的改动集：${error.message.split('\n')[0]}`);
+      }
+    } else {
+      console.log('     拿不到 base（github.event.before 不可得），改动集不可计算');
+    }
+    console.log('PASS: push 事件留痕后放行（门禁链改动的披露由 PR 闸门负责）。');
+    return 0;
+  }
 
   if (!base && !declared) {
     console.log('  SKIP 没有 PR base（本机直跑 / push 事件）：门禁改动段只在 PR 上校验');
@@ -308,16 +337,6 @@ export function main(argv, env = process.env) {
     console.log(`  FAIL 读不到正文文件：${error.message}`);
     console.log('FAIL: 门禁改动段校验无法完成（fail-closed）。');
     return 1;
-  }
-
-  if (declared && env.PR_NUMBER === undefined && body === null && touched.length > 0) {
-    // push 事件：有 base 可算改动集，但没有 PR、因此没有正文可读。合并进 master 的 push
-    // 天然落在这里（改动已经过 PR 闸门），照常放行并留痕。
-    console.log(`  note 非 PR 上下文（GATE_CHANGES=1）：改动集含 ${touched.length} 个门禁链改动，无正文可读，按已过 PR 闸门放行`);
-    for (const path of touched) console.log(`     门禁链改动：${path}`);
-    console.log('     PR 前的首推请走 PR：正文带 `## 门禁改动` 与独立复核结论');
-    console.log('PASS: 非 PR 上下文，门禁链改动的披露由 PR 闸门负责。');
-    return 0;
   }
 
   const { code, lines } = judge(touched, body, gated);
