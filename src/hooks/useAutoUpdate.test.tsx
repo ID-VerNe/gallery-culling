@@ -8,8 +8,33 @@
  */
 import { act, renderHook } from '@testing-library/react';
 import { check, type Update } from '@tauri-apps/plugin-updater';
+import { getVersion } from '@tauri-apps/api/app';
 import { UPDATE_ENDPOINT, UPDATE_SKIP_KEY } from '../utils/updateSkip';
+import { UPDATE_PENDING_KEY } from '../utils/updatePending';
 import { useAutoUpdate } from './useAutoUpdate';
+
+/**
+ * Toast 被收集而不是渲染（issue #49-PB）：
+ * 升级结果提示是「用户必须看到」的那一层兜底，必须在 hook 层就能断言。
+ */
+const toastHarness = vi.hoisted(() => {
+  const success: string[] = [];
+  const error: string[] = [];
+  const info: string[] = [];
+  // **同一个对象**：真实 provider 的 api 是 useMemo 出来的稳定引用，
+  // 每次返回新对象会让 effect 反复重跑，掩盖真实的启动判定语义。
+  const api = {
+    success: (message: string) => success.push(message),
+    error: (message: string) => error.push(message),
+    info: (message: string) => info.push(message),
+  };
+  return { calls: { success, error, info }, api };
+});
+const toastCalls = toastHarness.calls;
+
+vi.mock('../components/Toast', () => ({
+  useToast: () => toastHarness.api,
+}));
 
 type DownloadEventLike =
   | { event: 'Started'; data: { contentLength?: number } }
@@ -28,7 +53,10 @@ function fakeUpdate(
     version,
     body: `更新说明 v${version}`,
     downloadAndInstall: vi.fn(
-      async (onEvent?: (event: DownloadEventLike) => void): Promise<void> => {
+      async (
+        onEvent?: (event: DownloadEventLike) => void,
+        _options?: { restartAfterInstall?: boolean },
+      ): Promise<void> => {
         // 真实实现的下载是异步的；先让出一个微任务，好让调用方看到 downloading 态。
         await Promise.resolve();
         onEvent?.({ event: 'Started', data: { contentLength: 100 } });
@@ -57,6 +85,9 @@ async function settle() {
 beforeEach(() => {
   vi.useFakeTimers();
   localStorage.clear();
+  toastCalls.success.length = 0;
+  toastCalls.error.length = 0;
+  toastCalls.info.length = 0;
 });
 
 afterEach(() => {
@@ -295,5 +326,134 @@ describe('useAutoUpdate —— 主动检查与撤销', () => {
       status: 'error',
       error: expect.stringContaining('offline'),
     });
+  });
+});
+
+describe('useAutoUpdate —— 安装器重启交接（issue #49-PA）', () => {
+  it('downloadAndInstall 第二参是 restartAfterInstall: false（关掉模板的 /R）', async () => {
+    vi.mocked(getVersion).mockResolvedValue('2.0.5');
+    const update = fakeUpdate('2.0.6');
+    vi.mocked(check).mockResolvedValue(update);
+    const { result } = renderHook(() => useAutoUpdate());
+    await advanceStartupCheck();
+
+    act(() => {
+      result.current.install();
+    });
+    await settle();
+
+    const call = vi.mocked(update.downloadAndInstall).mock.calls[0];
+    expect(call?.[1]).toEqual({ restartAfterInstall: false });
+  });
+
+  it('开始安装就写 gc:update:pending（当前版本 + 目标版本）', async () => {
+    vi.mocked(getVersion).mockResolvedValue('2.0.5');
+    vi.mocked(check).mockResolvedValue(fakeUpdate('2.0.6'));
+    const { result } = renderHook(() => useAutoUpdate());
+    await advanceStartupCheck();
+
+    act(() => {
+      result.current.install();
+    });
+    await settle();
+
+    const stored = JSON.parse(localStorage.getItem(UPDATE_PENDING_KEY) ?? 'null');
+    expect(stored).toEqual(
+      expect.objectContaining({ fromVersion: '2.0.5', targetVersion: '2.0.6' }),
+    );
+  });
+
+  it('下载就失败：清掉待定记录，避免下次启动误报「升级未完成」', async () => {
+    vi.mocked(getVersion).mockResolvedValue('2.0.5');
+    vi.mocked(check).mockResolvedValue(fakeUpdate('2.0.6', { fail: true }));
+    const { result } = renderHook(() => useAutoUpdate());
+    await advanceStartupCheck();
+
+    act(() => {
+      result.current.install();
+    });
+    await settle();
+
+    expect(result.current.phase).toBe('failed');
+    expect(localStorage.getItem(UPDATE_PENDING_KEY)).toBeNull();
+  });
+});
+
+describe('useAutoUpdate —— 下次启动的升级结果兜底（issue #49-PB）', () => {
+  it('已成目标版本：给成功提示并清除记录', async () => {
+    localStorage.setItem(
+      UPDATE_PENDING_KEY,
+      JSON.stringify({
+        fromVersion: '2.0.4',
+        targetVersion: '2.0.5',
+        startedAt: '2026-11-05T00:00:00.000Z',
+      }),
+    );
+    vi.mocked(getVersion).mockResolvedValue('2.0.5');
+    const { result } = renderHook(() => useAutoUpdate());
+    await settle();
+
+    expect(result.current.currentVersion).toBe('2.0.5');
+    expect(toastCalls.success).toContain('已升级到 v2.0.5');
+    expect(toastCalls.error).toEqual([]);
+    expect(localStorage.getItem(UPDATE_PENDING_KEY)).toBeNull();
+  });
+
+  it('仍是旧版本：错误 toast 常驻，文案给出下一步怎么办', async () => {
+    localStorage.setItem(
+      UPDATE_PENDING_KEY,
+      JSON.stringify({
+        fromVersion: '2.0.4',
+        targetVersion: '2.0.6',
+        startedAt: '2026-11-05T00:00:00.000Z',
+      }),
+    );
+    vi.mocked(getVersion).mockResolvedValue('2.0.5');
+    const { result } = renderHook(() => useAutoUpdate());
+    await settle();
+
+    expect(result.current.currentVersion).toBe('2.0.5');
+    expect(toastCalls.success).toEqual([]);
+    expect(toastCalls.error).toHaveLength(1);
+    expect(toastCalls.error[0]).toContain('上次升级未完成');
+    expect(toastCalls.error[0]).toContain('v2.0.6');
+    expect(toastCalls.error[0]).toContain('设置 → 关于');
+    expect(localStorage.getItem(UPDATE_PENDING_KEY)).toBeNull();
+  });
+
+  it('启动判定只看「挂载时已有」的记录：本次会话写入的不能被自己清掉', async () => {
+    // 模拟真实世界里的极短窗口：getVersion 还没回来，用户就已经点了安装。
+    let resolveVersion!: (version: string) => void;
+    vi.mocked(getVersion).mockReturnValue(
+      new Promise<string>((resolve) => {
+        resolveVersion = resolve;
+      }),
+    );
+    vi.mocked(check).mockResolvedValue(fakeUpdate('2.0.6'));
+    const { result } = renderHook(() => useAutoUpdate());
+    await advanceStartupCheck();
+
+    act(() => {
+      result.current.install();
+    });
+    await settle();
+
+    await act(async () => {
+      resolveVersion('2.0.5');
+    });
+    await settle();
+
+    // 记录必须还在：它是「下一次启动」才该判定的东西。
+    expect(localStorage.getItem(UPDATE_PENDING_KEY)).not.toBeNull();
+    expect(toastCalls.error).toEqual([]);
+  });
+
+  it('没有待定记录时两条路径都不打扰用户', async () => {
+    vi.mocked(getVersion).mockResolvedValue('2.0.5');
+    renderHook(() => useAutoUpdate());
+    await settle();
+
+    expect(toastCalls.success).toEqual([]);
+    expect(toastCalls.error).toEqual([]);
   });
 });
