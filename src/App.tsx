@@ -1,11 +1,11 @@
 import { useState, useMemo, useCallback, useRef } from 'react';
 import { TopBar } from './components/TopBar';
 import { ThumbnailGrid } from './components/ThumbnailGrid';
-import { PreviewViewport } from './components/PreviewViewport';
+import { PreviewViewport, type PreviewZoomApi } from './components/PreviewViewport';
 import { BeforeAfterViewport } from './components/BeforeAfterViewport';
 import { SplitCompareViewport } from './components/SplitCompareViewport';
 import { TonalAdjuster } from './components/TonalAdjuster';
-import { BottomBar } from './components/BottomBar';
+import { BottomBar, type StatusPane, type StatusZoom } from './components/BottomBar';
 import { BatchExportModal } from './components/BatchExportModal';
 import { SettingsModal } from './components/SettingsModal';
 import { MetadataEditorModal } from './components/MetadataEditorModal';
@@ -44,6 +44,7 @@ import {
 import { DEFAULT_TONE } from './utils/autoTone';
 import { sortAlbumGroups, toAlbumItems } from './utils/albumGroups';
 import { usesExifField } from './utils/queryMatch';
+import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from './utils/viewportZoom';
 
 
 function AppShell() {
@@ -547,6 +548,58 @@ function AppShell() {
   const oneToOneRef = useRef<() => void>(() => {});
   const handleToggleOneToOne = useCallback(() => oneToOneRef.current(), []);
 
+  /**
+   * 状态栏缩放组（issue #62）：单图视口把缩放面交给宿主，读数和按钮画在
+   * 窗口底栏；双图 / 前后对照顶部已有自己的控制条，不占用底栏。
+   */
+  const [previewZoom, setPreviewZoom] = useState<PreviewZoomApi | null>(null);
+  const statusZoom = useMemo<StatusZoom | undefined>(() => {
+    if (external.viewMode !== 'single' || !currentGroup || !previewZoom) return undefined;
+    return {
+      label: scaleLabel(previewZoom.scale),
+      atMin: previewZoom.scale <= ZOOM_MIN,
+      atMax: previewZoom.scale >= ZOOM_MAX,
+      onZoomOut: () => previewZoom.zoomBy(1 / ZOOM_STEP),
+      onZoomIn: () => previewZoom.zoomBy(ZOOM_STEP),
+      onReset: previewZoom.reset,
+    };
+  }, [external.viewMode, currentGroup, previewZoom]);
+
+  /**
+   * 状态栏窗格（issue #62）：三视口共用同一个底栏；双图按 `L` / `R` 分两组，
+   * 每组的动作回调都绑定本窗格自己的 group —— 给左图点红标不能落到右图。
+   */
+  const statusPanes = useMemo<StatusPane[]>(() => {
+    if (external.viewMode === 'split') {
+      const pane = (
+        slot: 'L' | 'R',
+        group: PhotoGroupInfo | undefined,
+      ): StatusPane => ({
+        slot,
+        group,
+        tone: group ? toneMap[group.id] || group.tone : undefined,
+        onRate: (rating) => group && handleRate(rating, group),
+        onFlag: (flag) => group && handleFlag(flag, group),
+        onLabel: (label) => group && void setLabel(label, group),
+      });
+      return [pane('L', leftCompareGroup), pane('R', rightCompareGroup)];
+    }
+    return [{ group: currentGroup, tone: currentTone, onRate: applyRating, onFlag: applyFlag, onLabel: applyLabel }];
+  }, [
+    external.viewMode,
+    leftCompareGroup,
+    rightCompareGroup,
+    toneMap,
+    currentGroup,
+    currentTone,
+    handleRate,
+    handleFlag,
+    setLabel,
+    applyRating,
+    applyFlag,
+    applyLabel,
+  ]);
+
   // Register single-handed keyboard shortcuts
   useKeyboardShortcuts({
     onPrev: guardedPrev,
@@ -696,14 +749,7 @@ function AppShell() {
             lumenStatus={lumenStatus}
             onPrev={guardedPrev}
             onNext={guardedNext}
-            onRate={applyRating}
-            onFlag={applyFlag}
-            onLabel={applyLabel}
-            onOpenExternal={external.openExternal}
-            onOpenLuminar={external.openLuminar}
-            onToggleTonalAdjuster={handleToggleTonalPanel}
-            isTonalPanelOpen={tonalPanelVisible}
-            isLuminarRunning={external.isLuminarRunning}
+            onZoomApi={setPreviewZoom}
             emptyState={viewportEmptyState}
             onImageElement={setPreviewImage}
             oneToOneRef={oneToOneRef}
@@ -715,9 +761,6 @@ function AppShell() {
             group={currentGroup}
             tone={currentTone}
             isHoldOriginal={isHoldOriginal}
-            onRate={applyRating}
-            onFlag={applyFlag}
-            onLabel={applyLabel}
             onOpenLuminar={external.openLuminar}
             onToggleTonalAdjuster={handleToggleTonalPanel}
             isTonalPanelOpen={tonalPanelVisible}
@@ -736,10 +779,6 @@ function AppShell() {
             onTogglePinLeft={handleTogglePinLeft}
             onTogglePinRight={handleTogglePinRight}
             onSwap={handleSwapCompare}
-            onRate={(g, r) => handleRate(r, g)}
-            onFlag={(g, f) => handleFlag(f, g)}
-            /* SH-01：双图窗格的色点按窗格落到各自的 group（不走多选批量确认）。 */
-            onLabel={(g, l) => void setLabel(l, g)}
             lumenStatus={lumenStatus}
             getTone={(g) => toneMap[g.id] || g.tone}
             /* C7：对比视图补翻页入口，与单图一致 */
@@ -749,7 +788,7 @@ function AppShell() {
         )}        {/* Right Sidebar (Thumbnail Grid OR Tonal Adjuster) */}
         {/* PB-13：交叉淡入。容器相对定位，两面绝对叠放，opacity 过渡；退场面板
             在 EXIT_MS 内仍挂载并标 data-exiting，由 useSidebarCrossFade 管理。
-            duration-200 与底栏 viewportBarStyles.ts:83 同层同速。 */}
+            duration-200 与状态栏的过渡同速（issue #62：底栏不再有随悬停变化的几何）。 */}
         <div
           data-testid="right-sidebar"
           className="relative w-[390px] h-full shrink-0 bg-background-base overflow-hidden transition-opacity duration-200"
@@ -847,8 +886,10 @@ function AppShell() {
         </div>
       </div>
 
-      {/* Bottom Status Bar */}
+      {/* Bottom Status Bar（issue #62：常驻文档流，三视口共用） */}
       <BottomBar
+        panes={statusPanes}
+        zoom={statusZoom}
         currentGroup={currentGroup}
         currentIndex={selectedIndex}
         totalCount={filteredGroups.length}

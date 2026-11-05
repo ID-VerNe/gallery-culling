@@ -3,9 +3,6 @@ import {
   Columns2,
   Link,
   Unlink,
-  Star,
-  Check,
-  X,
   Pin,
   ArrowLeftRight,
   RotateCcw,
@@ -15,14 +12,13 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
-import { PhotoGroupInfo, ToneAdjustments, LumenStatus, ColorLabel } from '../types';
+import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
 import { getToneFilterString } from '../utils/autoTone';
 import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from '../utils/viewportZoom';
 import { useViewportImage, type ViewportImage } from '../hooks/useViewportImage';
 import { useDualZoomPan } from '../hooks/useDualZoomPan';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
-import { LabelDots } from './LabelDots';
 
 interface SplitCompareViewportProps {
   leftGroup?: PhotoGroupInfo;
@@ -32,13 +28,6 @@ interface SplitCompareViewportProps {
   onTogglePinLeft: () => void;
   onTogglePinRight: () => void;
   onSwap: () => void;
-  onRate: (group: PhotoGroupInfo, rating: number) => void;
-  onFlag: (group: PhotoGroupInfo, flag: 'pick' | 'reject' | 'none') => void;
-  /**
-   * SH-01：每个窗格各自的色点，**必须带上 group** —— 否则给左图点红标会
-   * 落到右图（单图视口只有一个 currentGroup，双图必须按窗格分流）。
-   */
-  onLabel?: (group: PhotoGroupInfo, label: ColorLabel) => void;
   /** LUMEN RAW 引擎握手状态；可用时 RAW-only 分组走真实解码，与单图视图同口径（M-02）。 */
   lumenStatus?: LumenStatus;
   /** 按分组取当前生效的调色（宿主传 `toneMap[id] ?? group.tone`）；缺失 → 不套 CSS 滤镜。 */
@@ -62,9 +51,6 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
   onTogglePinLeft,
   onTogglePinRight,
   onSwap,
-  onRate,
-  onFlag,
-  onLabel,
   lumenStatus,
   getTone,
   onPrev,
@@ -144,6 +130,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
     return (
       <div
         ref={bind.ref}
+        data-viewport-photo
         onWheel={bind.onWheel}
         onPointerDown={bind.onPointerDown}
         onPointerMove={bind.onPointerMove}
@@ -254,82 +241,8 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
           </button>
         </div>
 
-        {/* Bottom ratings */}
-        <div
-          onClick={(e) => e.stopPropagation()}
-          className="absolute bottom-3 bg-background-base/85 backdrop-blur px-3.5 py-1.5 rounded-lg flex items-center gap-2.5 border border-white/15 pointer-events-auto"
-          role="group"
-          aria-label={`为照片 ${group.baseName} 打分和标记`}
-        >
-          {/* Stars */}
-          <div className="flex items-center gap-1">
-            {[1, 2, 3, 4, 5].map((star) => (
-              <button
-                key={star}
-                onClick={() => onRate(group, group.rating === star ? 0 : star)}
-                className="focus-ring tap-target p-1 hover:scale-125 active:scale-95 rounded-sm transition-transform"
-                title={`评 ${star} 星`}
-                aria-label={`为 ${group.baseName} 评 ${star} 星`}
-                aria-pressed={group.rating >= star}
-              >
-                <Star
-                  className={`w-3.5 h-3.5 ${
-                    group.rating >= star
-                      ? 'fill-amber-400 text-amber-400'
-                      : 'text-white/60 hover:text-white'
-                  }`}
-                  aria-hidden="true"
-                />
-              </button>
-            ))}
-          </div>
-
-          <div className="w-px h-3.5 bg-white/25" />
-
-          {/* Pick / Reject */}
-          <button
-            onClick={() => onFlag(group, group.flag === 'pick' ? 'none' : 'pick')}
-            className={`focus-ring p-1.5 rounded-md text-xs active:scale-[0.96] press border ${
-              group.flag === 'pick'
-                ? 'bg-emerald-600/40 text-emerald-300 border-emerald-500/50'
-                : 'bg-transparent text-white/70 hover:text-white hover:bg-white/10 border-transparent'
-            }`}
-            title="保留 (Pick)"
-            aria-label={`将 ${group.baseName} 标记保留 (Pick)`}
-            aria-pressed={group.flag === 'pick'}
-          >
-            <Check className="w-3.5 h-3.5" aria-hidden="true" />
-            {/* V-05：图标 + 文字，与另外两个视口对齐。仅图标的按钮在窄窗格
-                里语义全靠 tooltip，鼠标用户扫一眼认不出哪个是保留哪个是淘汰。 */}
-            <span className="text-[10px]">保留</span>
-          </button>
-          <button
-            onClick={() => onFlag(group, group.flag === 'reject' ? 'none' : 'reject')}
-            className={`focus-ring p-1.5 rounded-md text-xs active:scale-[0.96] press border ${
-              group.flag === 'reject'
-                ? 'bg-rose-600/40 text-rose-300 border-rose-500/50'
-                : 'bg-transparent text-white/70 hover:text-white hover:bg-white/10 border-transparent'
-            }`}
-            title="淘汰 (Reject)"
-            aria-label={`将 ${group.baseName} 标记淘汰 (Reject)`}
-            aria-pressed={group.flag === 'reject'}
-          >
-            <X className="w-3.5 h-3.5" aria-hidden="true" />
-            <span className="text-[10px]">淘汰</span>
-          </button>
-
-          {/* 色标（SH-01）：每窗格一组，作用到本窗格自己的 group。 */}
-          {onLabel && (
-            <>
-              <div className="w-px h-3.5 bg-white/25" />
-              <LabelDots
-                label={group.label}
-                onSelect={(label) => onLabel(group, label)}
-                scopeName={group.baseName}
-              />
-            </>
-          )}
-        </div>
+        {/* 评级 / 旗标 / 色标已迁到窗口底部常驻状态栏（issue #62）：
+            双图时状态栏按 L / R 分两组，各自绑定本窗格的 group。 */}
       </div>
     );
   };

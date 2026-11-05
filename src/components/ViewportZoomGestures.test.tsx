@@ -64,9 +64,6 @@ describe('PreviewViewport —— 双击缩放与复位', () => {
         group={GROUP}
         onPrev={vi.fn()}
         onNext={vi.fn()}
-        onRate={vi.fn()}
-        onFlag={vi.fn()}
-        onOpenExternal={vi.fn()}
         {...props}
       />,
     );
@@ -99,15 +96,20 @@ describe('PreviewViewport —— 双击缩放与复位', () => {
     expect(readTransform(img)).toMatchObject({ scale: 2.5, x: 0, y: 0 });
   });
 
-  it('滚轮触底后夹在 MIN_SCALE，「缩小」按钮随之禁用', () => {
-    const { host, img } = renderPreview();
+  it('滚轮触底后夹在 MIN_SCALE，缩放面报告已达下限（状态栏据此禁用「缩小」）', () => {
+    const onZoomApi = vi.fn();
+    const { host, img } = renderPreview({ onZoomApi });
 
     // 1 / 1.25^8 < 0.2，第 8 格起被夹住；多打几格证明不会继续掉
     for (let i = 0; i < 12; i++) {
       fireEvent.wheel(host, { clientX: 600, clientY: 400, deltaY: 100 });
     }
     expect(readTransform(img).scale).toBe(0.2);
-    expect(screen.getByLabelText('缩小')).toBeDisabled();
+    // 缩放按钮已搬到窗口底栏（issue #62）：视口只负责把 scale 交出去，
+    // 底栏用 `scale <= ZOOM_MIN` 判 `disabled`（见 BottomBar 的缩放组）。
+    const calls = onZoomApi.mock.calls;
+    const api = calls[calls.length - 1]?.[0];
+    expect(api?.scale).toBe(0.2);
 
     // 触底后光标在中心滚一格：scale 不变、不产生平移（k===1 恒等）
     fireEvent.wheel(host, { clientX: 900, clientY: 600, deltaY: 100 });
@@ -126,8 +128,6 @@ describe('SplitCompareViewport —— 双击缩放与复位', () => {
         onTogglePinLeft={vi.fn()}
         onTogglePinRight={vi.fn()}
         onSwap={vi.fn()}
-        onRate={vi.fn()}
-        onFlag={vi.fn()}
         {...props}
       />,
     );
@@ -165,7 +165,7 @@ describe('SplitCompareViewport —— 双击缩放与复位', () => {
 describe('BeforeAfterViewport —— 双击缩放、滚轮与复位', () => {
   function renderBA(props: Partial<ComponentProps<typeof BeforeAfterViewport>> = {}) {
     const { container } = render(
-      <BeforeAfterViewport group={GROUP} onRate={vi.fn()} onFlag={vi.fn()} {...props} />,
+      <BeforeAfterViewport group={GROUP} {...props} />,
     );
     const imgs = Array.from(container.querySelectorAll('img')) as HTMLImageElement[];
     return { imgs, beforeHost: imgs[0].parentElement as HTMLElement, afterHost: imgs[1].parentElement as HTMLElement, container };

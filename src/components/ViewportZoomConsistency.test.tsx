@@ -37,8 +37,6 @@ function renderSplit() {
       onTogglePinLeft={() => {}}
       onTogglePinRight={() => {}}
       onSwap={() => {}}
-      onRate={() => {}}
-      onFlag={() => {}}
       lumenStatus={lumenStatus}
     />,
   );
@@ -82,8 +80,6 @@ describe('视口缩放读数一致性', () => {
     render(
       <BeforeAfterViewport
         group={group('a')}
-        onRate={() => {}}
-        onFlag={() => {}}
       />,
     );
     // scale=1 实为「适应窗口」，原先硬编码显示 100%
@@ -113,8 +109,6 @@ describe('V-07：EXIF 在三视口都要可见', () => {
     render(
       <BeforeAfterViewport
         group={group('a')}
-        onRate={() => {}}
-        onFlag={() => {}}
       />,
     );
     expect(screen.getAllByText('Canon EOS R5').length).toBeGreaterThan(0);
