@@ -77,7 +77,7 @@ export interface AppSettings {
   photoshopPath: string;
   thumbnailWidth: number;
   sortOrder: SortOrder;
-  /** 是否启用 LUMEN RAW 引擎集成（默认 false，零迁移风险） */
+  /** 是否启用 LUMEN RAW 引擎集成（issue #68 起随包分发，默认 true） */
   lumenEnabled: boolean;
   /** lumen-cli.exe 路径（空 = 自动查找） */
   lumenCliPath: string;

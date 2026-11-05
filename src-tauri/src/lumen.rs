@@ -57,5 +57,9 @@ pub enum PreviewVariant {
 
 pub const PINNED_LUMEN_VERSION: &str = "1.6.0";
 
+/// 启动预热失败时发给前端的 Tauri 事件名。
+/// 前端 `useLumenStartupNotice` 里的同名常量必须与此一致。
+pub const STARTUP_ERROR_EVENT: &str = "lumen-startup-error";
+
 /// MCP initialize 使用的 legacy 协议版本（宿主永不带 _meta，绕开 modern 分支）。
 pub const LEGACY_PROTOCOL_VERSION: &str = "2024-11-05";
