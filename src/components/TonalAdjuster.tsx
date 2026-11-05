@@ -69,6 +69,15 @@ interface TonalAdjusterProps {
   /** C3：当前编辑值相对磁盘基线是否有未保存改动（未保存会打标记 + 离开确认）。 */
   dirty?: boolean;
   /**
+   * issue #67：调色自动保存是否开启。开启时滑杆改动停止 400ms 后自动写盘，
+   * 面板头部显示保存状态；关闭时保留原「未保存」徽标与手动保存。
+   */
+  autoSaveEnabled?: boolean;
+  /** 自动保存状态：保存中 / 已保存 / 失败。 */
+  autoSaveStatus?: 'idle' | 'saving' | 'saved' | 'error';
+  /** 自动保存失败原因（常驻面板，不随 toast 消失）。 */
+  autoSaveError?: string | null;
+  /**
    * FR-07：当前选中照片数。`>= 2` 时才出现「套用到选中」入口 ——
    * 只有当前这一张时，套用等于什么都没做。
    */
@@ -176,6 +185,9 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
   masks = [],
   isSaving = false,
   dirty = false,
+  autoSaveEnabled = false,
+  autoSaveStatus = 'idle',
+  autoSaveError = null,
   selectedCount = 0,
   onApplyToSelected,
   applying = false,
@@ -316,7 +328,35 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
         <div className="flex items-center gap-2 font-medium text-white">
           <Sliders className="w-4 h-4 text-white/60" aria-hidden="true" />
           <span>调色</span>
-          {dirty && (
+          {/* issue #67：自动保存开启时，头部常驻「保存中 / 已保存 / 失败」，
+              而不是只在 400ms 窗口内闪一下 dirty 徽标。 */}
+          {autoSaveEnabled && autoSaveStatus === 'saving' && (
+            <span
+              role="status"
+              aria-live="polite"
+              className="text-[10px] font-normal text-white/70 bg-white/5 border border-white/15 rounded px-1.5 py-0.5"
+            >
+              自动保存中…
+            </span>
+          )}
+          {autoSaveEnabled && autoSaveStatus === 'saved' && (
+            <span
+              role="status"
+              aria-live="polite"
+              className="text-[10px] font-normal text-emerald-200 bg-emerald-400/10 border border-emerald-300/30 rounded px-1.5 py-0.5"
+            >
+              已自动保存
+            </span>
+          )}
+          {autoSaveEnabled && autoSaveStatus === 'error' && (
+            <span
+              role="alert"
+              className="text-[10px] font-normal text-red-200 bg-red-400/10 border border-red-300/30 rounded px-1.5 py-0.5"
+            >
+              自动保存失败
+            </span>
+          )}
+          {(!autoSaveEnabled || autoSaveStatus === 'idle') && dirty && (
             <span
               role="status"
               aria-live="polite"
@@ -589,6 +629,16 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
           </span>
         </button>
       </div>
+
+      {/* 自动保存失败同样必须有出口：不能只靠会消失的 toast（issue #67） */}
+      {autoSaveEnabled && autoSaveError && (
+        <p
+          role="alert"
+          className="text-[10px] leading-relaxed text-red-300/90 rounded-md border border-red-400/25 px-2 py-1.5"
+        >
+          自动保存失败：{autoSaveError}。改动仍在内存中，可点「保存调色」重试。
+        </p>
+      )}
 
       {/* 保存失败必须有出口，否则统一命令的 rejection 会静默 */}
       {saveError && (

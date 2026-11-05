@@ -114,6 +114,10 @@ pub struct AppSettings {
     /// 用户是否期待 AI 能力（GPU 版）。为 true 但实际指向 CPU 版时，设置页会明确
     /// 警告"你指向的是 CPU 版，AI 蒙版不可用"——能力判定本身按磁盘事实走。
     pub lumen_expect_ai: bool,
+    /// 调色自动保存（issue #67）：滑杆改动停止 400ms 后自动写入 XMP / `.lumen`
+    /// 工程。默认开启；settings 表**缺这个键**时也按开启（老库零迁移），
+    /// 只有显式落盘 `"false"` 才是用户主动关闭。
+    pub tone_auto_save: bool,
 }
 
 impl Default for AppSettings {
@@ -129,6 +133,7 @@ impl Default for AppSettings {
             lumen_cli_path: String::new(),
             lumen_grid_thumbnails: false,
             lumen_expect_ai: false,
+            tone_auto_save: true,
         }
     }
 }

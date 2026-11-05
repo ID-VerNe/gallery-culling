@@ -113,6 +113,29 @@ export const ThumbnailSection: React.FC<{
   );
 };
 
+export const ToneAutoSaveSection: React.FC<{
+  enabled: boolean;
+  onChange: (enabled: boolean) => void;
+}> = ({ enabled, onChange }) => (
+  <div className="flex flex-col gap-1.5">
+    <label className="flex items-start gap-2.5 cursor-pointer select-none">
+      <input
+        type="checkbox"
+        checked={enabled}
+        onChange={(e) => onChange(e.target.checked)}
+        className="focus-ring mt-0.5 h-3.5 w-3.5 accent-white"
+      />
+      <span className="flex flex-col gap-1">
+        <span className="text-white/80 font-medium">调色自动保存</span>
+        <span className="text-[10px] leading-relaxed text-white/60">
+          拖动调色滑杆后自动写入同名 .xmp（引擎可用时同时写 .lumen 工程），
+          停止拖动约 0.4 秒落盘。关闭后需手动点「保存调色」。
+        </span>
+      </span>
+    </label>
+  </div>
+);
+
 export const LumenSettingsSection: React.FC<{
   settings: AppSettings;
   onChange: (next: AppSettings) => void;

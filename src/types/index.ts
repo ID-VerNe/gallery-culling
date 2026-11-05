@@ -85,6 +85,11 @@ export interface AppSettings {
   lumenGridThumbnails: boolean;
   /** 用户是否期待 AI 能力（GPU 版）。为 true 但指向 CPU 版时设置页会明确警告。 */
   lumenExpectAi: boolean;
+  /**
+   * 调色自动保存（issue #67）。缺省 = 开启：全新安装与老库都没写过这个键；
+   * 只有显式 `false` 才是用户主动关闭。判定口径统一走 `isToneAutoSaveEnabled`。
+   */
+  toneAutoSave?: boolean;
 }
 
 /**

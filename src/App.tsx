@@ -43,6 +43,7 @@ import {
   ToneAdjustments,
 } from './types';
 import { DEFAULT_TONE } from './utils/autoTone';
+import { isToneAutoSaveEnabled } from './utils/toneAutoSave';
 import { sortAlbumGroups, toAlbumItems } from './utils/albumGroups';
 import { usesExifField } from './utils/queryMatch';
 import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from './utils/viewportZoom';
@@ -303,6 +304,8 @@ function AppShell() {
     viewMode: external.viewMode,
     lumenAvailable,
     lumenCapsAiMasks: lumen.caps?.aiMasks,
+    // issue #67：缺键 = 用户没设置过 → 默认开启；显式 false 才关闭。
+    autoSaveEnabled: isToneAutoSaveEnabled(settings),
     onGroupsPatched: patchGroup,
     onMasksLoaded: lumen.onMasksLoaded,
   });
@@ -312,11 +315,13 @@ function AppShell() {
     toneDivergent,
     isSavingTone,
     isAutoToning,
+    autoSaveStatus,
+    autoSaveError,
     pendingLeaveTone,
     currentTone,
     setPreviewImage,
     handleToggleTonalPanel,
-    handleToneChange,
+    handleUserToneChange,
     handleResetTone,
     guardToneLeave,
     closeTonePanel,
@@ -814,7 +819,7 @@ function AppShell() {
                 >
                   <TonalAdjuster
                     tone={currentTone || DEFAULT_TONE}
-                    onChange={handleToneChange}
+                    onChange={handleUserToneChange}
                     onReset={handleResetTone}
                     onAuto={handleAutoTone}
                     autoTonePending={isAutoToning}
@@ -834,6 +839,9 @@ function AppShell() {
                     onApplyPreset={lumenAvailable ? handleApplyLumenPreset : undefined}
                     onClose={closeTonePanel}
                     dirty={toneDirty}
+                    autoSaveEnabled={isToneAutoSaveEnabled(settings)}
+                    autoSaveStatus={autoSaveStatus}
+                    autoSaveError={autoSaveError}
                     selectedCount={selectedIds.size}
                     onApplyToSelected={({ writeLumen }) =>
                       void toneBatch.runApplyTone({ writeLumen })
