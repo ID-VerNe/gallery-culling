@@ -348,8 +348,14 @@ export function useToneEditing(opts: {
       }
       saveInFlightRef.current = true;
       setIsSavingTone(true);
-      const isCurrent = job.groupId === currentGroupIdRef.current;
-      if (auto && isCurrent) {
+      /**
+       * 状态归属必须在**写盘完成时**求值，不能在开始时拍快照：
+       * 主切图路径是「先 flush 再切图」（guardToneLeave），开始时还是旧照片，
+       * 完成时用户已经在看新照片，快照会把上一张的状态挂到新照片上。
+       */
+      const belongsToCurrentGroup = () =>
+        job.groupId === currentGroupIdRef.current;
+      if (auto && belongsToCurrentGroup()) {
         setAutoSaveStatus('saving');
         setAutoSaveError(null);
       }
@@ -359,9 +365,17 @@ export function useToneEditing(opts: {
           hasXmp: report.xmpWritten,
           tone: job.tone,
         });
-        // 只在「写的仍是当前这张」时清分歧标记，避免 flush 上一张后
-        // 把新照片的 XMP/LUMEN 分歧警告顺手抹掉。
-        if (job.groupId === currentGroupIdRef.current) setToneDivergent(false);
+        // 只在「写的仍是当前这张」时清分歧标记 / 刷新自动保存状态，
+        // 避免 flush 上一张后把新照片的警告或状态盖掉。
+        const stillCurrent = belongsToCurrentGroup();
+        if (stillCurrent) {
+          setToneDivergent(false);
+          // 手动保存成功也要清掉上一次自动保存的常驻错误行。
+          if (!auto) {
+            setAutoSaveError(null);
+            setAutoSaveStatus('idle');
+          }
+        }
         if (report.lumenApplied) {
           toast.success(
             auto
@@ -370,7 +384,7 @@ export function useToneEditing(opts: {
                 ? '调色已保存：XMP 侧边栏 + LUMEN RAW 工程。'
                 : '调色已保存：XMP 侧边栏 + LUMEN RAW。',
           );
-          if (auto && isCurrent) setAutoSaveStatus('saved');
+          if (auto && stillCurrent) setAutoSaveStatus('saved');
         } else if (report.warnings.length > 0) {
           // XMP 写成功了，只是引擎那侧没成 —— 必须说清楚，别让用户以为两边都存了
           const reason = report.warnings[0];
@@ -379,7 +393,7 @@ export function useToneEditing(opts: {
               ? `调色已自动保存到 XMP，但 LUMEN RAW 未同步：${reason}。可点「保存调色」重试。`
               : `XMP 已写入，但 LUMEN RAW 未同步：${reason}`,
           );
-          if (auto && isCurrent) {
+          if (auto && stillCurrent) {
             setAutoSaveStatus('error');
             setAutoSaveError(`LUMEN RAW 未同步：${reason}`);
           }
@@ -389,14 +403,14 @@ export function useToneEditing(opts: {
               ? '调色已自动保存到同名 .xmp 文件。'
               : '调色参数已写入同名 .xmp 文件。\nPhotoshop / ACR 打开时将自动载入。',
           );
-          if (auto && isCurrent) setAutoSaveStatus('saved');
+          if (auto && stillCurrent) setAutoSaveStatus('saved');
         }
       } catch (err) {
         console.error('Failed to save tone:', err);
         const reason = String(err);
         if (auto) {
           // 失败不能静默：toast.error（role="alert" + assertive）+ 面板常驻错误行
-          if (isCurrent) {
+          if (belongsToCurrentGroup()) {
             setAutoSaveStatus('error');
             setAutoSaveError(reason);
           }

@@ -59,6 +59,20 @@ const toneReport = {
   warnings: [],
 };
 
+/** 造一张同目录的 JPG 分组，用于切图/队列场景。 */
+function makeGroup(id: string, baseName: string): PhotoGroupInfo {
+  return {
+    ...group,
+    id,
+    baseName,
+    jpg: {
+      ...group.jpg!,
+      name: `${baseName}.jpg`,
+      path: `D:/shoot/JPG/${baseName}.jpg`,
+    },
+  };
+}
+
 /**
  * 声明 App 启动 + 扫描 + 调色面板所触达的全部命令。
  * `settingsOverride` 用来模拟「全新安装（缺键）」与「显式关闭」两种设置状态。
@@ -199,5 +213,63 @@ describe('App —— 调色自动保存 (issue #67)', () => {
     });
     await new Promise((r) => setTimeout(r, 600));
     expect(invokeCount('apply_tone_cmd')).toBe(1);
+  });
+
+  it('调完立刻切图：上一张的「已自动保存」不能挂到新照片上', async () => {
+    mockStartup({}, [group, makeGroup('g2', 'IMG_0002')]);
+    await openTonalPanelWithPhoto();
+
+    dragExposure('1.2');
+    // 主切图路径：先 flush 上一张，再切到下一张（D 键）。
+    fireEvent.keyDown(window, { key: 'd' });
+
+    await waitFor(() => expect(invokeCount('apply_tone_cmd')).toBe(1), {
+      timeout: 2000,
+    });
+    // 写盘完成时用户已经在看新照片：状态必须按完成时的当前照片归属。
+    await new Promise((r) => setTimeout(r, 300));
+    expect(screen.getByRole('button', { name: '保存调色' })).toBeInTheDocument();
+    expect(screen.queryByText('已自动保存')).not.toBeInTheDocument();
+  });
+
+  it('快速切图压着多张待写任务时，逐张落盘（Map 队列不覆盖较早那张）', async () => {
+    const deferred: Array<(value: unknown) => void> = [];
+    mockStartup({}, [
+      group,
+      makeGroup('g2', 'IMG_0002'),
+      makeGroup('g3', 'IMG_0003'),
+      makeGroup('g4', 'IMG_0004'),
+    ]);
+    // 让写盘停在 pending，才能稳定制造「一张在写、多张排队」的窗口。
+    mockInvokeCommand('apply_tone_cmd', () => new Promise((resolve) => deferred.push(resolve)));
+
+    await openTonalPanelWithPhoto();
+
+    // g1 在写；g2、g3 依次进队列（单槽实现会把 g2 覆盖成 g3）。
+    dragExposure('1.2');
+    fireEvent.keyDown(window, { key: 'd' });
+    dragExposure('1.3');
+    fireEvent.keyDown(window, { key: 'd' });
+    dragExposure('1.4');
+    fireEvent.keyDown(window, { key: 'd' });
+
+    expect(invokeCount('apply_tone_cmd')).toBe(1);
+
+    deferred[0](toneReport);
+    await waitFor(() => expect(invokeCount('apply_tone_cmd')).toBe(2), {
+      timeout: 2000,
+    });
+    expect(lastInvokeArgs('apply_tone_cmd')?.filePath).toBe(
+      'D:/shoot/JPG/IMG_0002.jpg',
+    );
+
+    deferred[1](toneReport);
+    await waitFor(() => expect(invokeCount('apply_tone_cmd')).toBe(3), {
+      timeout: 2000,
+    });
+    expect(lastInvokeArgs('apply_tone_cmd')?.filePath).toBe(
+      'D:/shoot/JPG/IMG_0003.jpg',
+    );
+    deferred[2]?.(toneReport);
   });
 });
