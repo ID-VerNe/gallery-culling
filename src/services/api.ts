@@ -11,6 +11,7 @@ import {
   FolderScanResult,
   LumenCapabilities,
   LumenDetailResult,
+  LumenEngineStatus,
   LumenMask,
   LumenMaskResult,
   LumenPreviewResult,
@@ -416,6 +417,20 @@ export const api = {
    */
   getLumenStatus: async (): Promise<LumenStatus> => {
     return await invoke<LumenStatus>('lumen_status_cmd');
+  },
+
+  /**
+   * 引擎包当前状态（issue #75）：只读，不触发下载。
+   */
+  getLumenEngineStatus: async (): Promise<LumenEngineStatus> => {
+    return await invoke<LumenEngineStatus>('lumen_engine_status_cmd');
+  },
+
+  /**
+   * 手动重试引擎下载：后台启动，立即返回当前状态，进度走 `lumen-engine-status` 事件。
+   */
+  ensureLumenEngine: async (): Promise<LumenEngineStatus> => {
+    return await invoke<LumenEngineStatus>('lumen_engine_ensure_cmd');
   },
 
   /**

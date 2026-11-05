@@ -42,6 +42,12 @@ walkdir = "2.5"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["rt"] }
+# issue #75：运行时下载 / 解压 lumen-cli 引擎包（不再随主安装包分发）。
+# reqwest 只开 blocking + rustls + system-proxy：不引入 native-tls，
+# 并让企业代理（系统代理设置）能生效。zip 只开 flate2 读 deflate，
+# 与发布资产的压缩方式一致，不拉 zstd/lzma 等无关解码器。
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "system-proxy"] }
+zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
 tauri-plugin-process = "2"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]

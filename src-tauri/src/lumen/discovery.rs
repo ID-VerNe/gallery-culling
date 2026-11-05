@@ -47,21 +47,40 @@ pub fn find_in_path(name: &str) -> Option<PathBuf> {
         .find(|p| p.exists())
 }
 
-/// 查找 lumen-cli：打包资源 → PATH（where）→ None。
+/// 查找 lumen-cli：设置显式路径 → 运行期缓存 → 旧安装目录 → PATH（where）→ None。
 ///
-/// 打包后 Tauri 把 `binaries/lumen-cli/**` 放到 exe 旁的 `resources/lumen-cli/`；
-/// 开发态则直接找 `src-tauri/binaries/lumen-cli/lumen-cli.exe`。
+/// issue #75 起引擎不再随安装包分发，首选位置变成运行期下载后的缓存目录；
+/// 旧安装目录（`binaries/lumen-cli/`）保留，兼容 2.0.7 及更早装过带引擎的机器。
 pub fn find_lumen_cli(settings_path: &str) -> Option<PathBuf> {
+    find_lumen_cli_in(settings_path, &super::engine::cache_root())
+}
+
+/// [`find_lumen_cli`] 的可注入版本：缓存根目录显式传入，便于单测。
+pub fn find_lumen_cli_in(settings_path: &str, cache_root: &Path) -> Option<PathBuf> {
     if !settings_path.trim().is_empty() {
         let explicit = PathBuf::from(settings_path);
         if explicit.exists() {
             return Some(explicit);
         }
     }
+    if let Some(found) =
+        first_existing(&runtime_candidates(cache_root, super::PINNED_LUMEN_VERSION))
+    {
+        return Some(found);
+    }
     if let Some(found) = find_bundled_lumen_cli() {
         return Some(found);
     }
     find_in_path("lumen-cli")
+}
+
+/// 运行期缓存的候选路径（纯函数）。
+///
+/// 目录布局与 `lumen::engine_dir` 必须一致：`<cache_root>/lumen-cli-<version>/lumen-cli.exe`。
+pub fn runtime_candidates(cache_root: &Path, version: &str) -> Vec<PathBuf> {
+    vec![cache_root
+        .join(format!("lumen-cli-{}", version))
+        .join("lumen-cli.exe")]
 }
 
 /// 打包态候选路径（纯函数，顺序即优先级）。
@@ -225,6 +244,30 @@ fn bundled_candidates_falls_back_to_resources_layout() {
         "缺安装器布局时应回退 resources/lumen-cli"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// issue #75：运行期缓存优先于旧安装目录，且目录布局与 engine 模块一致。
+#[test]
+fn find_lumen_cli_prefers_runtime_cache() {
+    let cache = tmp("cache_order");
+    let dir = cache.join("lumen-cli-1.6.0");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = dir.join("lumen-cli.exe");
+    std::fs::write(&exe, b"x").unwrap();
+    assert_eq!(
+        find_lumen_cli_in("", &cache),
+        Some(exe),
+        "运行期缓存必须排在旧安装目录之前"
+    );
+    let _ = std::fs::remove_dir_all(&cache);
+}
+
+#[test]
+fn runtime_candidates_point_at_versioned_dir() {
+    assert_eq!(
+        runtime_candidates(Path::new(r"T:\cache"), "1.6.0"),
+        vec![PathBuf::from(r"T:\cache\lumen-cli-1.6.0\lumen-cli.exe")]
+    );
 }
 
 }

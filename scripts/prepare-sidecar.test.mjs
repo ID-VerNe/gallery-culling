@@ -101,6 +101,23 @@ describe('sidecar-lock 口径', () => {
 });
 
 describe('prepare-sidecar —— 默认模式只校验', () => {
+  it('干净检出（无产物）→ 不阻断构建，exit 0 并提示运行时会下载', () => {
+    const root = makeRoot();
+    try {
+      // 先把锁文件建好（构建机上的正常状态），但删掉产物目录。
+      withBaseline(root);
+      rmSync(join(root, 'src-tauri', 'binaries'), { recursive: true, force: true });
+      const { code, output } = run(root);
+      expect(code).toBe(0);
+      expect(output).toContain('未找到本地 sidecar 产物');
+      expect(output).toContain('构建继续');
+      expect(output).toContain('运行时');
+      expect(output).toContain('LUMEN_SIDECAR_SRC');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('锁文件缺失 → fail-closed，并给出建立基线的下一步', () => {
     const root = makeRoot();
     try {
@@ -344,12 +361,13 @@ describe('prepare-sidecar —— LUMEN_SIDECAR_SRC 复制', () => {
 });
 
 describe('prepare-sidecar —— --fetch', () => {
-  it('无匹配公开来源时明确失败，并给出两条恢复路径', () => {
+  it('不代为下载，明确指向独立 Release 资产与本地复制路径', () => {
     const root = makeRoot();
     try {
       const { code, output } = run(root, { args: ['--fetch'] });
       expect(code).toBe(1);
-      expect(output).toContain('没有可稳定取回的公开来源');
+      expect(output).toContain('运行时');
+      expect(output).toContain('lumen-cli-1.6.0-win-x64.zip');
       expect(output).toContain('LUMEN_SIDECAR_SRC');
       expect(output).toContain('--update-lock');
     } finally {

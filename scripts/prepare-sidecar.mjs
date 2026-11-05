@@ -1,19 +1,20 @@
 /**
- * tauri build 前置：确保随包 lumen-cli sidecar 完整，且**就是锁文件里那一份**。
+ * 构建前置：本地**有** lumen-cli sidecar 时，确保它就是锁文件里那一份。
  *
- * 背景（issue #68 / #73）：lumen-cli 是外部 PyInstaller **onedir** 产物，
- * `lumen-cli.exe` 必须与同目录 `_internal/` 一起分发；仓库不构建它，只消费
- * 既有产物。历史问题有两个，本脚本同时负责：
+ * issue #75 起引擎不再随主安装包分发（181.6 MB 从安装包移除），改为应用运行时
+ * 从独立 Release 资产下载。因此本脚本的默认语义变成：
  *
- * 1. 「产物不在 → Tauri resources glob 命中空 → 装出来的包缺引擎」，而且报错晦涩；
- * 2. 「产物被换成别的构建 → 没人报警」——exe 的 PE 元数据里版本号是空的，
- *    静态上无法自证。现在 `src-tauri/sidecar.lock.json`（入库）钉住版本、exe 哈希、
- *    目录文件数与内容哈希，默认模式只校验，不一致就 fail-closed。
+ * - 本地没有产物 → **正常状态**，打印提示后 exit 0，不阻断 `tauri build`；
+ * - 本地有产物 → 仍按 `src-tauri/sidecar.lock.json` 逐项校验，不一致 fail-closed
+ *   （防「换了一份构建、构建照常成功、装进去的是另一个引擎」）。
+ *
+ * 仓库不构建产物，只消费既有产物；`lumen-cli.exe` 的 PE 版本号为空，静态上
+ * 无法自证，所以锁文件钉住版本、exe 哈希、目录文件数与内容哈希。
  *
  * 用法：
- *   node scripts/prepare-sidecar.mjs                    # 校验（构建前置，默认模式）
+ *   node scripts/prepare-sidecar.mjs                    # 有产物则校验，无产物则跳过
  *   node scripts/prepare-sidecar.mjs --update-lock       # 有意更换产物时人工重写锁文件
- *   node scripts/prepare-sidecar.mjs --fetch             # 无公开来源，明确失败并给下一步
+ *   node scripts/prepare-sidecar.mjs --fetch             # 说明产物从哪来（不代为下载）
  *   $env:LUMEN_SIDECAR_SRC="D:\build\lumen-cli"; node scripts/prepare-sidecar.mjs
  *
  * `LUMEN_SIDECAR_SRC` 指向 onedir 目录（或直接指向 lumen-cli.exe）时，先复制到临时目录、
@@ -42,18 +43,14 @@ import {
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const NO_PUBLIC_SOURCE =
-  '没有可稳定取回的公开来源，--fetch 无法执行。\n' +
-  '上游 hety0211/lumen-raw v1.6.0 的 Release 只发 GUI 安装包：\n' +
-  '  - Setup.exe 877,632,611 字节、Windows.zip 948,939,639 字节；\n' +
-  '  - zip 内的 lumen-cli.exe 是 15,920,050 字节的另一构建，与随包精简 onedir\n' +
-  '    （exe 6,702,168 字节 + _internal/，1150 个文件）不是同一份；\n' +
-  '  - 从上游包重新构建出的产物必然与锁文件不匹配，等于换了一个引擎。\n' +
+  '脚本不再代为下载引擎（issue #75）：引擎改由应用运行时从独立 Release 资产拉取。\n' +
+  '主安装包构建**不需要**本地产物；只有本地测试 / 对照时才需要放一份。\n' +
   '下一步（任选其一）：\n' +
-  '  1) 从已有构建机复制产物目录：\n' +
-  '     $env:LUMEN_SIDECAR_SRC="<产物目录>"; node scripts/prepare-sidecar.mjs\n' +
-  '  2) 若确实要有意更换引擎，先核对来源，再：\n' +
-  '     $env:LUMEN_SIDECAR_SRC="<新产物目录>"; node scripts/prepare-sidecar.mjs --update-lock\n' +
-  '不要手工从任意目录拷贝 lumen-cli.exe —— 本脚本不会扫描你的磁盘。';
+  '  1) 从 release 下载 zip 并解压到 src-tauri/binaries/lumen-cli/（整目录，含 _internal/）：\n' +
+  '     https://github.com/ID-VerNe/gallery-culling/releases/download/lumen-cli-v1.6.0/lumen-cli-1.6.0-win-x64.zip\n' +
+  '  2) $env:LUMEN_SIDECAR_SRC="<产物目录>"; node scripts/prepare-sidecar.mjs\n' +
+  '  3) 若确实要有意更换引擎：先核对来源，再 --update-lock\n' +
+  '产物只用于本地对照，不得提交进 git（也不引入 LFS）。';
 
 function fail(errorLog, message) {
   errorLog(`\n[prepare-sidecar] ${message}\n`);
@@ -297,15 +294,16 @@ export function prepare({
   if (inspected.problems.length > 0) {
     const missing = inspected.problems.join('\n');
     if (!fs.existsSync(destDir)) {
-      return fail(
-        errorLog,
-        `${missing}\n这个干净检出还没有 sidecar 产物（binaries 被 .gitignore 忽略，属正常状态）。\n` +
-          '下一步（任选其一）：\n' +
-          '  1) 从已有构建机复制整个产物目录：\n' +
-          '     $env:LUMEN_SIDECAR_SRC="<产物目录>"; node scripts/prepare-sidecar.mjs\n' +
-          '  2) 若产物目录就在别的机器上，先在那边确认能过校验，再整目录拷过来。\n' +
-          '  不要只搬 lumen-cli.exe：PyInstaller onedir 缺 _internal/ 会一启动就崩。',
+      // issue #75：安装包不再打包引擎，缺产物是**正常构建状态**，不能阻断构建。
+      log(
+        `[prepare-sidecar] 未找到本地 sidecar 产物：${destDir}\n` +
+          '构建继续：引擎不再随安装包分发，应用运行时首次需要 LUMEN 时会从独立 Release ' +
+          '资产下载并校验（见 src-tauri/sidecar.lock.json 的 source）。\n' +
+          '如需本地直接测试引擎，可任选其一：\n' +
+          '  - $env:LUMEN_SIDECAR_SRC="<产物目录>"; node scripts/prepare-sidecar.mjs\n' +
+          `  - 手工把 onedir 整目录放到 ${destDir}（必须含 _internal/）`,
       );
+      return 0;
     }
     return fail(errorLog, missing);
   }

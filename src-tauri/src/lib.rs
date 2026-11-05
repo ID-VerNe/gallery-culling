@@ -22,7 +22,7 @@ mod xmprefresh;
 use commands::{AppState, open_in_luminar_roundtrip_cmd};
 use db::Database;
 use std::sync::Arc;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -66,14 +66,30 @@ pub fn run() {
                 return Ok(());
             }
             let runtime = app.state::<AppState>().lumen.clone();
+            let engine = app.state::<AppState>().engine.clone();
             let handle = app.handle().clone();
             std::thread::spawn(move || {
+                use tauri::Emitter;
+                // issue #75：引擎不再随安装包分发。先在后台确保缓存就位
+                // （缺失则从独立 Release 资产下载 + 校验 + 原子就位），
+                // 再做定位与预热。状态变化通过 `lumen-engine-status` 推给前端，
+                // 首屏不被下载阻塞。
+                let spec = crate::lumen::pinned_engine_spec();
+                let mut emit = |status: &crate::lumen::EngineStatus| {
+                    let _ = handle.emit(crate::lumen::ENGINE_STATUS_EVENT, status);
+                };
+                let engine_status = engine.ensure(spec, &crate::lumen::HttpFetcher, &mut emit);
+                emit(&engine_status);
+
                 let message = match crate::lumen::find_lumen_cli(&settings.lumen_cli_path) {
                     Some(exe) => match runtime.warm_up(&exe) {
                         Ok(()) => return,
                         Err(e) => e.to_string(),
                     },
-                    None => "未找到 lumen-cli.exe（随包引擎缺失或路径无效）；下一步：在设置中手动指定 lumen-cli.exe，或重新安装应用。".to_string(),
+                    None if engine_status.phase == crate::lumen::EnginePhase::Failed => {
+                        engine_status.detail
+                    }
+                    None => "未找到 lumen-cli.exe（引擎缓存缺失或路径无效）；下一步：在设置中手动指定 lumen-cli.exe，或点击引擎横幅上的「重试」。".to_string(),
                 };
                 eprintln!("LUMEN 预热失败: {}", message);
                 let _ = handle.emit(crate::lumen::STARTUP_ERROR_EVENT, message);
@@ -108,6 +124,8 @@ pub fn run() {
             commands::load_session_cmd,
             open_in_luminar_roundtrip_cmd,
             commands::lumen_status_cmd,
+            commands::lumen_engine_status_cmd,
+            commands::lumen_engine_ensure_cmd,
             commands::probe_lumen_cmd,
             commands::lumen_preview_cmd,
             commands::lumen_detail_cmd,

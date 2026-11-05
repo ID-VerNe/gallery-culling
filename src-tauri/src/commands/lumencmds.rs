@@ -24,6 +24,38 @@ use crate::models::{
 };
 use super::{blocking, blocking_value, lumen_exe, require_lumen, AppState};
 
+/// 后台跑一次「确保引擎可用」，并把状态变化推给前端（issue #75）。
+///
+/// 下载/解压可能几十秒，绝不能占住 IPC 线程；状态用事件推，前端只显示横幅。
+fn spawn_engine_ensure(app: tauri::AppHandle, engine: lumen::EngineManager) {
+    std::thread::spawn(move || {
+        use tauri::Emitter;
+        let spec = lumen::pinned_engine_spec();
+        let mut emit = |status: &lumen::EngineStatus| {
+            let _ = app.emit(lumen::ENGINE_STATUS_EVENT, status);
+        };
+        let final_status = engine.ensure(spec, &lumen::HttpFetcher, &mut emit);
+        emit(&final_status);
+    });
+}
+
+/// 引擎当前状态（不触发下载）。前端启动时先读一次，避免错过早期事件。
+#[tauri::command]
+pub fn lumen_engine_status_cmd(state: State<'_, AppState>) -> lumen::EngineStatus {
+    state.engine.status()
+}
+
+/// 手动重试：后台启动一次确保流程，立即返回当前状态；后续进度靠事件推送。
+#[tauri::command]
+pub fn lumen_engine_ensure_cmd(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> lumen::EngineStatus {
+    let current = state.engine.status();
+    spawn_engine_ensure(app, state.engine.clone());
+    current
+}
+
 /// LUMEN RAW 集成握手状态（供前端徽标/降级判断）。
 ///
 /// 不可用不是错误：返回 available=false + 中文 detail，前端静默降级。

@@ -1,9 +1,14 @@
 {
   "version": "1.6.0",
   "source": {
-    "type": "local-path",
-    "upstream": "hety0211/lumen-raw v1.6.0",
-    "note": "上游 Release 只发 GUI 安装包，其中 lumen-cli.exe 是 15,920,050 字节的另一构建；随包精简 onedir（exe 6,702,168 字节 + _internal/，1150 个文件）没有可稳定取回的公开来源。"
+    "type": "url",
+    "upstream": "hety0211/lumen-raw v1.6.0（随包精简 onedir）",
+    "tag": "lumen-cli-v1.6.0",
+    "asset": "lumen-cli-1.6.0-win-x64.zip",
+    "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/lumen-cli-v1.6.0/lumen-cli-1.6.0-win-x64.zip",
+    "zipSha256": "0bb3d801a1e9e9edbdfe003c12ab1083a72bdef9ec6266f8d2866ad6a93c7462",
+    "zipBytes": 77144680,
+    "note": "引擎不再随主安装包分发（issue #75）：运行时按本文件下载 zip 并逐个校验目录内容。zip 根目录即 onedir（lumen-cli.exe + _internal/）；该 release 为 prerelease，不占用 releases/latest。"
   },
   "exe": {
     "sha256": "9ead90d542b2f2da9ae7f08856789a84150c84a7d98f48a63c9112affd5f6dde",

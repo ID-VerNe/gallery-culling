@@ -21,6 +21,7 @@
  * 这是既有 e2e 行为 —— 1420 端口只允许一个实例，不允许两个并存。
  */
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import {
   spawnDevTree,
@@ -247,6 +248,29 @@ async function main() {
     console.log(`真实 RAW：${detailRaw} → ${detailNames}`);
   }
 
+  // issue #75：引擎下载失败场景要一个「坏下载源」+ 干净缓存目录。
+  // 本地起服务而不是断网：断网会让错误文案依赖代理/系统环境，不确定；
+  // 返回 200 + 长度不对的内容，命中「zip 大小不符」这条确定路径。
+  let badEngineServer = null;
+  let engineCacheDir = '';
+  let engineUrl = '';
+  if (scenario === 'engine-download') {
+    engineCacheDir = path.join(PROJECT_ROOT, 'e2e', '.tmp', 'engine-cache');
+    fs.rmSync(engineCacheDir, { recursive: true, force: true });
+    badEngineServer = http.createServer((_req, res) => {
+      const body = Buffer.from('this is not a lumen-cli zip');
+      res.writeHead(200, {
+        'content-type': 'application/octet-stream',
+        'content-length': String(body.length),
+      });
+      res.end(body);
+    });
+    await new Promise((resolve) => badEngineServer.listen(0, '127.0.0.1', resolve));
+    const port = badEngineServer.address().port;
+    engineUrl = `http://127.0.0.1:${port}/lumen-cli-1.6.0-win-x64.zip`;
+    console.log(`坏引擎服务：${engineUrl}（缓存目录 ${engineCacheDir}）`);
+  }
+
   // 先收上一轮（含 vite）再清空日志：否则旧 vite 会在清空后继续追加，
   // 上一轮的 `=== e2e done` 会让 waitForLog 立刻假命中。
   killApp();
@@ -275,6 +299,14 @@ async function main() {
       VITE_E2E_MIXED: fx.mixedDir,
       VITE_E2E_OUT: OUT,
       VITE_E2E_NAMES: detailNames,
+      // issue #75：只有 engine-download 场景才覆盖下载源与缓存根目录；
+      // 其余场景保持真实应用行为（缓存缺失时从 Release 资产下载）。
+      ...(engineUrl
+        ? {
+            GALLERY_ENGINE_URL: engineUrl,
+            GALLERY_ENGINE_CACHE_DIR: engineCacheDir,
+          }
+        : {}),
       // 刻意**不传** WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS：
       //   1. 应用内驱动不需要 CDP（本机 CDP 也只服务第一个请求，连不上）；
       //   2. main.rs 只在变量**未设置**时才写 `--in-process-gpu`，这里一旦传了
@@ -303,6 +335,10 @@ async function main() {
   // 发版流程会在 e2e 之后紧接着跑签名构建：这里必须把 dev 树收干净，
   // 别留下 gallery-culling / cargo / vite 残留（见 lib/app.mjs:98 的 killApp 说明）。
   killApp();
+  if (badEngineServer) {
+    await new Promise((resolve) => badEngineServer.close(resolve));
+    badEngineServer = null;
+  }
 
   const log = hit.content;
   const R = createReporter();
@@ -311,7 +347,11 @@ async function main() {
   console.log('\n[A] 场景日志断言');
   R.check('应用挂载', /应用挂载 = true/.test(log));
   R.check('主界面就绪', /主界面就绪 = true/.test(log));
-  R.check('扫描完成', /扫描完成（[^）]*）= true/.test(log));
+  // engine-download 场景刻意不扫描（它验的是引擎下载失败时界面仍可用），
+  // 其余场景仍必须跑完扫描，别让这条变成永远真。
+  if (scenario !== 'engine-download') {
+    R.check('扫描完成', /扫描完成（[^）]*）= true/.test(log));
+  }
   R.check('无 FATAL', !/FATAL:/.test(log), (log.match(/FATAL:[^\n]*/g) || []).join(' | '));
 
   // 场景里每条 `>>> 断言X … = true|false` 都必须为真
@@ -338,6 +378,16 @@ async function main() {
   } else if (scenario === 'detail-1to1') {
     console.log('\n[B] 细节缓存落盘断言');
     checkDetailCache(R);
+  } else if (scenario === 'engine-download') {
+    console.log('\n[B] 引擎缓存目录残留断言');
+    const entries = fs.existsSync(engineCacheDir) ? fs.readdirSync(engineCacheDir) : [];
+    R.note(`缓存目录 ${engineCacheDir}：${entries.join(', ') || '(空)'}`);
+    R.check('失败后不留临时产物', entries.length === 0, entries.join(','));
+    R.check(
+      '没有落成最终目录',
+      !fs.existsSync(path.join(engineCacheDir, 'lumen-cli-1.6.0')),
+      '出现了未校验的最终目录',
+    );
   }
 
   const sum = R.summary();

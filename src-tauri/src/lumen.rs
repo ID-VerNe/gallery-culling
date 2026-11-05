@@ -17,12 +17,14 @@
 //! - `sync`         双向评级同步判定
 //! - `status`       版本查询与前端握手状态映射
 //! - `error`        LumenError 分类
+//! - `engine`       引擎包下载 / 校验 / 缓存（issue #75）
 
 mod cache;
 mod capabilities;
 mod detail;
 mod cli;
 mod discovery;
+mod engine;
 mod error;
 mod mcp;
 mod runtime;
@@ -39,6 +41,7 @@ pub use capabilities::*;
 pub use detail::*;
 pub use cli::*;
 pub use discovery::*;
+pub use engine::*;
 pub use error::LumenError;
 pub use mcp::*;
 pub use runtime::*;

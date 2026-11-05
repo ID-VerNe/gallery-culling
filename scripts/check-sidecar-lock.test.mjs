@@ -105,6 +105,36 @@ describe('check-sidecar-lock —— 锁文件本身', () => {
     }
   });
 
+  it('source.type=url 缺 zipSha256 → 红（无法校验下载内容）', () => {
+    const root = makeRoot();
+    try {
+      withBaseline(root);
+      const lock = JSON.parse(readFileSync(lockPath(root), 'utf8'));
+      delete lock.source.zipSha256;
+      writeFileSync(lockPath(root), JSON.stringify(lock), 'utf8');
+      const { code, output } = runCheck(root);
+      expect(code).toBe(1);
+      expect(output).toContain('zipSha256');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('source.type=url 缺 zipBytes → 红（无法拒绝被截断/追加的 zip）', () => {
+    const root = makeRoot();
+    try {
+      withBaseline(root);
+      const lock = JSON.parse(readFileSync(lockPath(root), 'utf8'));
+      delete lock.source.zipBytes;
+      writeFileSync(lockPath(root), JSON.stringify(lock), 'utf8');
+      const { code, output } = runCheck(root);
+      expect(code).toBe(1);
+      expect(output).toContain('zipBytes');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('锁文件版本与 PINNED_LUMEN_VERSION 不一致 → 红（不需要产物在盘）', () => {
     const root = makeRoot();
     try {
