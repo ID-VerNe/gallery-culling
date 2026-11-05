@@ -1,11 +1,11 @@
 {
-  "version": "v2.0.6",
-  "notes": "v2.0.6\n\n- 底栏按钮恢复正常可点，不再有点不动的死区。\n- 静息时底栏整条收起，只留一根手柄；需要时点一下手柄即可展开。\n- 左手单键别名上线：F 保留原作用，Shift+1~5 直接标色，R 清除，T 切换前后对照，按住 V 看原片。\n- 更新弹窗新增「本次暂不更新」与「不再提示 v2.0.6」两个选择，不想升级时可以明确拒绝而不是只能点稍后。\n- 修复安装完成后应用没有自动启动的问题：安装器会主动拉起新版本；若提权上下文启动失败，会给出兜底并弹出「重试启动」对话框，不会静默失败。",
-  "pub_date": "2026-11-05T04:32:21.428Z",
+  "version": "v2.0.7",
+  "notes": "v2.0.7\n\n- 底栏改为常驻底部状态栏：照片不再被底栏遮挡，光圈、快门、ISO 等参数一眼可见，同时保留常用按钮与快捷提示。\n- 快捷键收敛为左手键位：A/D 翻页，F 保留、X 淘汰、R 清除，T 前后对照，按住 V 看原片，Shift+1~5 色标，W 外部打开，G 镜头元数据，Q / Shift+Q 设基准，F1 打开全部快捷键。\n- 原先的右手键位已全部移除，误按不会再触发任何操作；完整键位以 F1 帮助弹窗为准。",
+  "pub_date": "2026-11-05T11:23:12.516Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNG9hMFZqa09rN2Fwb2JuNy82ZUJyMmVORzVWYVdxQnVrRkk5dTU5SzFSR3haSHp3QzZqaVhLNzRVMXQyMmxkS0RMRGY2NktXYTZRYzRWODNpVzV5TkFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzODUzMTQxCWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC42X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjAuNgpWRGp0b29XQkRoR1BQV2xJVHphYVdqWmMwaUxibWo5azhMWTlFcVV3em9GVm94cWowa01vOXhtV0NxbFhSWkFKMHhBeElhZ3FBUXVqS3phRlBVekpDdz09Cg==",
-      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.6/gallery-culling_2.0.6_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNHJyajc2Skl6Y1VSSWs4WGc1WE05bHZuM0pyb09Xc3lSaVNsL2tCR0RSSHlHZHF6N0JOUjJFbTlPYkRsaXZOK1FiOUhvR25FeTJwS0Fsa1ZZbDRpcXdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzODc3NzkyCWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC43X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjAuNwpxVUJ4L3UvSmZKUXJmRDlHRnVFb1dMRXpmZjEwVUVsMWFraGlPU1VoVkxtNWN3emxFU3Z3cENudjF5ckVpVjNSS0pBQWZhNjAzZWEvWEJoTW5SSW1Ddz09Cg==",
+      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.7/gallery-culling_2.0.7_x64-setup.exe"
     }
   }
 }
