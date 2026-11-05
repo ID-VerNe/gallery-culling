@@ -205,11 +205,11 @@ describe('FR-04 —— 多步撤销与重做', () => {
     fireEvent.keyDown(document.body, { key: '4' });
     await waitFor(() => expect(rateCalls()).toBe(1));
 
-    fireEvent.keyDown(document.body, { key: 'ArrowRight' });
+    fireEvent.keyDown(document.body, { key: 'd' });
     fireEvent.keyDown(document.body, { key: '5' });
     await waitFor(() => expect(rateCalls()).toBe(2));
 
-    fireEvent.keyDown(document.body, { key: 'ArrowRight' });
+    fireEvent.keyDown(document.body, { key: 'd' });
     fireEvent.keyDown(document.body, { key: '4' });
     await waitFor(() => expect(rateCalls()).toBe(3));
 
@@ -247,7 +247,7 @@ describe('FR-04 —— 多步撤销与重做', () => {
     });
   });
 
-  it('Ctrl+Y 同样触发重做（Windows 习惯）', async () => {
+  it('Ctrl+Y 不再触发重做（Y 在右半区，issue #61）', async () => {
     await scanOne(trio);
 
     fireEvent.keyDown(document.body, { key: '4' });
@@ -256,8 +256,12 @@ describe('FR-04 —— 多步撤销与重做', () => {
     await waitFor(() => expect(rateCalls()).toBe(2));
 
     fireEvent.keyDown(document.body, { key: 'y', ctrlKey: true });
-    await waitFor(() => expect(rateCalls()).toBe(3));
-    expect(lastInvokeArgs('update_rating_flag_cmd')).toMatchObject({ rating: 4 });
+    // 等一个宏任务窗口：若 Ctrl+Y 仍绑定，重做会异步写回并新增一次调用。
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(rateCalls()).toBe(2);
+    // 重做仍可用，说明按键只是被忽略，而不是把重做栈清空了。
+    expect(screen.getByRole('button', { name: /^重做/ })).toBeEnabled();
   });
 
   it('撤销后做了新操作，重做栈清空（分支后不能重做旧路径）', async () => {

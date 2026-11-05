@@ -48,7 +48,7 @@ export const EditorPathSection: React.FC<{
             </button>
           </div>
           <p className="text-[10px] leading-relaxed text-white/60">
-            用于快捷键 O 或点击“外部打开”时直接通过 Photoshop 打开对应相机 RAW
+            用于快捷键 W 或点击“外部打开”时直接通过 Photoshop 打开对应相机 RAW
             文件。留空则使用系统默认程序。
           </p>
         </div>

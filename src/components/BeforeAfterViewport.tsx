@@ -372,6 +372,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
 
       {/* 评级 / 旗标 / 色标已迁到窗口底部常驻状态栏（issue #62）：
           这里不再有悬浮胶囊与 4px 手柄。 */}
+
     </div>
   );
 };

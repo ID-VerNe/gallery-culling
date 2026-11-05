@@ -434,7 +434,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           role="status"
           className="absolute top-4 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3.5 py-1.5 rounded-md text-xs font-semibold text-amber-300 border border-amber-500/40 flex items-center gap-2 pointer-events-none"
         >
-          <span>正在查看原片（松开 V / \ 键恢复）</span>
+          <span>正在查看原片（松开 V 键恢复）</span>
         </div>
       )}
 
@@ -447,8 +447,8 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           onPrev();
         }}
         className="focus-ring absolute left-3 top-1/2 -translate-y-1/2 p-3 bg-background-base/70 hover:ring-1 hover:ring-white/25 active:scale-[0.96] text-white rounded-full press backdrop-blur-sm pointer-events-auto"
-        title="上一张 (A / ←)"
-        aria-label="上一张照片（快捷键 A 或 ←）"
+        title="上一张 (A)"
+        aria-label="上一张照片（快捷键 A）"
       >
         <ChevronLeft className="w-6 h-6" aria-hidden="true" />
       </button>
@@ -458,14 +458,15 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           onNext();
         }}
         className="focus-ring absolute right-3 top-1/2 -translate-y-1/2 p-3 bg-background-base/70 hover:ring-1 hover:ring-white/25 active:scale-[0.96] text-white rounded-full press backdrop-blur-sm pointer-events-auto"
-        title="下一张 (D / →)"
-        aria-label="下一张照片（快捷键 D 或 →）"
+        title="下一张 (D)"
+        aria-label="下一张照片（快捷键 D）"
       >
         <ChevronRight className="w-6 h-6" aria-hidden="true" />
       </button>
 
       {/* 选片动词（星级 / 旗标 / 色标）已迁到窗口底部常驻状态栏
           （issue #62）：视口里不再有悬浮底板、手柄或 hover 才显现的分组。 */}
+
     </div>
   );
 };

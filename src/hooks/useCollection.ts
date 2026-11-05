@@ -26,7 +26,7 @@ export function useCollection() {
 
   /**
    * B1：宫格多选集合（受控）。空集 = 沿用单选取值。
-   * 有 ≥2 张时按 `1..5 / P / X` 走批量写盘（带确认与进度）。
+   * 有 ≥2 张时按 `1..5 / F / X` 走批量写盘（带确认与进度）。
    */
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 

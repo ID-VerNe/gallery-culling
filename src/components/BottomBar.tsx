@@ -57,6 +57,10 @@ export interface StatusZoom {
   onReset: () => void;
 }
 
+/** 帮助 / 元数据入口的键帽也从目录派生（issue #61 起 `?` → `F1`、`M` → `G`）。 */
+const HELP_KEYS = findShortcut('help')?.keys ?? 'F1';
+const LENS_META_KEYS = findShortcut('lens-meta')?.keys ?? 'G';
+
 interface BottomBarProps {
   /** 一个或多个窗格；空数组 = 未加载照片。 */
   panes?: StatusPane[];
@@ -77,7 +81,7 @@ interface BottomBarProps {
   /** 单图缩放读数与按钮（双图 / 前后对照各自顶部已有控制条，不传）。 */
   zoom?: StatusZoom;
   /**
-   * 多步撤销/重做（FR-04）。`1..5/p/x/6..9/0` 按下即写 `.xmp`，键盘有
+   * 多步撤销/重做（FR-04）。`1..5/f/x/r` 按下即写 `.xmp`，键盘有
    * `Ctrl/Cmd+Z` 与 `Ctrl/Cmd+Shift+Z`，这里给鼠标用户同样的入口 —— 否则
    * "能回退"只对键盘用户成立。
    */
@@ -154,7 +158,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
       </div>
 
       {/* 中：快捷键速查。36px 一行装不下参数 + 速查：单图要 1800px 以上才展开，
-          双图永远不展开（右侧 `?` 图标始终可进完整帮助）。 */}
+          双图永远不展开（右侧帮助图标始终可进完整帮助）。 */}
       {!twoPane && (
         <div
           className="hidden min-[1800px]:flex items-center gap-2 text-white/70 select-none shrink-0"
@@ -175,10 +179,10 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           <button
             onClick={onOpenShortcutHelp}
             className={`${STATUS_BUTTON} px-0.5`}
-            title="查看全部快捷键 (?)"
+            title={`查看全部快捷键（${HELP_KEYS}）`}
             aria-label="查看全部快捷键"
           >
-            <KeyCap>?</KeyCap>
+            <KeyCap>{HELP_KEYS}</KeyCap>
             <span>全部快捷键</span>
           </button>
         </div>
@@ -229,7 +233,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           <button
             onClick={onOpenMetadataModal}
             className={`${STATUS_BUTTON} ${twoPane ? 'hidden 2xl:flex' : 'hidden lg:flex'}`}
-            title="编辑镜头元数据 (M)"
+            title={`编辑镜头元数据（${LENS_META_KEYS}）`}
             aria-label="编辑镜头元数据"
           >
             <Sliders className="w-3 h-3 shrink-0" aria-hidden="true" />
@@ -278,7 +282,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         <button
           onClick={onOpenShortcutHelp}
           className={STATUS_ICON_BUTTON}
-          title="查看全部快捷键 (?)"
+          title={`查看全部快捷键（${HELP_KEYS}）`}
           aria-label="查看全部快捷键"
         >
           <Keyboard className="w-3.5 h-3.5" aria-hidden="true" />

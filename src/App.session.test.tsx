@@ -155,7 +155,7 @@ describe('App —— 扫描会话防抖保存 (N-14b)', () => {
     await flush(1);
 
     // 把左图（DSC_1001）设为基准
-    fireEvent.click(screen.getByLabelText('将 DSC_1001 锁定为对比基准（[ 或 B）'));
+    fireEvent.click(screen.getByLabelText('将 DSC_1001 锁定为对比基准（Q 或 B）'));
     await flush(1);
     // 基准态：按钮文案翻转为「取消将 … 锁定为对比基准」
     expect(

@@ -140,9 +140,10 @@ const sameSliders = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.strin
 /**
  * 派发单次键盘事件到 window（应用在 window 上监听 keydown）。
  *
- * `code` 必须显式传入：快捷键里所有「物理键位」分支（`Shift+1…5`、`Shift+6`）
- * 只看 `e.code`（`src/hooks/useKeyboardShortcuts.ts:262`），而合成事件不会自带
- * `code`。此前本函数只给 `key`，等于让真窗口 e2e 永远测不到那两条分支（issue #53）。
+ * `code` 必须显式传入：快捷键里所有「物理键位」分支（`Shift+1…5`、`Q`/`Shift+Q`）
+ * 只看 `e.code`（见 `useKeyboardShortcuts.ts` 的 `LABEL_BY_DIGIT_CODE` 与
+ * `e.code === 'KeyQ'`），而合成事件不会自带 `code`。此前本函数只给 `key`，
+ * 等于让真窗口 e2e 永远测不到这些物理键位分支（issue #53）。
  */
 function keyEvent(
   type: 'keydown' | 'keyup',
@@ -473,7 +474,7 @@ function readPressed(selector: string): string {
 const RATING_GROUP = '[aria-label="照片星级打分"] button';
 const FLAG_GROUP = 'button[aria-label="标记保留 (Pick)"], button[aria-label="标记淘汰 (Reject)"]';
 const LABEL_GROUP = '[aria-label="照片色标"] button';
-const BEFORE_AFTER_BTN = 'button[aria-label="本张照片前后对照 (快捷键 Y)"]';
+const BEFORE_AFTER_BTN = 'button[aria-label="本张照片前后对照 (快捷键 T)"]';
 
 /**
  * 场景：主视口状态栏的可交互契约（issue #53 · issue #62 改写）。
@@ -488,7 +489,7 @@ const BEFORE_AFTER_BTN = 'button[aria-label="本张照片前后对照 (快捷键
  *   U1–U6  常驻：状态栏在照片区下方（不遮挡）、恒可见、手柄不存在、
  *          按钮可键盘聚焦、聚焦前后几何零位移
  *   U7–U8  命中：每个按钮中心 `elementFromPoint` 命中按钮自身（#46）
- *   U9–U14 左手别名与旧键在同一张照片上产生同一状态（#45）
+ *   U9–U14 左手别名与旧键在同一张照片上产生同一状态（#61，原 #45）
  *
  * 明确不做：#49 更新装完不自动重启依赖 NSIS 安装器与提权进程，应用内 e2e
  * 驱动不到，继续留人工回签。
@@ -626,7 +627,7 @@ async function scenarioUiContract(jpgFolder: string, el: () => string) {
   raw(`[${el()}] >>> 断言U7 底栏可点按钮数量达标 = ${buttons.length >= 8}`);
   raw(`[${el()}] >>> 断言U8 每个按钮中心命中自身 = ${misses.length === 0}`);
 
-  // ── 左手别名：按住 V ≡ \（#45）──────────────────────────
+  // ── 左手键：按住 V 查看原片；反斜杠已删除（#61）────────────
   const bannerVisible = () => /正在查看原片/.test(document.body.innerText);
   keyEvent('keydown', 'v', 'KeyV');
   await sleep(400);
@@ -642,90 +643,99 @@ async function scenarioUiContract(jpgFolder: string, el: () => string) {
   await sleep(300);
   const holdBackslashEnded = !bannerVisible();
   raw(`[${el()}] 按住 V=${holdV}/${holdVEnded} \\=${holdBackslash}/${holdBackslashEnded}`);
-  raw(
-    `[${el()}] >>> 断言U9 V 与反斜杠按住都出原片横幅 = ${holdV && holdBackslash}`,
-  );
+  raw(`[${el()}] >>> 断言U9 按住 V 出原片横幅、反斜杠不再触发 = ${holdV && !holdBackslash}`);
   raw(`[${el()}] >>> 断言U10 松开后横幅消失 = ${holdVEnded && holdBackslashEnded}`);
 
-  // ── 左手别名：F ≡ P（#45）──────────────────────────────
-  // 先设成淘汰，确保别名真的改写了状态，而不是「本来就是 pick」。
+  // ── 左手键：F 保留；P 已删除（#61）────────────────────
+  // 先设成淘汰，确保后续读数区分「P 真的没生效」与「本来就是 pick」。
   pressKey('x', 'KeyX');
   await sleep(300);
   pressKey('p', 'KeyP');
   await sleep(400);
-  const pickByP = readPressed(FLAG_GROUP);
-  pressKey('x', 'KeyX');
+  const flagAfterP = readPressed(FLAG_GROUP);
+  pressKey('x', 'KeyX'); // 取消淘汰，回到无旗标
   await sleep(300);
   pressKey('f', 'KeyF');
   await sleep(400);
-  const pickByF = readPressed(FLAG_GROUP);
-  raw(`[${el()}] 保留：P=${pickByP} F=${pickByF}`);
+  const flagAfterF = readPressed(FLAG_GROUP);
+  raw(`[${el()}] 保留：P 后=${flagAfterP} F 后=${flagAfterF}`);
   raw(
-    `[${el()}] >>> 断言U11 F 与 P 保留等价 = ${pickByP === pickByF && pickByP === '10'}`,
+    `[${el()}] >>> 断言U11 P 不再改旗标（仍为淘汰）、F 仍可保留 = ${
+      flagAfterP === '01' && flagAfterF === '10'
+    }`,
   );
 
-  // ── 左手别名：R ≡ 0（#45）──────────────────────────────
+  // ── 左手键：R 清除；0 已删除（#61）──────────────────────
   pressKey('5', 'Digit5');
   await sleep(300);
   pressKey('0', 'Digit0');
   await sleep(400);
-  const clearByZero = readPressed(RATING_GROUP);
-  pressKey('5', 'Digit5');
-  await sleep(300);
+  const ratingAfterZero = readPressed(RATING_GROUP);
   pressKey('r', 'KeyR');
   await sleep(400);
-  const clearByR = readPressed(RATING_GROUP);
-  raw(`[${el()}] 清零：0=${clearByZero} R=${clearByR}`);
+  const ratingAfterR = readPressed(RATING_GROUP);
+  raw(`[${el()}] 清零：0 后=${ratingAfterZero} R 后=${ratingAfterR}`);
+  // 星级按钮的 aria-pressed 是累积语义（rating >= star），5 星读数即 `11111`。
   raw(
-    `[${el()}] >>> 断言U12 R 与 0 清零等价 = ${clearByZero === clearByR && clearByZero === '00000'}`,
+    `[${el()}] >>> 断言U12 0 不再清零（仍为 5 星）、R 仍清零 = ${
+      ratingAfterZero === '11111' && ratingAfterR === '00000'
+    }`,
   );
 
-  // ── 左手别名：Shift+1…5 ≡ 6–9 / Shift+6（#45）───────────
-  const labelPairs: Array<[string, string, boolean, string, string, boolean]> = [
-    ['6', 'Digit6', false, '!', 'Digit1', true],
-    ['7', 'Digit7', false, '@', 'Digit2', true],
-    ['8', 'Digit8', false, '#', 'Digit3', true],
-    ['9', 'Digit9', false, '$', 'Digit4', true],
-    ['^', 'Digit6', true, '%', 'Digit5', true],
+  // ── 左手键：Shift+1…5 色标；6–9 / Shift+6 已删除（#61）───
+  const leftLabelKeys: Array<[string, string]> = [
+    ['!', 'Digit1'],
+    ['@', 'Digit2'],
+    ['#', 'Digit3'],
+    ['$', 'Digit4'],
+    ['%', 'Digit5'],
+  ];
+  const oldLabelKeys: Array<[string, string, boolean]> = [
+    ['6', 'Digit6', false],
+    ['7', 'Digit7', false],
+    ['8', 'Digit8', false],
+    ['9', 'Digit9', false],
+    ['^', 'Digit6', true],
   ];
   const clearLabel = async () => {
     const state = readPressed(LABEL_GROUP);
     const idx = state.indexOf('1');
     if (idx < 0) return;
-    const oldKeys: Array<[string, string, boolean]> = [
-      ['6', 'Digit6', false],
-      ['7', 'Digit7', false],
-      ['8', 'Digit8', false],
-      ['9', 'Digit9', false],
-      ['^', 'Digit6', true],
-    ];
-    const [key, code, shift] = oldKeys[idx];
-    pressKey(key, code, shift);
+    const [key, code] = leftLabelKeys[idx];
+    pressKey(key, code, true);
     await sleep(300);
   };
 
   const labelMismatches: string[] = [];
-  for (const [oldKey, oldCode, oldShift, newKey, newCode, newShift] of labelPairs) {
+  for (let i = 0; i < leftLabelKeys.length; i += 1) {
     await clearLabel();
-    pressKey(oldKey, oldCode, oldShift);
+    const [key, code] = leftLabelKeys[i];
+    pressKey(key, code, true);
     await sleep(500);
-    const oldState = readPressed(LABEL_GROUP);
-    await clearLabel();
-    pressKey(newKey, newCode, newShift);
-    await sleep(500);
-    const newState = readPressed(LABEL_GROUP);
-    const ok =
-      oldState === newState && oldState.split('').filter((c) => c === '1').length === 1;
-    raw(
-      `[${el()}] 色标 ${oldKey}/${newKey}：旧=${oldState} 新=${newState} 等价=${ok}`,
-    );
-    if (!ok) labelMismatches.push(`${oldKey} vs ${newKey}: ${oldState}/${newState}`);
+    const state = readPressed(LABEL_GROUP);
+    const expected = ['10000', '01000', '00100', '00010', '00001'][i];
+    const ok = state === expected;
+    raw(`[${el()}] 色标 Shift+${i + 1}：读数=${state} 期望=${expected} 命中=${ok}`);
+    if (!ok) labelMismatches.push(`Shift+${i + 1}: ${state}`);
   }
+  await clearLabel();
+
+  // 旧右手键逐个按下，色标必须保持全空。
+  const oldStates: string[] = [];
+  for (const [key, code, shift] of oldLabelKeys) {
+    pressKey(key, code, shift);
+    await sleep(300);
+    oldStates.push(readPressed(LABEL_GROUP));
+  }
+  const oldAllEmpty = oldStates.every((state) => state === '00000');
+  raw(`[${el()}] 旧色标键读数=${oldStates.join(' / ')}`);
   raw(
-    `[${el()}] >>> 断言U13 Shift+1…5 与 6–9/Shift+6 等价 = ${labelMismatches.length === 0}`,
+    `[${el()}] >>> 断言U13 只认 Shift+1…5，6–9/Shift+6 不再生效 = ${
+      labelMismatches.length === 0 && oldAllEmpty
+    }`,
   );
 
-  // ── 左手别名：T ≡ Y（#45）──────────────────────────────
+  // ── 左手键：T 前后对照；Y 已删除（#61）──────────────────
   // 放在最后：切前后对照会卸载单图视口，先做完底栏相关断言再动视图模式。
   const beforeAfterPressed = () =>
     document.querySelector<HTMLElement>(BEFORE_AFTER_BTN)?.getAttribute('aria-pressed') ===
@@ -734,16 +744,11 @@ async function scenarioUiContract(jpgFolder: string, el: () => string) {
   pressKey('y', 'KeyY');
   await sleep(600);
   const baByY = beforeAfterPressed();
-  pressKey('y', 'KeyY');
-  await sleep(600);
-  const backToSingleByY = !beforeAfterPressed();
   pressKey('t', 'KeyT');
   await sleep(600);
   const baByT = beforeAfterPressed();
-  raw(`[${el()}] 前后对照：Y=${baByY} 退回=${backToSingleByY} T=${baByT}`);
-  raw(
-    `[${el()}] >>> 断言U14 T 与 Y 前后对照等价 = ${baByY && baByT && backToSingleByY}`,
-  );
+  raw(`[${el()}] 前后对照：Y=${baByY} T=${baByT}`);
+  raw(`[${el()}] >>> 断言U14 Y 不再切换、T 仍切换 = ${!baByY && baByT}`);
   // 还原单图，保证下一次运行从同一状态开始（夹具会重建，但视图模式不该漂移）。
   pressKey('t', 'KeyT');
   await sleep(400);
@@ -1061,9 +1066,9 @@ async function scenarioDetailOneToOne(
 
   // ── C2. 切走再切回 → 缓存命中 ─────────────────────────
   raw('===== 场景 C2：切走再切回（缓存命中）=====');
-  pressKey('ArrowRight');
+  pressKey('d', 'KeyD');
   await sleep(1500);
-  pressKey('ArrowLeft');
+  pressKey('a', 'KeyA');
   await sleep(1500);
   const backToA = viewportImg(nameA);
   raw(`[${el()}] 切回后已回到预览 = ${!!backToA && !/_detail_lumen/.test(backToA.src)}`);

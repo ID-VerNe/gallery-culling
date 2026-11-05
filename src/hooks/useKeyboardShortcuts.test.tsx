@@ -150,26 +150,26 @@ describe('useKeyboardShortcuts 守卫作用域', () => {
     expect(h.onRate).not.toHaveBeenCalled();
   });
 
-  it('range 上按 `\\` 生效、松手复位（keyup 早于通用守卫）', () => {
+  it('宫格 listbox 聚焦时按住 `V` 生效、松手复位（keyup 早于通用守卫）', () => {
     const h = setup();
-    const range = document.createElement('input');
-    range.type = 'range';
-    mount(range);
+    const listbox = document.createElement('div');
+    listbox.setAttribute('role', 'listbox');
+    mount(listbox);
 
-    fireEvent.keyDown(range, { key: '\\' });
+    fireEvent.keyDown(listbox, { key: 'v' });
     expect(h.onHoldOriginalStart).toHaveBeenCalledTimes(1);
 
-    fireEvent.keyUp(range, { key: '\\' });
+    fireEvent.keyUp(listbox, { key: 'v' });
     expect(h.onHoldOriginalEnd).toHaveBeenCalledTimes(1);
   });
 
-  it('文本输入框内 `\\` 让位，不触发查看原片', () => {
+  it('文本输入框内 `V` 让位，不触发查看原片', () => {
     const h = setup();
     const input = document.createElement('input');
     input.type = 'text';
     mount(input);
 
-    const notPrevented = fireEvent.keyDown(input, { key: '\\' });
+    const notPrevented = fireEvent.keyDown(input, { key: 'v' });
 
     expect(h.onHoldOriginalStart).not.toHaveBeenCalled();
     expect(notPrevented).toBe(true);
@@ -178,7 +178,7 @@ describe('useKeyboardShortcuts 守卫作用域', () => {
   it('窗口失焦时复位按住状态，且不重复复位', () => {
     const h = setup();
 
-    fireEvent.keyDown(document.body, { key: '\\' });
+    fireEvent.keyDown(document.body, { key: 'v' });
     expect(h.onHoldOriginalStart).toHaveBeenCalledTimes(1);
 
     fireEvent.blur(window);
@@ -201,35 +201,28 @@ describe('useKeyboardShortcuts 守卫作用域', () => {
 });
 
 /**
- * SH-01（issue #32）：色标的鼠标入口不能改变既有键盘路径。
+ * issue #61：右手数字键 6/7/8/9 与 Shift+6 已从入口删除。
  *
- * 6/7/8/9 仍是红/黄/绿/蓝，Shift+6 仍按 `e.code === 'Digit6'` 判紫色 ——
- * 美式布局下 `Shift+6` 的 `e.key` 是 `^`，所以这里刻意用 `key: '^'`。
+ * 用户右手不离鼠标，右手数字区不是可接受入口；这里锁住「按下不再触发、
+ * 也不再阻止默认」，防止后续为了兼容又把它们加回来。
  */
-describe('useKeyboardShortcuts —— 色标键位不受鼠标入口影响', () => {
-  it.each([
-    ['6', 'Red'],
-    ['7', 'Yellow'],
-    ['8', 'Green'],
-    ['9', 'Blue'],
-  ] as const)('按 %s 触发 %s 色标并阻止默认', (key, expected) => {
+describe('useKeyboardShortcuts —— 右手色标键已删除（issue #61）', () => {
+  it.each(['6', '7', '8', '9'] as const)('按 %s 不触发色标、也不阻止默认', (key) => {
     const h = setup();
     const notPrevented = fireEvent.keyDown(document.body, { key });
-    expect(h.onLabel).toHaveBeenCalledTimes(1);
-    expect(h.onLabel).toHaveBeenCalledWith(expected);
-    expect(notPrevented).toBe(false);
+    expect(h.onLabel).not.toHaveBeenCalled();
+    expect(notPrevented).toBe(true);
   });
 
-  it('Shift+6 仍为紫色（按物理键位 Digit6 判定，不依赖 e.key）', () => {
+  it('Shift+6（物理键位 Digit6）不再触发紫色', () => {
     const h = setup();
     const notPrevented = fireEvent.keyDown(document.body, {
       key: '^',
       code: 'Digit6',
       shiftKey: true,
     });
-    expect(h.onLabel).toHaveBeenCalledTimes(1);
-    expect(h.onLabel).toHaveBeenCalledWith('Purple');
-    expect(notPrevented).toBe(false);
+    expect(h.onLabel).not.toHaveBeenCalled();
+    expect(notPrevented).toBe(true);
   });
 });
 
@@ -359,13 +352,13 @@ describe('useKeyboardShortcuts —— Z 键 1:1', () => {
 });
 
 /**
- * issue #45：左手单键可达性。
+ * issue #61：右手键全部删除，每个动作只留左手单键/左半区入口。
  *
- * 右手握鼠标时，`P` / `6–9` / `Shift+6` / `0` / `U` / `Y` / `\` 都落在右半区；
- * 这里锁住「新增左手别名可用 + 旧键仍可用 + 修饰键/文本控件/模态仍让位」。
- * 别名全部是「新增」而非迁移，任何旧键都不允许被删掉。
+ * 判据是「左手放 A 键锚点、手掌不横移就能按到」。这里锁四件事：
+ * 1. 新左手键可用；2. 旧右手键按下后完全无动作、也不阻止默认；
+ * 3. 组合键（`Ctrl+F` / `Ctrl+Y` 等）与文本控件/模态仍让位。
  */
-describe('useKeyboardShortcuts —— 左手别名（issue #45）', () => {
+describe('useKeyboardShortcuts —— 左手单键（issue #61）', () => {
   function setupAliases() {
     const handlers = {
       onPrev: vi.fn(),
@@ -381,7 +374,14 @@ describe('useKeyboardShortcuts —— 左手别名（issue #45）', () => {
       onOpenShortcutHelp: vi.fn(),
       onOpenExternal: vi.fn(),
       onToggleCompare: vi.fn(),
+      onSwapCompare: vi.fn(),
+      onTogglePinReference: vi.fn(),
+      onPinLeft: vi.fn(),
+      onPinRight: vi.fn(),
       onTogglePinCurrent: vi.fn(),
+      onOpenMetadataModal: vi.fn(),
+      onToggleTonalPanel: vi.fn(),
+      onToggleOneToOne: vi.fn(),
       onUndo: vi.fn(),
       onRedo: vi.fn(),
     };
@@ -389,7 +389,7 @@ describe('useKeyboardShortcuts —— 左手别名（issue #45）', () => {
     return handlers;
   }
 
-  it('F（左手）与 P（旧键）并存，都触发「保留」并阻止默认', () => {
+  it('F 保留；P 已删除不再触发', () => {
     const h = setupAliases();
 
     expect(fireEvent.keyDown(document.body, { key: 'f' })).toBe(false);
@@ -397,25 +397,26 @@ describe('useKeyboardShortcuts —— 左手别名（issue #45）', () => {
     fireEvent.keyDown(document.body, { key: 'p' });
     fireEvent.keyDown(document.body, { key: 'P' });
 
-    expect(h.onFlag).toHaveBeenCalledTimes(4);
+    expect(h.onFlag).toHaveBeenCalledTimes(2);
     for (const call of h.onFlag.mock.calls) expect(call).toEqual(['pick']);
   });
 
-  it('R（左手）与 0 / U 并存，走 onClear 单次写盘', () => {
+  it('R 清除；0 / U 已删除', () => {
     const h = setupAliases();
 
     expect(fireEvent.keyDown(document.body, { key: 'r' })).toBe(false);
     fireEvent.keyDown(document.body, { key: 'R' });
     fireEvent.keyDown(document.body, { key: '0' });
     fireEvent.keyDown(document.body, { key: 'u' });
+    fireEvent.keyDown(document.body, { key: 'U' });
 
-    expect(h.onClear).toHaveBeenCalledTimes(4);
+    expect(h.onClear).toHaveBeenCalledTimes(2);
     // 有 onClear 时不得再退回旧的双回调（避免两次写盘）。
     expect(h.onRate).not.toHaveBeenCalled();
     expect(h.onFlag).not.toHaveBeenCalled();
   });
 
-  it('R 在未接线 onClear 时退回 onRate(0) + onFlag(none)，与 0/U 同语义', () => {
+  it('R 在未接线 onClear 时退回 onRate(0) + onFlag(none)', () => {
     const onRate = vi.fn();
     const onFlag = vi.fn();
     renderHook(() =>
@@ -461,7 +462,7 @@ describe('useKeyboardShortcuts —— 左手别名（issue #45）', () => {
     expect(notPrevented).toBe(false);
   });
 
-  it('旧色标键 6–9 与 Shift+6 继续有效（别名不替代旧键）', () => {
+  it('右手旧色标键 6–9 / Shift+6 已删除，按下不触发任何色标', () => {
     const h = setupAliases();
 
     for (const key of ['6', '7', '8', '9']) {
@@ -469,26 +470,22 @@ describe('useKeyboardShortcuts —— 左手别名（issue #45）', () => {
     }
     fireEvent.keyDown(document.body, { key: '^', code: 'Digit6', shiftKey: true });
 
-    expect(h.onLabel.mock.calls.map((c) => c[0])).toEqual([
-      'Red',
-      'Yellow',
-      'Green',
-      'Blue',
-      'Purple',
-    ]);
+    expect(h.onLabel).not.toHaveBeenCalled();
+    expect(h.onRate).not.toHaveBeenCalled();
   });
 
-  it('T（左手）与 Y（旧键）并存，都触发前后对照', () => {
+  it('T 前后对照；Y 已删除不再触发', () => {
     const h = setupAliases();
 
     expect(fireEvent.keyDown(document.body, { key: 't' })).toBe(false);
     fireEvent.keyDown(document.body, { key: 'T' });
     fireEvent.keyDown(document.body, { key: 'y' });
+    fireEvent.keyDown(document.body, { key: 'Y' });
 
-    expect(h.onToggleBeforeAfter).toHaveBeenCalledTimes(3);
+    expect(h.onToggleBeforeAfter).toHaveBeenCalledTimes(2);
   });
 
-  it('按住 V 开始查看原片，松开结束；旧键 \\ 仍有效', () => {
+  it('按住 V 查看原片；反斜杠已删除', () => {
     const h = setupAliases();
 
     expect(fireEvent.keyDown(document.body, { key: 'v' })).toBe(false);
@@ -498,8 +495,98 @@ describe('useKeyboardShortcuts —— 左手别名（issue #45）', () => {
 
     fireEvent.keyDown(document.body, { key: '\\' });
     fireEvent.keyUp(document.body, { key: '\\' });
-    expect(h.onHoldOriginalStart).toHaveBeenCalledTimes(2);
-    expect(h.onHoldOriginalEnd).toHaveBeenCalledTimes(2);
+    expect(h.onHoldOriginalStart).toHaveBeenCalledTimes(1);
+    expect(h.onHoldOriginalEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('W 打开外部程序（替代右手 O）', () => {
+    const h = setupAliases();
+
+    expect(fireEvent.keyDown(document.body, { key: 'w' })).toBe(false);
+
+    expect(h.onOpenExternal).toHaveBeenCalledTimes(1);
+  });
+
+  it('G 打开镜头元数据（替代右手 M）', () => {
+    const h = setupAliases();
+
+    expect(fireEvent.keyDown(document.body, { key: 'g' })).toBe(false);
+
+    expect(h.onOpenMetadataModal).toHaveBeenCalledTimes(1);
+  });
+
+  it('Q 钉左图、Shift+Q 钉右图（替代 [ / ]）', () => {
+    const h = setupAliases();
+
+    expect(fireEvent.keyDown(document.body, { key: 'q', code: 'KeyQ' })).toBe(false);
+    expect(fireEvent.keyDown(document.body, { key: 'Q', code: 'KeyQ', shiftKey: true })).toBe(
+      false,
+    );
+
+    expect(h.onPinLeft).toHaveBeenCalledTimes(1);
+    expect(h.onPinRight).toHaveBeenCalledTimes(1);
+  });
+
+  it('F1 打开帮助（替代右手 ?）', () => {
+    const h = setupAliases();
+
+    expect(fireEvent.keyDown(document.body, { key: 'F1' })).toBe(false);
+
+    expect(h.onOpenShortcutHelp).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * 右手键全景：按下后不得触发任何回调，也不得阻止默认。
+   * 这份清单就是「右手不离开鼠标」时的禁区，删键必须整组守住。
+   */
+  it.each([
+    'ArrowLeft',
+    'ArrowRight',
+    '/',
+    '?',
+    '0',
+    'u',
+    'U',
+    'p',
+    'P',
+    'y',
+    'Y',
+    'o',
+    'O',
+    'm',
+    'M',
+    '[',
+    ']',
+    '\\',
+    '6',
+    '7',
+    '8',
+    '9',
+  ] as const)('右手键 %s 不触发任何动作', (key) => {
+    const h = setupAliases();
+    const notPrevented = fireEvent.keyDown(document.body, { key });
+
+    expect(notPrevented).toBe(true);
+    expect(h.onPrev).not.toHaveBeenCalled();
+    expect(h.onNext).not.toHaveBeenCalled();
+    expect(h.onClear).not.toHaveBeenCalled();
+    expect(h.onFlag).not.toHaveBeenCalled();
+    expect(h.onLabel).not.toHaveBeenCalled();
+    expect(h.onToggleBeforeAfter).not.toHaveBeenCalled();
+    expect(h.onOpenExternal).not.toHaveBeenCalled();
+    expect(h.onOpenMetadataModal).not.toHaveBeenCalled();
+    expect(h.onPinLeft).not.toHaveBeenCalled();
+    expect(h.onPinRight).not.toHaveBeenCalled();
+    expect(h.onOpenShortcutHelp).not.toHaveBeenCalled();
+    expect(h.onHoldOriginalStart).not.toHaveBeenCalled();
+  });
+
+  it('Ctrl+Y 不再重做（Y 在右半区）', () => {
+    const h = setupAliases();
+    const notPrevented = fireEvent.keyDown(document.body, { key: 'y', ctrlKey: true });
+
+    expect(h.onRedo).not.toHaveBeenCalled();
+    expect(notPrevented).toBe(true);
   });
 
   /**
@@ -553,7 +640,7 @@ describe('useKeyboardShortcuts —— 左手别名（issue #45）', () => {
     expect(h.onLabel).not.toHaveBeenCalled();
   });
 
-  it('文本输入框内别名全部让位（不吞表单输入）', () => {
+  it('文本输入框内左手键全部让位（不吞表单输入）', () => {
     const h = setupAliases();
     const input = document.createElement('input');
     input.type = 'text';
@@ -563,6 +650,10 @@ describe('useKeyboardShortcuts —— 左手别名（issue #45）', () => {
     fireEvent.keyDown(input, { key: 'r' });
     fireEvent.keyDown(input, { key: 't' });
     fireEvent.keyDown(input, { key: 'v' });
+    fireEvent.keyDown(input, { key: 'w' });
+    fireEvent.keyDown(input, { key: 'g' });
+    fireEvent.keyDown(input, { key: 'q', code: 'KeyQ' });
+    fireEvent.keyDown(input, { key: 'F1' });
     fireEvent.keyDown(input, { key: '!', code: 'Digit1', shiftKey: true });
 
     expect(h.onFlag).not.toHaveBeenCalled();
@@ -570,9 +661,14 @@ describe('useKeyboardShortcuts —— 左手别名（issue #45）', () => {
     expect(h.onToggleBeforeAfter).not.toHaveBeenCalled();
     expect(h.onHoldOriginalStart).not.toHaveBeenCalled();
     expect(h.onLabel).not.toHaveBeenCalled();
+    expect(h.onOpenExternal).not.toHaveBeenCalled();
+    expect(h.onOpenMetadataModal).not.toHaveBeenCalled();
+    expect(h.onPinLeft).not.toHaveBeenCalled();
+    expect(h.onPinRight).not.toHaveBeenCalled();
+    expect(h.onOpenShortcutHelp).not.toHaveBeenCalled();
   });
 
-  it('模态打开时别名全部失效', () => {
+  it('模态打开时左手键全部失效', () => {
     const h = setupAliases();
     const dialog = document.createElement('div');
     dialog.setAttribute('role', 'dialog');
@@ -584,6 +680,10 @@ describe('useKeyboardShortcuts —— 左手别名（issue #45）', () => {
     fireEvent.keyDown(document.body, { key: 'r' });
     fireEvent.keyDown(document.body, { key: 't' });
     fireEvent.keyDown(document.body, { key: 'v' });
+    fireEvent.keyDown(document.body, { key: 'w' });
+    fireEvent.keyDown(document.body, { key: 'g' });
+    fireEvent.keyDown(document.body, { key: 'q', code: 'KeyQ' });
+    fireEvent.keyDown(document.body, { key: 'F1' });
     fireEvent.keyDown(document.body, { key: '!', code: 'Digit1', shiftKey: true });
 
     expect(h.onFlag).not.toHaveBeenCalled();
@@ -591,5 +691,10 @@ describe('useKeyboardShortcuts —— 左手别名（issue #45）', () => {
     expect(h.onToggleBeforeAfter).not.toHaveBeenCalled();
     expect(h.onHoldOriginalStart).not.toHaveBeenCalled();
     expect(h.onLabel).not.toHaveBeenCalled();
+    expect(h.onOpenExternal).not.toHaveBeenCalled();
+    expect(h.onOpenMetadataModal).not.toHaveBeenCalled();
+    expect(h.onPinLeft).not.toHaveBeenCalled();
+    expect(h.onPinRight).not.toHaveBeenCalled();
+    expect(h.onOpenShortcutHelp).not.toHaveBeenCalled();
   });
 });

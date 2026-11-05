@@ -7,8 +7,7 @@
  *
  * 锁住的行为：
  * - 上下键跨行（±columns），与视觉行列一致（不是 ±1）
- * - Home/End 跳首尾
- * - PageUp/PageDown 跨 3 行
+ * - 右手 Home/End/PageUp/PageDown 已删除（issue #61）：按下不得移动
  * - 边界钳制，不越界
  * - Ctrl/Cmd+A 全选
  * - 键盘移动把选区收拢为单张（roving），保持「当前照片」与高亮一致
@@ -68,41 +67,27 @@ describe('宫格键盘导航', () => {
     expect(onSelect).toHaveBeenCalledWith(3);
   });
 
-  it('Home 跳首张，End 跳末张', () => {
-    const a = renderGrid({ selectedIndex: 5 });
-    key('Home');
-    expect(a.onSelect).toHaveBeenCalledWith(0);
-    a.unmount();
+  it('右手 Home/End/PageUp/PageDown 已删除，按下不移动', () => {
+    const { onSelect, unmount } = renderGrid({ selectedIndex: 5 });
 
-    const b = renderGrid({ selectedIndex: 2 });
-    key('End');
-    expect(b.onSelect).toHaveBeenCalledWith(GROUPS.length - 1);
-  });
+    for (const k of ['Home', 'End', 'PageUp', 'PageDown']) {
+      const notPrevented = fireEvent.keyDown(screen.getByRole('listbox'), { key: k });
+      expect(onSelect).not.toHaveBeenCalled();
+      expect(notPrevented).toBe(true);
+    }
 
-  it('PageDown / PageUp 跨 3 行', () => {
-    const a = renderGrid({ selectedIndex: 0 });
-    key('PageDown');
-    expect(a.onSelect).toHaveBeenCalledWith(9); // 0 + 3*3
-    a.unmount();
-
-    const b = renderGrid({ selectedIndex: 11 });
-    key('PageUp');
-    expect(b.onSelect).toHaveBeenCalledWith(2); // 11 - 3*3
+    unmount();
   });
 
   it('边界钳制：底部再往下、顶部再往上都不越界', () => {
     const bottom = renderGrid({ selectedIndex: GROUPS.length - 1 });
     key('ArrowDown');
-    key('PageDown');
-    expect(bottom.onSelect).toHaveBeenNthCalledWith(1, GROUPS.length - 1);
-    expect(bottom.onSelect).toHaveBeenNthCalledWith(2, GROUPS.length - 1);
+    expect(bottom.onSelect).toHaveBeenCalledWith(GROUPS.length - 1);
     bottom.unmount();
 
     const top = renderGrid({ selectedIndex: 0 });
     key('ArrowUp');
-    key('PageUp');
-    expect(top.onSelect).toHaveBeenNthCalledWith(1, 0);
-    expect(top.onSelect).toHaveBeenNthCalledWith(2, 0);
+    expect(top.onSelect).toHaveBeenCalledWith(0);
   });
 
   it('Ctrl/Cmd+A 全选所有格子', () => {
@@ -133,7 +118,7 @@ describe('宫格键盘导航', () => {
 
   it('未识别的键不拦截（default 分支直接 return）', () => {
     const { onSelect } = renderGrid({ selectedIndex: 4 });
-    const ev = new KeyboardEvent('keydown', { key: 'q', bubbles: true });
+    const ev = new KeyboardEvent('keydown', { key: 'k', bubbles: true });
     const ok = fireEvent.keyDown(screen.getByRole('listbox'), ev);
     expect(ok).toBe(true); // 未 preventDefault
     expect(onSelect).not.toHaveBeenCalled();
