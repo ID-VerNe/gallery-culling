@@ -19,7 +19,8 @@ npm run e2e:rust      # Rust 单测（cargo test --lib）
 npm run e2e:render    # 真窗口：调色成片导出
 npm run e2e:preset    # 真窗口：LUMEN 预设 + 自动调色
 npm run e2e:detail    # 真窗口：RAW-only 1:1 细节（需要真实 ARW，见下）
-npm run e2e           # 三档串起来（unit + rust + render），全绿才算过
+npm run e2e:ui        # 真窗口：底栏命中 / 静息收起 / 左手别名（issue #53）
+npm run e2e           # 全档串起来（unit + rust + render + ui），全绿才算过
 ```
 
 真窗口用例的参数：
@@ -27,6 +28,7 @@ npm run e2e           # 三档串起来（unit + rust + render），全绿才算
 ```bash
 node e2e/run-inapp.mjs --scenario=render-export
 node e2e/run-inapp.mjs --scenario=lumen-preset
+node e2e/run-inapp.mjs --scenario=ui-contract
 node e2e/run-inapp.mjs --scenario=render-export --timeout=600000
 
 # detail-1to1 必须用**真实 ARW**：夹具里的 RAW 是 JPEG 改后缀，photo.export
@@ -73,6 +75,19 @@ Tauri 的 WebView2 不把 DOM 暴露给 Windows UI Automation，所以界面断�
 
 `e2e/run.mjs` + `suites/01-08` 是旧的 Playwright 路线，本机只会白等到超时，
 保留只为在 CDP 正常的机器上仍可用。
+
+## `ui-contract` 覆盖什么（issue #53）
+
+底栏的三类契约只有真实浏览器能证伪，vitest（jsdom）只能看 `className`：
+
+- **静息收起**：`[data-bar-plate]` 的 `getBoundingClientRect().top >= innerHeight - 1`
+  且 `opacity <= 0.05`；展开手柄仍在视口内、`tabIndex=0`。
+- **按钮命中**：聚焦手柄唤回底板后，对每个启用按钮的中心做 `document.elementFromPoint`，
+  断言命中的是按钮自身或其后代（透明命中层 / `pointer-events:none` 继承都会在这里断）。
+- **左手别名**：同一张照片上 `V`↔`\`、`F`↔`P`、`R`↔`0`、`T`↔`Y`、
+  `Shift+1…5`↔`6–9`/`Shift+6` 产生同一组 `aria-pressed` 真值。
+
+更新装完不自动重启（#49）依赖 NSIS 安装器与提权进程，应用内驱动够不到，仍留人工回签。
 
 ## 目录
 
