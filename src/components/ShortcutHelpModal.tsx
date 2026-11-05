@@ -1,96 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import { Keyboard } from 'lucide-react';
 import { Modal } from './Modal';
+// 键位表单一归属：帮助弹窗与底栏速查都引用 `src/utils/shortcutCatalog.ts`（issue #51）。
+import { MOUSE_SHORTCUTS, SHORTCUT_GROUPS } from '../utils/shortcutCatalog';
 
 interface ShortcutHelpModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-interface ShortcutGroup {
-  title: string;
-  items: Array<{ keys: string; label: string }>;
-  /** 占满两列（字段表这类需要横向空间的组）。 */
-  wide?: boolean;
-}
-
-const GROUPS: ShortcutGroup[] = [
-  {
-    title: '浏览',
-    items: [
-      { keys: 'A / ←', label: '上一张' },
-      { keys: 'D / →', label: '下一张' },
-      { keys: '/', label: '搜索宫格列表' },
-      { keys: 'O', label: '在 Photoshop / 默认程序中打开' },
-    ],
-  },
-  {
-    title: '标记',
-    items: [
-      { keys: '1 ~ 5', label: '打 1-5 星（再按一次同星取消）' },
-      { keys: 'R / 0 / U', label: '清除星级与标记' },
-      { keys: 'F / P', label: '标记保留 (Pick)' },
-      { keys: 'X', label: '标记淘汰 (Reject)' },
-      { keys: 'Shift + 1 ~ 5', label: '色标：红 / 黄 / 绿 / 蓝 / 紫（左手，依次对应）' },
-      { keys: '6 / 7 / 8 / 9', label: '色标：红 / 黄 / 绿 / 蓝（右手旧键，再按一次取消）' },
-      { keys: 'Shift + 6', label: '色标：紫（右手旧键）' },
-      { keys: 'Ctrl/⌘ + Z', label: '撤销上一步（最多 50 步，批量算一步）' },
-      { keys: 'Ctrl/⌘ + Shift + Z', label: '重做（Ctrl + Y 亦可）' },
-      { keys: 'Ctrl/⌘ + E', label: '打开批量导出' },
-    ],
-  },
-  {
-    title: '视图',
-    items: [
-      { keys: 'C', label: '切换单图 / 双图对比' },
-      { keys: 'T / Y', label: '切换前后对照' },
-      { keys: 'E', label: '打开 / 关闭调色面板' },
-      { keys: 'Z', label: '1:1 细节（RAW-only 首次需 6–8 秒，再按回适应）' },
-      { keys: 'V / \\（按住）', label: '临时查看原片' },
-    ],
-  },
-  {
-    title: '对比',
-    items: [
-      { keys: '[ 或 B', label: '将左图设为基准' },
-      { keys: '] 或 空格', label: '将右图设为新基准' },
-      { keys: 'S', label: '左右互换' },
-      { keys: 'M', label: '手动镜头元数据编辑' },
-    ],
-  },
-  {
-    title: '筛选语法（宫格搜索框，与上方档位叠加）',
-    wide: true,
-    items: [
-      { keys: 'rating>=3', label: '星级：= >= <= > <（rating:3 即等于 3 星）' },
-      { keys: 'flag:pick', label: '旗标：pick / reject / none' },
-      { keys: 'label:red', label: '色标：red / yellow / green / blue / purple / none' },
-      { keys: 'name:DSC0*', label: '文件名（* 任意串、? 单字符；裸词按子串匹配）' },
-      { keys: 'ext:arw', label: '扩展名（组内任一文件命中即可）' },
-      { keys: 'folder:2024', label: '所在目录包含该文本' },
-      { keys: 'edited', label: '有精修成果' },
-      { keys: 'iso>=3200', label: 'ISO' },
-      { keys: 'aperture>=2.8', label: '光圈（按 f 值比较）' },
-      { keys: 'shutter<=1/500', label: '快门（按秒比较，更快 = 数值更小）' },
-      { keys: 'focal>=85', label: '焦距（mm）' },
-      { keys: 'camera:sony', label: '机身（厂商或型号包含）' },
-      { keys: 'lens:85mm', label: '镜头型号包含' },
-      { keys: '-flag:reject', label: '任意条件前加 - 取反' },
-      { keys: 'picked / rejected / unflagged', label: '旗标简写' },
-    ],
-  },
-];
-
-const MOUSE_ITEMS: Array<{ keys: string; label: string }> = [
-  { keys: '滚轮', label: '以指针为中心缩放' },
-  { keys: '左键拖拽', label: '平移画面（对比视图下双图联动）' },
-  { keys: '双击', label: '在适应窗口 / 250% 之间切换' },
-];
-
-/**
- * The shortcut catalogue used to live as a 6-item strip in the status bar,
- * which is why most of the single-handed workflow was undiscoverable.
- */
 /**
  * 快捷键条目是否命中查询。
  *
@@ -113,13 +31,13 @@ export const ShortcutHelpModal: React.FC<ShortcutHelpModalProps> = ({
   const [query, setQuery] = useState('');
   const filtered = useMemo(
     () =>
-      GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => matchesShortcut(query, i)) })).filter(
+      SHORTCUT_GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => matchesShortcut(query, i)) })).filter(
         (g) => g.items.length > 0,
       ),
     [query],
   );
   const mouseFiltered = useMemo(
-    () => MOUSE_ITEMS.filter((i) => matchesShortcut(query, i)),
+    () => MOUSE_SHORTCUTS.filter((i) => matchesShortcut(query, i)),
     [query],
   );
   const total = filtered.reduce((n, g) => n + g.items.length, 0) + mouseFiltered.length;
@@ -152,7 +70,7 @@ export const ShortcutHelpModal: React.FC<ShortcutHelpModalProps> = ({
         <p className="mt-1.5 text-[10px] text-white/50" role="status" aria-live="polite">
           {query.trim()
             ? `匹配 ${total} 项`
-            : `共 ${GROUPS.reduce((n, g) => n + g.items.length, 0) + MOUSE_ITEMS.length} 项`}
+            : `共 ${SHORTCUT_GROUPS.reduce((n, g) => n + g.items.length, 0) + MOUSE_SHORTCUTS.length} 项`}
         </p>
       </div>
 
