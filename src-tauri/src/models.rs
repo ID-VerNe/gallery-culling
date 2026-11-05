@@ -128,7 +128,10 @@ pub struct AppSettings {
     pub photoshop_path: String,
     pub thumbnail_width: u32,
     pub sort_order: String,
-    /// 是否启用 LUMEN RAW 引擎（sidecar）集成的 RAW 链路；默认关闭，零迁移风险
+    /// 是否启用 LUMEN RAW 引擎（sidecar）集成的 RAW 链路。
+    ///
+    /// issue #68 起 sidecar 随包分发，默认开启（首次安装即可用）；老用户显式
+    /// 存下的 `false` 不强制迁移——关掉引擎始终是用户自己的选择。
     pub lumen_enabled: bool,
     /// lumen-cli.exe 路径（留空 = 自动查找）
     pub lumen_cli_path: String,
@@ -149,7 +152,7 @@ impl Default for AppSettings {
                 .to_string(),
             thumbnail_width: 200,
             sort_order: "time_filename".to_string(),
-            lumen_enabled: false,
+            lumen_enabled: true,
             lumen_cli_path: String::new(),
             lumen_grid_thumbnails: false,
             lumen_expect_ai: false,

@@ -22,6 +22,7 @@ mod xmprefresh;
 use commands::{AppState, open_in_luminar_roundtrip_cmd};
 use db::Database;
 use std::sync::Arc;
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -50,6 +51,35 @@ pub fn run() {
         // 尚未发送的选中索引，加钩子只会制造"已保存"的伪安全感。正确落点是前端在
         // `getCurrentWindow().onCloseRequested` / 组件卸载 / 目录切换三处主动 flush。
         .manage(state)
+        // issue #68：随包 sidecar 启动预热。放在后台线程：
+        // 首屏不等引擎（PyInstaller 冷启动可能几秒），失败也不静默——通过
+        // `lumen-startup-error` 事件让前端弹可见提示，同时在状态行保留原因。
+        .setup(|app| {
+            let settings = match app.state::<AppState>().db.load_settings() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("读取设置失败，跳过 LUMEN 预热: {}", e);
+                    return Ok(());
+                }
+            };
+            if !settings.lumen_enabled {
+                return Ok(());
+            }
+            let runtime = app.state::<AppState>().lumen.clone();
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let message = match crate::lumen::find_lumen_cli(&settings.lumen_cli_path) {
+                    Some(exe) => match runtime.warm_up(&exe) {
+                        Ok(()) => return,
+                        Err(e) => e.to_string(),
+                    },
+                    None => "未找到 lumen-cli.exe（随包引擎缺失或路径无效）；下一步：在设置中手动指定 lumen-cli.exe，或重新安装应用。".to_string(),
+                };
+                eprintln!("LUMEN 预热失败: {}", message);
+                let _ = handle.emit(crate::lumen::STARTUP_ERROR_EVENT, message);
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::scan_folders_cmd,
             commands::probe_folder_cmd,
@@ -91,6 +121,13 @@ pub fn run() {
             commands::lumen_apply_mask_cmd,
             commands::lumen_list_masks_cmd,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // 退出时显式关 stdin：常驻 sidecar 读到 EOF 自行退出，
+            // 不留下孤儿进程（不主动 kill，避免误杀用户手动启动的实例）。
+            if let tauri::RunEvent::Exit = event {
+                app_handle.state::<AppState>().lumen.shutdown();
+            }
+        });
 }

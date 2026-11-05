@@ -748,7 +748,8 @@ mod tests {
         let mut s = AppSettings::default();
         let pairs = settings_pairs(&s);
         let map: std::collections::HashMap<&str, String> = pairs.into_iter().collect();
-        assert_eq!(map.get("lumen_enabled").map(String::as_str), Some("false"));
+        // issue #68：sidecar 随包分发，新装默认开启
+        assert_eq!(map.get("lumen_enabled").map(String::as_str), Some("true"));
         assert_eq!(map.get("lumen_cli_path").map(String::as_str), Some(""));
         // 宫格引擎开关：默认 false（EXIF 内嵌缩略图），必须与其它键一起落盘
         assert_eq!(
@@ -766,7 +767,7 @@ mod tests {
     #[test]
     fn apply_setting_lumen_roundtrip() {
         let mut s = AppSettings::default();
-        assert!(!s.lumen_enabled);
+        assert!(s.lumen_enabled, "默认必须开启（随包 sidecar）");
         apply_setting(&mut s, "lumen_enabled", "true");
         assert!(s.lumen_enabled);
         apply_setting(&mut s, "lumen_enabled", "false");
@@ -789,7 +790,8 @@ mod tests {
     #[test]
     fn apply_setting_junk_values_tolerated() {
         let mut s = AppSettings::default();
-        apply_setting(&mut s, "lumen_enabled", "yes"); // 非 true/false → 保持默认 false
+        // 沿用既有解析口径：只有字面量 "true" 才是开启，垃圾值一律按关闭处理
+        apply_setting(&mut s, "lumen_enabled", "yes");
         assert!(!s.lumen_enabled);
         apply_setting(&mut s, "thumbnail_width", "not-a-number");
         assert_eq!(s.thumbnail_width, 200); // 默认值不被污染
