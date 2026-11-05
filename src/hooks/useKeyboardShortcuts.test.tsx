@@ -357,3 +357,221 @@ describe('useKeyboardShortcuts —— Z 键 1:1', () => {
     expect(h.onToggleOneToOne).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * issue #45：左手单键可达性。
+ *
+ * 右手握鼠标时，`P` / `6–9` / `Shift+6` / `0` / `U` / `Y` / `\` 都落在右半区；
+ * 这里锁住「新增左手别名可用 + 旧键仍可用 + 修饰键/文本控件/模态仍让位」。
+ * 别名全部是「新增」而非迁移，任何旧键都不允许被删掉。
+ */
+describe('useKeyboardShortcuts —— 左手别名（issue #45）', () => {
+  function setupAliases() {
+    const handlers = {
+      onPrev: vi.fn(),
+      onNext: vi.fn(),
+      onRate: vi.fn(),
+      onFlag: vi.fn(),
+      onClear: vi.fn(),
+      onLabel: vi.fn(),
+      onToggleBeforeAfter: vi.fn(),
+      onHoldOriginalStart: vi.fn(),
+      onHoldOriginalEnd: vi.fn(),
+      onFocusSearch: vi.fn(),
+      onOpenShortcutHelp: vi.fn(),
+      onOpenExternal: vi.fn(),
+      onToggleCompare: vi.fn(),
+      onTogglePinCurrent: vi.fn(),
+      onUndo: vi.fn(),
+      onRedo: vi.fn(),
+    };
+    renderHook(() => useKeyboardShortcuts(handlers));
+    return handlers;
+  }
+
+  it('F（左手）与 P（旧键）并存，都触发「保留」并阻止默认', () => {
+    const h = setupAliases();
+
+    expect(fireEvent.keyDown(document.body, { key: 'f' })).toBe(false);
+    fireEvent.keyDown(document.body, { key: 'F' });
+    fireEvent.keyDown(document.body, { key: 'p' });
+    fireEvent.keyDown(document.body, { key: 'P' });
+
+    expect(h.onFlag).toHaveBeenCalledTimes(4);
+    for (const call of h.onFlag.mock.calls) expect(call).toEqual(['pick']);
+  });
+
+  it('R（左手）与 0 / U 并存，走 onClear 单次写盘', () => {
+    const h = setupAliases();
+
+    expect(fireEvent.keyDown(document.body, { key: 'r' })).toBe(false);
+    fireEvent.keyDown(document.body, { key: 'R' });
+    fireEvent.keyDown(document.body, { key: '0' });
+    fireEvent.keyDown(document.body, { key: 'u' });
+
+    expect(h.onClear).toHaveBeenCalledTimes(4);
+    // 有 onClear 时不得再退回旧的双回调（避免两次写盘）。
+    expect(h.onRate).not.toHaveBeenCalled();
+    expect(h.onFlag).not.toHaveBeenCalled();
+  });
+
+  it('R 在未接线 onClear 时退回 onRate(0) + onFlag(none)，与 0/U 同语义', () => {
+    const onRate = vi.fn();
+    const onFlag = vi.fn();
+    renderHook(() =>
+      useKeyboardShortcuts({
+        onPrev: vi.fn(),
+        onNext: vi.fn(),
+        onRate,
+        onFlag,
+        onOpenExternal: vi.fn(),
+        onToggleCompare: vi.fn(),
+      }),
+    );
+
+    fireEvent.keyDown(document.body, { key: 'r' });
+
+    expect(onRate).toHaveBeenCalledWith(0);
+    expect(onFlag).toHaveBeenCalledWith('none');
+  });
+
+  /**
+   * 紫色色标曾经只能 `Shift+6`（左 Shift + 右 6）。左手别名走物理键位
+   * `e.code`：美式布局下 `Shift+1…5` 的 `e.key` 是 `! @ # $ %`，按字符匹配
+   * 永远落空。
+   */
+  it.each([
+    ['!', 'Digit1', 'Red'],
+    ['@', 'Digit2', 'Yellow'],
+    ['#', 'Digit3', 'Green'],
+    ['$', 'Digit4', 'Blue'],
+    ['%', 'Digit5', 'Purple'],
+  ] as const)('Shift+%s（%s）触发 %s 色标，不误触星级', (key, code, expected) => {
+    const h = setupAliases();
+
+    const notPrevented = fireEvent.keyDown(document.body, {
+      key,
+      code,
+      shiftKey: true,
+    });
+
+    expect(h.onLabel).toHaveBeenCalledTimes(1);
+    expect(h.onLabel).toHaveBeenCalledWith(expected);
+    expect(h.onRate).not.toHaveBeenCalled();
+    expect(notPrevented).toBe(false);
+  });
+
+  it('旧色标键 6–9 与 Shift+6 继续有效（别名不替代旧键）', () => {
+    const h = setupAliases();
+
+    for (const key of ['6', '7', '8', '9']) {
+      fireEvent.keyDown(document.body, { key });
+    }
+    fireEvent.keyDown(document.body, { key: '^', code: 'Digit6', shiftKey: true });
+
+    expect(h.onLabel.mock.calls.map((c) => c[0])).toEqual([
+      'Red',
+      'Yellow',
+      'Green',
+      'Blue',
+      'Purple',
+    ]);
+  });
+
+  it('T（左手）与 Y（旧键）并存，都触发前后对照', () => {
+    const h = setupAliases();
+
+    expect(fireEvent.keyDown(document.body, { key: 't' })).toBe(false);
+    fireEvent.keyDown(document.body, { key: 'T' });
+    fireEvent.keyDown(document.body, { key: 'y' });
+
+    expect(h.onToggleBeforeAfter).toHaveBeenCalledTimes(3);
+  });
+
+  it('按住 V 开始查看原片，松开结束；旧键 \\ 仍有效', () => {
+    const h = setupAliases();
+
+    expect(fireEvent.keyDown(document.body, { key: 'v' })).toBe(false);
+    expect(h.onHoldOriginalStart).toHaveBeenCalledTimes(1);
+    fireEvent.keyUp(document.body, { key: 'v' });
+    expect(h.onHoldOriginalEnd).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(document.body, { key: '\\' });
+    fireEvent.keyUp(document.body, { key: '\\' });
+    expect(h.onHoldOriginalStart).toHaveBeenCalledTimes(2);
+    expect(h.onHoldOriginalEnd).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * 冲突检查：别名不得抢走既有的修饰键路径。
+   *
+   * `Alt+F` 是 `:234` 组合键让路里唯一的字母例外（为了放过 Ctrl/Cmd+F），
+   * 一旦新增 `case 'f'` 而不补 `altKey` 守卫，Alt+F 会误触「保留」。
+   */
+  it('Ctrl+F 仍只聚焦搜索、Alt+F 不触发保留', () => {
+    const h = setupAliases();
+
+    fireEvent.keyDown(document.body, { key: 'f', ctrlKey: true });
+    fireEvent.keyDown(document.body, { key: 'f', altKey: true });
+
+    expect(h.onFocusSearch).toHaveBeenCalledTimes(1);
+    expect(h.onFlag).not.toHaveBeenCalled();
+  });
+
+  it('Ctrl/Alt + 别名不触发（既有组合键让路不失效）', () => {
+    const h = setupAliases();
+
+    fireEvent.keyDown(document.body, { key: 'r', ctrlKey: true });
+    fireEvent.keyDown(document.body, { key: 'r', altKey: true });
+    fireEvent.keyDown(document.body, { key: 't', ctrlKey: true });
+    fireEvent.keyDown(document.body, { key: 't', altKey: true });
+    fireEvent.keyDown(document.body, { key: 'v', ctrlKey: true });
+    fireEvent.keyDown(document.body, { key: 'v', ctrlKey: true, shiftKey: true });
+    fireEvent.keyDown(document.body, { key: '!', code: 'Digit1', shiftKey: true, ctrlKey: true });
+
+    expect(h.onClear).not.toHaveBeenCalled();
+    expect(h.onToggleBeforeAfter).not.toHaveBeenCalled();
+    expect(h.onHoldOriginalStart).not.toHaveBeenCalled();
+    expect(h.onLabel).not.toHaveBeenCalled();
+  });
+
+  it('文本输入框内别名全部让位（不吞表单输入）', () => {
+    const h = setupAliases();
+    const input = document.createElement('input');
+    input.type = 'text';
+    mount(input);
+
+    fireEvent.keyDown(input, { key: 'f' });
+    fireEvent.keyDown(input, { key: 'r' });
+    fireEvent.keyDown(input, { key: 't' });
+    fireEvent.keyDown(input, { key: 'v' });
+    fireEvent.keyDown(input, { key: '!', code: 'Digit1', shiftKey: true });
+
+    expect(h.onFlag).not.toHaveBeenCalled();
+    expect(h.onClear).not.toHaveBeenCalled();
+    expect(h.onToggleBeforeAfter).not.toHaveBeenCalled();
+    expect(h.onHoldOriginalStart).not.toHaveBeenCalled();
+    expect(h.onLabel).not.toHaveBeenCalled();
+  });
+
+  it('模态打开时别名全部失效', () => {
+    const h = setupAliases();
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    document.body.appendChild(dialog);
+    mounted.push(dialog);
+
+    fireEvent.keyDown(document.body, { key: 'f' });
+    fireEvent.keyDown(document.body, { key: 'r' });
+    fireEvent.keyDown(document.body, { key: 't' });
+    fireEvent.keyDown(document.body, { key: 'v' });
+    fireEvent.keyDown(document.body, { key: '!', code: 'Digit1', shiftKey: true });
+
+    expect(h.onFlag).not.toHaveBeenCalled();
+    expect(h.onClear).not.toHaveBeenCalled();
+    expect(h.onToggleBeforeAfter).not.toHaveBeenCalled();
+    expect(h.onHoldOriginalStart).not.toHaveBeenCalled();
+    expect(h.onLabel).not.toHaveBeenCalled();
+  });
+});
