@@ -290,12 +290,18 @@ async function main() {
     console.error('--- e2e-app.log 尾部 ---\n' + (tailOf(LOG_FILE, 1500) || '(空)'));
     console.error('--- tauri-dev.log 尾部 ---\n' + (tailOf(DEV_LOG) || '(空)'));
     await closeAppGracefully().catch(() => {});
+    // 只关窗口会留下 npm/vite（见 lib/app.mjs 的重启注释）；超时路径同样要硬收尾，
+    // 否则随后的签名构建可能被残留进程占着 1420 端口 / 锁住 target 目录。
+    killApp();
     return 2;
   }
   console.log(`场景结束（${Math.round(hit.elapsedMs / 1000)}s）`);
 
   console.log('--- 关闭应用 ---');
   await closeAppGracefully().catch(() => {});
+  // 发版流程会在 e2e 之后紧接着跑签名构建：这里必须把 dev 树收干净，
+  // 别留下 gallery-culling / cargo / vite 残留（见 lib/app.mjs:98 的 killApp 说明）。
+  killApp();
 
   const log = hit.content;
   const R = createReporter();
