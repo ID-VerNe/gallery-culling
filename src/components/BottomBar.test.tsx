@@ -37,7 +37,7 @@ const group: PhotoGroupInfo = {
     focalLength: '50mm',
     aperture: 'f/2.0',
     shutterSpeed: '1/250s',
-    iso: 'ISO100',
+    iso: '800',
     lensModel: 'FE 50mm F1.8',
   },
 };
@@ -111,7 +111,7 @@ describe('常驻状态栏（issue #62）', () => {
     renderBar({ panes: [makePane({ tone })] });
 
     expect(screen.getByText('DSC_0001')).toBeInTheDocument();
-    expect(screen.getByText('50mm · f/2.0 · 1/250s · ISO100')).toBeInTheDocument();
+    expect(screen.getByText('50mm · f/2.0 · 1/250s · ISO800')).toBeInTheDocument();
     expect(screen.getByText(/EV \+0\.30/)).toBeInTheDocument();
     // 拿不到的字段不显示，也不写「未知 / N/A」占位。
     expect(screen.queryByText(/未知|N\/A|未读取/)).toBeNull();
@@ -195,13 +195,15 @@ describe('常驻状态栏（issue #62）', () => {
     expect(rightLabel).not.toHaveBeenCalled();
   });
 
-  it('宽度预算：单图参数组在 lg 出现，双图要等 xl，避免挤爆 1024', () => {
+  it('宽度预算：单图参数组 lg 起出现；双图不渲染参数组（窗格胶囊已显示同一串）', () => {
     const { unmount } = render(<BottomBar currentIndex={0} totalCount={1} onOpenExternal={vi.fn()} panes={[makePane()]} />);
     const singleParams = document.querySelector('[data-status-group="params"]') as HTMLElement;
     expect(singleParams.className).toContain('hidden');
     expect(singleParams.className).toContain('lg:flex');
     unmount();
 
+    // 1280–1535 要同时塞下两组窗格与全局动作，双图参数在预算上装不住；
+    // 每个窗格左上的 EXIF 胶囊已经显示焦段/光圈/快门/ISO，状态栏不再重复。
     render(
       <BottomBar
         currentIndex={0}
@@ -210,9 +212,7 @@ describe('常驻状态栏（issue #62）', () => {
         panes={[makePane({ slot: 'L' }), makePane({ slot: 'R' })]}
       />,
     );
-    const splitParams = document.querySelectorAll('[data-status-group="params"]')[0] as HTMLElement;
-    expect(splitParams.className).toContain('hidden');
-    expect(splitParams.className).toContain('xl:flex');
+    expect(document.querySelectorAll('[data-status-group="params"]')).toHaveLength(0);
   });
 
   it('禁用原因常驻屏幕，不只放 title：撤销/重做/缩放边界', () => {

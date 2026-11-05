@@ -97,8 +97,12 @@ interface BottomBarProps {
  *
  * 文档流常驻、36px 一行、零遮挡。信息架构固定为
  * 身份 → 参数 → 评级 → 旗标 → 色标，右侧是计数与全局动作。
- * 窄窗按断点降级（参数 `lg`、双图参数 `xl`、体积/镜头/速查 `2xl`），
+ * 窄窗按断点降级：参数（仅单图）`lg`、色名 `xl`、体积/镜头型号/旗标文字 `2xl`、
+ * 速查单图 `min-[1800px]`（双图不展开）；撤销/重做单图 `xl`、双图 `2xl`。
  * 不横向滚动。
+ *
+ * 双图不渲染 EXIF 参数组：每个窗格左上的胶囊已经显示同一串参数，而
+ * 1280–1535 的横向预算装不下「两组窗格 + 参数 + 全局动作」。
  */
 export const BottomBar: React.FC<BottomBarProps> = ({
   panes = [],
@@ -149,33 +153,36 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         )}
       </div>
 
-      {/* 中：快捷键速查。36px 一行装不下参数 + 速查，`2xl` 以下只留「?」。 */}
-      <div
-        className="hidden 2xl:flex items-center gap-2 text-white/70 select-none shrink-0"
-        role="group"
-        aria-label="常用快捷键提示"
-      >
-        {/* issue #51：文案来自 `src/utils/shortcutCatalog.ts`，这里只按 id 取。 */}
-        {BAR_SHORTCUT_IDS.map((id) => {
-          const item = findShortcut(id);
-          if (!item) return null;
-          return (
-            <React.Fragment key={id}>
-              <KeyHint keys={item.keys} label={item.barLabel ?? item.label} tone={item.tone} />
-              <Separator />
-            </React.Fragment>
-          );
-        })}
-        <button
-          onClick={onOpenShortcutHelp}
-          className={`${STATUS_BUTTON} px-0.5`}
-          title="查看全部快捷键 (?)"
-          aria-label="查看全部快捷键"
+      {/* 中：快捷键速查。36px 一行装不下参数 + 速查：单图要 1800px 以上才展开，
+          双图永远不展开（右侧 `?` 图标始终可进完整帮助）。 */}
+      {!twoPane && (
+        <div
+          className="hidden min-[1800px]:flex items-center gap-2 text-white/70 select-none shrink-0"
+          role="group"
+          aria-label="常用快捷键提示"
         >
-          <KeyCap>?</KeyCap>
-          <span>全部快捷键</span>
-        </button>
-      </div>
+          {/* issue #51：文案来自 `src/utils/shortcutCatalog.ts`，这里只按 id 取。 */}
+          {BAR_SHORTCUT_IDS.map((id) => {
+            const item = findShortcut(id);
+            if (!item) return null;
+            return (
+              <React.Fragment key={id}>
+                <KeyHint keys={item.keys} label={item.barLabel ?? item.label} tone={item.tone} />
+                <Separator />
+              </React.Fragment>
+            );
+          })}
+          <button
+            onClick={onOpenShortcutHelp}
+            className={`${STATUS_BUTTON} px-0.5`}
+            title="查看全部快捷键 (?)"
+            aria-label="查看全部快捷键"
+          >
+            <KeyCap>?</KeyCap>
+            <span>全部快捷键</span>
+          </button>
+        </div>
+      )}
 
       {/* 右：缩放（单图）+ 计数 + 全局动作 */}
       <div className="flex items-center gap-2 select-none shrink-0">
@@ -221,7 +228,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         {currentGroup && onOpenMetadataModal && (
           <button
             onClick={onOpenMetadataModal}
-            className={`${STATUS_BUTTON} hidden lg:flex`}
+            className={`${STATUS_BUTTON} ${twoPane ? 'hidden 2xl:flex' : 'hidden lg:flex'}`}
             title="编辑镜头元数据 (M)"
             aria-label="编辑镜头元数据"
           >
@@ -233,7 +240,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         <button
           onClick={onUndo}
           disabled={!canUndo}
-          className={`${STATUS_BUTTON} hidden lg:flex`}
+          className={`${STATUS_BUTTON} ${twoPane ? 'hidden 2xl:flex' : 'hidden xl:flex'}`}
           title={canUndo ? `撤销：${undoSummary} (Ctrl+Z)` : '没有可撤销的改动'}
           aria-label={canUndo ? `撤销：${undoSummary}` : '撤销（没有可撤销的改动）'}
         >
@@ -241,28 +248,18 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           <span className="pb-[1px] shrink-0">撤销</span>
           {/* 禁用原因常驻：禁用按钮不可聚焦，title 拿不到。 */}
           {!canUndo && <span className="pb-[1px] text-white/40">：无</span>}
-          {canUndo && undoSummary && (
-            <span className="pb-[1px] hidden 2xl:inline text-white/50 max-w-[13rem] truncate">
-              ：{undoSummary}
-            </span>
-          )}
         </button>
 
         <button
           onClick={onRedo}
           disabled={!canRedo}
-          className={`${STATUS_BUTTON} hidden lg:flex`}
+          className={`${STATUS_BUTTON} ${twoPane ? 'hidden 2xl:flex' : 'hidden xl:flex'}`}
           title={canRedo ? `重做：${redoSummary} (Ctrl+Shift+Z)` : '没有可重做的改动'}
           aria-label={canRedo ? `重做：${redoSummary}` : '重做（没有可重做的改动）'}
         >
           <Redo2 className="w-3 h-3 shrink-0" aria-hidden="true" />
           <span className="pb-[1px] shrink-0">重做</span>
           {!canRedo && <span className="pb-[1px] text-white/40">：无</span>}
-          {canRedo && redoSummary && (
-            <span className="pb-[1px] hidden 2xl:inline text-white/50 max-w-[13rem] truncate">
-              ：{redoSummary}
-            </span>
-          )}
         </button>
 
         {currentGroup && (
@@ -272,7 +269,9 @@ export const BottomBar: React.FC<BottomBarProps> = ({
             aria-label="在修图或外部程序中打开当前照片"
           >
             <ExternalLink className="w-3 h-3 shrink-0" aria-hidden="true" />
-            <span className="pb-[1px] hidden xl:inline">外部打开</span>
+            <span className={`pb-[1px] ${twoPane ? 'hidden 2xl:inline' : 'hidden lg:inline'}`}>
+              外部打开
+            </span>
           </button>
         )}
 
@@ -291,12 +290,16 @@ export const BottomBar: React.FC<BottomBarProps> = ({
 
 /* -------------------------------------------------------------------------- */
 
-const STATUS_TEXT: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <span className={STATUS_HINT}>{children}</span>
-);
+const STATUS_TEXT: React.FC<{ children: React.ReactNode; className?: string }> = ({
+  children,
+  className,
+}) => <span className={`${STATUS_HINT} ${className ?? ''}`}>{children}</span>;
 
 function statusText(status: PhotoGroupInfo['status']): string {
-  return status === 'COMPLETE' ? 'JPG + RAW' : status;
+  // 状态栏是三视口唯一的状态出口，不能把枚举原文（JPG_ONLY）直接摆给用户。
+  if (status === 'COMPLETE') return 'JPG + RAW';
+  if (status === 'JPG_ONLY') return 'JPG';
+  return 'RAW';
 }
 
 function formatMb(size: number): string {
@@ -325,8 +328,15 @@ const StatusPaneView: React.FC<{ pane: StatusPane; twoPane: boolean }> = ({ pane
   }
 
   const exif = group.exif;
+  // `exif.iso` 是裸数字（scanner 直接 display_value），"ISO" 前缀必须在这里补，
+  // 与 ExifCapsule / SplitCompareViewport 的口径一致。
   const exifParts = exif
-    ? [exif.focalLength, exif.aperture, exif.shutterSpeed, exif.iso].filter(Boolean)
+    ? [
+        exif.focalLength,
+        exif.aperture,
+        exif.shutterSpeed,
+        exif.iso ? `ISO${exif.iso}` : null,
+      ].filter(Boolean)
     : [];
 
   return (
@@ -346,20 +356,25 @@ const StatusPaneView: React.FC<{ pane: StatusPane; twoPane: boolean }> = ({ pane
         <span className={`${STATUS_VALUE} font-semibold truncate max-w-[6rem] xl:max-w-[9rem]`}>
           {group.baseName}
         </span>
-        <STATUS_TEXT>{statusText(group.status)}</STATUS_TEXT>
+        <STATUS_TEXT className={twoPane ? 'hidden xl:inline' : undefined}>
+          {statusText(group.status)}
+        </STATUS_TEXT>
         <span className="hidden 2xl:flex items-center gap-1.5 shrink-0">
           {group.raw && <STATUS_TEXT>RAW {formatMb(group.raw.size)}</STATUS_TEXT>}
           {group.jpg && <STATUS_TEXT>JPG {formatMb(group.jpg.size)}</STATUS_TEXT>}
         </span>
       </div>
 
-      {/* B. 拍摄参数 */}
-      {hasExif && (
+      {/* B. 拍摄参数
+          双图不渲染这一组：每个窗格左上的 EXIF 胶囊已经显示同一串参数，
+          状态栏在 1280–1535 要塞下「两组窗格 + 全局动作」根本装不住（实测预算
+          见 PR #63）。单图 `lg` 起显示，是天生的主视图参数位。 */}
+      {!twoPane && hasExif && (
         <>
           <span className={STATUS_DIVIDER} aria-hidden="true" />
           <div
             data-status-group="params"
-            className={`${twoPane ? 'hidden xl:flex' : 'hidden lg:flex'} items-center gap-1.5 whitespace-nowrap shrink-0`}
+            className="hidden lg:flex items-center gap-1.5 whitespace-nowrap shrink-0"
           >
             <STATUS_TEXT>{exifParts.join(' · ')}</STATUS_TEXT>
             {exif?.lensModel && (

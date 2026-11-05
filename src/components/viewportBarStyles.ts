@@ -14,8 +14,8 @@
  *    在它上方结束 —— 不允许 `absolute` / `fixed` / `translate-y` / `opacity-0`。
  * 2. 所有必要状态（星级、旗标、色标、禁用原因）**常驻可见**，没有
  *    `group-hover` / `group-focus-within` 变体，也没有零宽槽位。
- * 3. 宽度由断点控制（`hidden lg:flex` / `hidden xl:flex` / `hidden 2xl:flex`），
- *    不横向滚动：宁可少显示，也不让用户先滚动再找。
+ * 3. 宽度由断点控制（`hidden lg:flex` / `hidden xl:flex` / `hidden 2xl:flex`，
+ *    速查用 `min-[1800px]:flex`），不横向滚动：宁可少显示，也不让用户先滚动再找。
  * 4. 三个视口共用同一个 `BottomBar`；双图用 `L` / `R` 分组区分窗格。
  *
  * 机器检查在 `BottomBar.test.tsx`（常驻/分组顺序/双窗格/禁用原因）与
