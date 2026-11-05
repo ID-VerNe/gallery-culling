@@ -1,13 +1,20 @@
 /**
- * 应用更新（issue #43）。
+ * 应用更新（issue #43 / #49）。
  *
  * 链路事实（Windows / WebView2）：
  * - `downloadAndInstall` 启动 NSIS 安装器后**直接 `std::process::exit(0)`**
  *   （`tauri-plugin-updater-2.11.0/src/updater.rs:862-876`），Promise 永不 resolve；
  * - 因此原来的 `await relaunch()` 与随后的 catch 在 Windows 上都是死代码；
- * - 真正的重启由安装器的 `/R` 负责（`restart_after_install` 默认 true，
- *   `updater.rs:890-903`），前提是 `windows.installMode` 不是 `basicUi`
- *   （`config.rs:53-57`）。`tauri.conf.json` 已显式声明 `passive`。
+ * - **#49 起不再依赖模板的 `/R`**：模板 `.onInstSuccess` 调的
+ *   `nsis_tauri_utils::RunAsUser` 不检查返回值，提权安装器里它返回 1 却静默，
+ *   用户装完没人把应用拉回来（#43 真机回签失败的根因）。
+ *   现在由 `src-tauri/nsis/update-hooks.nsh` 显式接管重启（含 explorer 兜底与
+ *   可见的「重试启动」对话框），前端传 `restartAfterInstall: false` 关掉模板的
+ *   `/R`（`updater.rs:890-903` 只在为 true 时才追加 `/R`），避免两边各拉一次。
+ *
+ * 兜底（PB）：安装前写 `gc:update:pending`（`src/utils/updatePending.ts`）；
+ * 下次启动用 `getVersion()` 判定「装上了」还是「没装上」，分别给成功提示与
+ * 常驻错误提示——即使安装器侧彻底失败，用户也不会看到「静默无反应」。
  *
  * 三条约定（与旧实现相同，保留原注释口径）：
  * - **探测失败静默**：启动时的更新检查失败对用户不可操作，不刷 toast；
@@ -26,6 +33,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { UpdateDialog, type UpdatePhase } from '../components/UpdateDialog';
 import type { UpdateCheckState } from '../components/SettingsSections';
+import { useToast } from '../components/Toast';
 import {
   UPDATE_ENDPOINT,
   clearSkipRecord,
@@ -33,6 +41,12 @@ import {
   shouldOfferUpdate,
   writeSkipRecord,
 } from '../utils/updateSkip';
+import {
+  classifyPendingUpdate,
+  clearPendingRecord,
+  readPendingRecord,
+  writePendingRecord,
+} from '../utils/updatePending';
 
 interface PendingUpdate {
   version: string;
@@ -61,11 +75,33 @@ export function useAutoUpdate() {
   /** 最近一次远端发现的条目（即使被跳过也记着，供「恢复提示」用）。 */
   const lastRemoteRef = useRef<PendingUpdate | null>(null);
 
+  const toast = useToast();
+  /** 让启动判定只跑一次：不因 toast 引用变化而重跑（重跑会误判本次刚写的记录）。 */
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
+
   useEffect(() => {
     let alive = true;
+    // **只在挂载时取一次**：本次会话里点安装写下的记录属于「下一次启动」，
+    // 不能被本次启动的判定顺手清掉（否则真机装完就没法区分成败了）。
+    const recordAtStartup = readPendingRecord();
     getVersion()
       .then((v) => {
-        if (alive) setCurrentVersion(v);
+        if (!alive) return;
+        setCurrentVersion(v);
+        // 兜底（#49-PB）：上次安装是否真的落到了目标版本？
+        const outcome = classifyPendingUpdate(recordAtStartup, v);
+        if (outcome === 'none') return;
+        clearPendingRecord();
+        if (outcome === 'completed') {
+          toastRef.current.success(`已升级到 v${v}`);
+        } else if (recordAtStartup) {
+          // 错误级 toast 不自动消失：用户必须看到「没装上」以及下一步怎么做。
+          toastRef.current.error(
+            `上次升级未完成：目标是 v${recordAtStartup.targetVersion}，当前仍是 v${v}。` +
+              '请到「设置 → 关于」重新检查更新，或打开发布页手动安装。',
+          );
+        }
       })
       .catch((err) => {
         console.error('Failed to read app version:', err);
@@ -145,9 +181,17 @@ export function useAutoUpdate() {
     setPercent(null);
     setError(null);
 
+    // 兜底（#49-PB）：先留痕再动手。Windows 上进程随后会被 exit(0)，
+    // 没有这条记录，下次启动就无法区分「升级成功」与「装完没人拉起」。
+    writePendingRecord(currentVersion, update.version);
+
     let downloaded = 0;
     let total: number | null = null;
     try {
+      // `restartAfterInstall: false`：关掉模板 `.onInstSuccess` 的 `/R`
+      // （updater.rs:890-903 只有 true 才追加 `/R`）。重启改由
+      // `src-tauri/nsis/update-hooks.nsh` 显式接管，它检查 RunAsUser 返回值
+      // 并有 explorer / MessageBox 两层兜底；两边都开会各拉起一次。
       await update.downloadAndInstall((event) => {
         if (event.event === 'Started') {
           total = event.data.contentLength ?? null;
@@ -167,19 +211,21 @@ export function useAutoUpdate() {
           setPhase('installing');
           setStatus(INSTALLING_STATUS);
         }
-      });
+      }, { restartAfterInstall: false });
       // 只有非 Windows（Promise 会 resolve）才可能走到这里；保持同一终态文案。
       setPercent(null);
       setPhase('installing');
       setStatus(INSTALLING_STATUS);
     } catch (err) {
       console.error('Failed to install update:', err);
+      // 下载/启动安装器就失败了，安装器根本没跑，别让下次启动误报「上次升级未完成」。
+      clearPendingRecord();
       setPhase('failed');
       setPercent(null);
       setStatus('');
       setError(`升级失败：${String(err)}。请检查网络后重试，或打开发布页手动安装。`);
     }
-  }, []);
+  }, [currentVersion]);
 
   const installNow = useCallback(() => {
     void install();

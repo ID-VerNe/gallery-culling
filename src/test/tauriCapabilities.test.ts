@@ -15,6 +15,8 @@
 import caps from '../../src-tauri/capabilities/default.json';
 import desktopCaps from '../../src-tauri/capabilities/desktop.json';
 import tauriConf from '../../src-tauri/tauri.conf.json';
+// `?raw` 走 vite/client 的类型声明；jsdom 里拿不到 fs，用构建管线读文件更直接。
+import updateHooksSource from '../../src-tauri/nsis/update-hooks.nsh?raw';
 
 describe('Tauri capabilities —— 窗口关闭链路', () => {
   it('default capability 显式授予 core:window:allow-destroy', () => {
@@ -51,5 +53,31 @@ describe('Tauri 配置 —— 更新安装模式（issue #43）', () => {
       tauriConf.plugins.updater as { windows?: { installMode?: string } }
     ).windows;
     expect(windows?.installMode).toBe('passive');
+  });
+});
+
+describe('Tauri 配置 —— 升级装完后重启（issue #49）', () => {
+  /**
+   * 背景（#43 真机回签失败）：模板 `.onInstSuccess` 调 `nsis_tauri_utils::RunAsUser`
+   * 却不检查返回值，提权安装器里它返回 1 → 静默无反应，用户必须手动重开。
+   * 现在重启改由仓库里的 hook 显式接管；前端同时传 `restartAfterInstall: false`
+   * 关掉模板的 `/R`。两处任何一处漂移，这条都会红。
+   */
+  const nsis = (
+    tauriConf.bundle as { windows?: { nsis?: { installerHooks?: string } } }
+  ).windows?.nsis;
+
+  it('bundle.windows.nsis.installerHooks 指向仓库内的 hook 文件', () => {
+    expect(nsis?.installerHooks).toBe('nsis/update-hooks.nsh');
+  });
+
+  it('hook 只对 /UPDATE 生效，且检查 RunAsUser 返回值、失败有可见兜底', () => {
+    expect(updateHooksSource).toContain('!macro NSIS_HOOK_POSTINSTALL');
+    expect(updateHooksSource).toContain('$UpdateMode = 1');
+    expect(updateHooksSource).toContain('nsis_tauri_utils::RunAsUser');
+    // 不 Pop 就等于「调用了但永不检查」——这正是 #43 的病根。
+    expect(updateHooksSource).toContain('Pop $R0');
+    expect(updateHooksSource).toContain('explorer.exe');
+    expect(updateHooksSource).toContain('MessageBox');
   });
 });
