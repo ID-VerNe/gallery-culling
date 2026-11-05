@@ -9,6 +9,8 @@ import {
   Sliders,
   Undo2,
 } from 'lucide-react';
+// 键位表单一归属（issue #51）：速查行按 id 从目录取，不在此另写一份文案。
+import { BAR_SHORTCUT_IDS, findShortcut } from '../utils/shortcutCatalog';
 
 interface BottomBarProps {
   currentGroup?: PhotoGroupInfo;
@@ -104,25 +106,18 @@ export const BottomBar: React.FC<BottomBarProps> = ({
         role="group"
         aria-label="常用快捷键提示"
       >
-        <KeyHint keys="1~5" label="打分" />
-        <Separator />
-        <KeyHint keys="P" label="保留" tone="emerald" />
-        <Separator />
-        <KeyHint keys="X" label="淘汰" tone="rose" />
-        <Separator />
-        {/* 色标：6~9 四色，紫色在帮助弹窗里标注 Shift+6 */}
-        <KeyHint keys="6~9" label="色标" />
-        <Separator />
-        {/* A2：与帮助弹窗统一叫法 —— "切片"含义不明，实为上一张/下一张。 */}
-        <KeyHint keys="A / D" label="上一张 / 下一张" />
-        <Separator />
-        <KeyHint keys="C" label="对比" />
-        <Separator />
-        <KeyHint keys="Y" label="前后" />
-        <Separator />
-        <KeyHint keys="E" label="调色" />
-        {/* A6：镜头元数据入口只保留底栏右侧那一处，撤掉此处重复入口。 */}
-        <Separator />
+        {/* issue #51：文案来自 `src/utils/shortcutCatalog.ts`，这里只按 id 取。
+            36px 高 + md 断点的横向预算只够 6 条最高频项，其余交给「?」帮助弹窗。 */}
+        {BAR_SHORTCUT_IDS.map((id) => {
+          const item = findShortcut(id);
+          if (!item) return null;
+          return (
+            <React.Fragment key={id}>
+              <KeyHint keys={item.keys} label={item.barLabel ?? item.label} tone={item.tone} />
+              <Separator />
+            </React.Fragment>
+          );
+        })}
         <button
           onClick={onOpenShortcutHelp}
           className="focus-ring flex items-center gap-1 hover:text-white transition-colors rounded px-0.5"
@@ -235,7 +230,7 @@ const KeyHint: React.FC<{
   label: string;
   tone?: 'emerald' | 'rose';
 }> = ({ keys, label, tone }) => (
-  <span className="flex items-center gap-1">
+  <span className="flex items-center gap-1" data-shortcut-keys={keys}>
     <KeyCap>{keys}</KeyCap>
     <span
       className={
