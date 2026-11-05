@@ -27,7 +27,7 @@ import {
   BAR_BUTTON,
   BAR_DIVIDER,
   BAR_GROUP_HOST,
-  BAR_HIT_AREA,
+  BAR_HANDLE,
   BAR_ICONS,
   BAR_ICON_BUTTON,
   BAR_LABEL,
@@ -476,39 +476,45 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
       {/* Floating Bottom Quick Action Bar — geometry frozen (issue #12)
           The bar carries the app's core culling verbs, so it must never be a
           hover-only affordance (F-02, .plan/ux-audit-2026-10-13.md:39): the
-          icons are ALWAYS on screen and always focusable. What collapses is
-          the weight — no plate, no shadow, no visible labels — until the
-          pointer enters (`group-hover/bar`) or focus lands inside it
-          (`group-focus-within/bar`), so keyboard users never operate blind.
+          buttons stay reachable by Tab, and a small handle keeps the bar
+          discoverable while it rests (issue #47).
 
-          #10 got this shape right but made the outer box change size on
-          hover (px-3→px-4 / py-1→py-2 / w-0→w-auto), which measured 497px →
-          753px in a real browser. A box that grows under the cursor makes
-          `:hover` flicker: this is the bug #12 replaces. The rules that keep
-          it frozen live in `viewportBarStyles.ts` — read that first.
+          #10 made the outer box change size on hover (px-3→px-4 / py-1→py-2 /
+          w-0→w-auto), which measured 497px → 753px in a real browser. A box
+          that grows under the cursor makes `:hover` flicker: this is the bug
+          #12 replaces. The rules that keep it frozen live in
+          `viewportBarStyles.ts` — read that first.
 
-          Two extra notes specific to this call site:
+          Notes specific to this call site:
           - Hover is pure CSS: no `useState`, so a stale "left open" frame
             (the other failure mode F-02 recorded) cannot happen.
           - `overflow-hidden` is deliberately absent on the plate: it would
             clip the 2px `.focus-ring` outline (index.css focus-ring).
-            Hiding is done by opacity on the label slot, not by clipping.
-          - `pointer-events-none` on the plate + a larger child hit area
-            means the pixels around the icons do not swallow clicks meant
-            for the photo beneath, while the bar still opens on approach.
+          - Issue #46: the plate itself is `pointer-events-auto` (the wrapper
+            keeps `pointer-events-none`, so the empty space around the bar
+            still passes clicks to the photo). There is **no** transparent
+            oversized hit layer: it painted above the buttons and swallowed
+            every click.
+          - Issue #47: at rest the whole plate is translated out of the
+            viewport; only the 4px `BAR_HANDLE` remains. It is a descendant of
+            `group/bar`, so hovering/focusing it slides the plate back.
           - The `group/bar` host is a separate wrapper (issue #14): Tailwind
             compiles `group-hover/bar:x` to a DESCENDANT selector, so an
             element can never be its own group ancestor. See the root-cause
             note in `viewportBarStyles.ts`. */}
       <div className={BAR_GROUP_HOST}>
+        {/* 展开手柄（issue #47）：静息时唯一留在屏幕上的底栏痕迹。 */}
+        <div
+          className={BAR_HANDLE}
+          data-bar-handle
+          tabIndex={0}
+          aria-label="展开底栏工具栏"
+        />
         <div
           onClick={(e) => e.stopPropagation()}
-          className={`${BAR_PLATE} pointer-events-none`}
+          className={BAR_PLATE}
+          data-bar-plate
         >
-          {/* Hit area: covers the plate plus a ring around it. Transparent and
-              size-constant, so it can never be the thing that changes size. */}
-          <div className={BAR_HIT_AREA} data-bar-hit-area aria-hidden="true" />
-
           {/* Rating Stars (1 to 5) */}
           <div className={BAR_DIVIDER} role="group" aria-label="照片星级打分">
             {[1, 2, 3, 4, 5].map((star) => (

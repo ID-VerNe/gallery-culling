@@ -28,7 +28,7 @@ import {
   BAR_DIVIDER,
   BAR_GROUP,
   BAR_GROUP_HOST,
-  BAR_HIT_AREA,
+  BAR_HANDLE,
   BAR_ICONS,
   BAR_LABEL,
   BAR_PLATE,
@@ -392,22 +392,30 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
 
       {/* Bottom Floating Rating & Flag Capsule — geometry frozen (issue #12)
           与单图视口同一套形态与同一套硬规则（规则正文在 `viewportBarStyles.ts`）：
-          图标常驻（F-02：核心动词不能是悬停专属），底板与文字标签只在悬停或
-          聚焦进入时淡入。**变体里只改颜色/透明度/阴影**——#10 在这里复刻了一份
+          按钮始终可 Tab 进入，静息只留一个 4px 手柄保持可发现性（issue #47）。
+          **变体里只改颜色/透明度/阴影**——#10 在这里复刻了一份
           `px-3→px-4` / `py-1→py-2` / `w-0→w-auto`，同样会让外接盒随悬停变化，
           指针在边缘反复进出就自激闪烁。reduced-motion 由 index.css 全局收敛。
+
+          issue #46：底板自己 `pointer-events-auto`（宿主仍是 `none`，空白处的
+          点击照旧穿透到照片）；不再有盖在按钮上的透明命中层。
 
           `group/bar` 由外层 `BAR_GROUP_HOST` 持有：Tailwind 把
           `group-hover/bar:x` 编译成后代选择器，挂在自己身上永远不命中
           （issue #14 根因，详见 viewportBarStyles.ts）。 */}
       <div className={BAR_GROUP_HOST}>
+        {/* 展开手柄（issue #47）：静息时唯一留在屏幕上的底栏痕迹。 */}
+        <div
+          className={BAR_HANDLE}
+          data-bar-handle
+          tabIndex={0}
+          aria-label="展开底栏工具栏"
+        />
         <div
           onClick={(e) => e.stopPropagation()}
-          className={`${BAR_PLATE} pointer-events-none`}
+          className={BAR_PLATE}
+          data-bar-plate
         >
-          {/* 透明命中层：比可视底板四周各外扩一圈，尺寸恒定。 */}
-          <div className={BAR_HIT_AREA} data-bar-hit-area aria-hidden="true" />
-
           {/* Rating Stars */}
           <div className={BAR_DIVIDER} role="group" aria-label="照片星级打分">
             {[1, 2, 3, 4, 5].map((star) => (

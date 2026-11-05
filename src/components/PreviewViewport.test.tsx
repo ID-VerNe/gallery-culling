@@ -708,7 +708,7 @@ describe('PreviewViewport —— 底栏几何冻结（issue #12）', () => {
   /** 底栏本体（底板）：分组宿主的直接子层，命中层所在的这一层。 */
   function barOf(container: HTMLElement): HTMLElement {
     const host = groupHostOf(container);
-    const plate = host.querySelector('[data-bar-hit-area]')?.parentElement;
+    const plate = host.querySelector('[data-bar-plate]');
     expect(plate, '底栏底板应为分组宿主的子层').toBeTruthy();
     expect(plate).not.toBe(host);
     return plate as HTMLElement;
@@ -770,18 +770,30 @@ describe('PreviewViewport —— 底栏几何冻结（issue #12）', () => {
     expect(called).toContain('group-hover/bar:shadow-2xl');
   });
 
-  it('悬停热区是独立层：比底板更大且不受 hover 影响', () => {
+  /**
+   * issue #46 的另一半：底板自己必须是 `pointer-events-auto`。
+   * `pointer-events` 可继承，底板一旦 `none`，内部所有按钮都是 `none`。
+   */
+  it('底板必须能接点击：pointer-events-auto 常驻、不得 none（issue #46）', () => {
+    const { container } = renderFullBar();
+    const called = classTokens(barOf(container));
+
+    expect(called, '底板不得把 none 继承给按钮').not.toContain('pointer-events-none');
+    expect(called, '底板必须接收点击').toContain('pointer-events-auto');
+  });
+
+  /**
+   * issue #46 的根因防回归：不允许存在任何盖在按钮之上的 `pointer-events-auto`
+   * 空层。透明的层看不见，但会接走点击（`elementFromPoint` 命中的是它）。
+   */
+  it('底栏内不存在会吞点击的自动命中层（issue #46）', () => {
     const { container } = renderFullBar();
     const bar = barOf(container);
-    const hit = bar.querySelector('[data-bar-hit-area]');
 
-    expect(hit, '底栏应有独立的透明命中层').not.toBeNull();
-    const called = classTokens(hit!);
-    // 向外扩大：指针在底板边缘附近也保持展开，阻断自激回路。
-    expect(called).toContain('-inset-x-3');
-    expect(called).toContain('-inset-y-2');
-    // 命中层自身不参与视觉，也不许有几何变体。
-    expect(geometryLeaks(hit!)).toEqual([]);
+    expect(bar.querySelector('[data-bar-hit-area]')).toBeNull();
+    const autoEmptyLayers = Array.from(bar.querySelectorAll<HTMLElement>('[aria-hidden="true"]'))
+      .filter((el) => classTokens(el).includes('pointer-events-auto'));
+    expect(autoEmptyLayers, '透明命中层不得再挂 pointer-events-auto').toEqual([]);
   });
 
   it('可访问名不依赖可见文字：折叠只影响视觉，不影响无障碍名', () => {
@@ -844,7 +856,7 @@ describe('PreviewViewport —— 底栏视觉层级（issue #14）', () => {
 
   function barOf(container: HTMLElement): HTMLElement {
     const host = groupHostOf(container);
-    const plate = host.querySelector('[data-bar-hit-area]')?.parentElement;
+    const plate = host.querySelector('[data-bar-plate]');
     expect(plate, '底栏底板应为分组宿主的子层').toBeTruthy();
     return plate as HTMLElement;
   }
@@ -888,13 +900,18 @@ describe('PreviewViewport —— 底栏视觉层级（issue #14）', () => {
     expect(barOf(container).parentElement).toBe(host);
   });
 
-  it('整条 bar 静息下沉、悬停回正：位移只用 translate，且不进几何', () => {
+  it('整条 bar 静息移出视口、悬停/聚焦回正（issue #47 替代 #14 的 4px 下沉）', () => {
     const { container } = renderFullBar();
     const called = tokens(barOf(container));
 
-    expect(called, '静息应有上浮量').toContain('translate-y-1');
+    // 静息必须整条移出：只收文字会让容器/图标/槽位继续遮挡照片（issue #47）。
+    expect(called, '静息应整条移出视口').toContain('translate-y-[calc(100%_+_1rem)]');
+    expect(called, '静息应不可见').toContain('opacity-0');
+    expect(called, '旧的 4px 下沉必须消失').not.toContain('translate-y-1');
     expect(called, '悬停应回到原位').toContain('group-hover/bar:translate-y-0');
     expect(called, '聚焦也应回到原位').toContain('group-focus-within/bar:translate-y-0');
+    expect(called, '悬停应恢复可见').toContain('group-hover/bar:opacity-100');
+    expect(called, '聚焦也应恢复可见').toContain('group-focus-within/bar:opacity-100');
     // 位移式浮现绝不能用 scale：它会连动命中层并放大像素边界。
     expect(barOf(container).className).not.toMatch(/group-(hover|focus-within)\/bar:scale-/);
   });
@@ -912,12 +929,20 @@ describe('PreviewViewport —— 底栏视觉层级（issue #14）', () => {
     expect(withIcons.length).toBeGreaterThanOrEqual(8);
   });
 
-  it('命中层纯透明：悬停不得自绘背景（去掉 3% 白的那层「闪」）', () => {
+  it('静息保留可聚焦的展开手柄，且展开后底板盖住它（issue #47 · F-02）', () => {
     const { container } = renderFullBar();
-    const hit = barOf(container).querySelector('[data-bar-hit-area]')!;
+    const host = groupHostOf(container);
+    const handle = host.querySelector('[data-bar-handle]');
 
-    expect(hit.className).not.toContain('group-hover/bar:bg-white/[0.03]');
-    expect(hit.className).not.toMatch(/group-(hover|focus-within)\/bar:bg-/);
+    expect(handle, '底栏应有展开手柄').not.toBeNull();
+    expect(handle!.getAttribute('tabindex')).toBe('0');
+    expect(handle!.getAttribute('aria-label')).toBe('展开底栏工具栏');
+    expect(handle!.className, '手柄必须能接指针').toContain('pointer-events-auto');
+    expect(handle!.className, '展开后手柄应让位').toContain('group-hover/bar:opacity-0');
+    // 手柄不得随悬停改尺寸（#12 的几何冻结仍然成立）。
+    expect(handle!.className).not.toMatch(/group-(hover|focus-within)\/bar:(w|h)-/);
+    // 手柄在 DOM 顺序上先于底板：展开时底板绘制在它之上，不会互相压字。
+    expect(barOf(container).previousElementSibling, '手柄应在底板之前').toBe(handle);
   });
 });
 
