@@ -10,7 +10,12 @@
 import { describe, it, expect } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
-import { invokeCount, mockInvokeCommand, mockInvokeError } from './test/setup';
+import {
+  invokeCount,
+  lastInvokeArgs,
+  mockInvokeCommand,
+  mockInvokeError,
+} from './test/setup';
 import type { FolderScanResult, PhotoGroupInfo, ToneState } from './types';
 import { DEFAULT_TONE } from './utils/autoTone';
 
@@ -58,7 +63,10 @@ const toneReport = {
  * 声明 App 启动 + 扫描 + 调色面板所触达的全部命令。
  * `settingsOverride` 用来模拟「全新安装（缺键）」与「显式关闭」两种设置状态。
  */
-function mockStartup(settingsOverride: Record<string, unknown> = {}) {
+function mockStartup(
+  settingsOverride: Record<string, unknown> = {},
+  groups: PhotoGroupInfo[] = [group],
+) {
   mockInvokeCommand('get_settings_cmd', {
     defaultJpgFolder: 'D:/shoot/JPG',
     defaultRawFolder: '',
@@ -73,7 +81,7 @@ function mockStartup(settingsOverride: Record<string, unknown> = {}) {
   });
   mockInvokeCommand('save_settings_cmd', true);
   mockInvokeCommand('save_session_cmd', true);
-  mockInvokeCommand('scan_folders_cmd', scanResult);
+  mockInvokeCommand('scan_folders_cmd', { ...scanResult, groups, totalCount: groups.length });
   mockInvokeCommand('load_session_cmd', null);
   mockInvokeCommand('get_thumbnail_cmd', 'D:/cache/thumb.jpg');
   mockInvokeCommand('get_tone_state_cmd', toneState);
@@ -163,5 +171,33 @@ describe('App —— 调色自动保存 (issue #67)', () => {
     expect(
       screen.getByText(/自动保存失败：Error: apply_tone_cmd failed/),
     ).toBeInTheDocument();
+  });
+
+  it('关闭面板时立即 flush 待写任务，不会等静默窗口', async () => {
+    mockStartup();
+    await openTonalPanelWithPhoto();
+
+    dragExposure('1.2');
+    // 静默窗口未结束就关面板：待写任务必须**同步**落盘，而不是等 400ms 后才写。
+    fireEvent.click(screen.getByRole('button', { name: '关闭面板' }));
+
+    expect(invokeCount('apply_tone_cmd')).toBe(1);
+    expect(lastInvokeArgs('apply_tone_cmd')?.filePath).toBe(
+      'D:/shoot/JPG/IMG_0001.jpg',
+    );
+  });
+
+  it('手动保存会接管待写任务，不会在窗口结束后重复写一次', async () => {
+    mockStartup();
+    await openTonalPanelWithPhoto();
+
+    dragExposure('1.2');
+    fireEvent.click(screen.getByRole('button', { name: '保存调色' }));
+
+    await waitFor(() => expect(invokeCount('apply_tone_cmd')).toBe(1), {
+      timeout: 2000,
+    });
+    await new Promise((r) => setTimeout(r, 600));
+    expect(invokeCount('apply_tone_cmd')).toBe(1);
   });
 });

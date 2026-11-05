@@ -77,8 +77,10 @@ export function useToneEditing(opts: {
   const pendingAutoSaveRef = useRef<ToneSaveJob | null>(null);
   /** 正在写盘：自动保存与手动保存共用，避免同一张照片并发写 XMP/工程。 */
   const saveInFlightRef = useRef(false);
-  /** 写盘期间又产生的新值：当前这次落地后补写「最新的那一份」（trailing latest）。 */
-  const queuedAutoSaveRef = useRef<ToneSaveJob | null>(null);
+  /** 写盘期间又产生的新值：按 groupId 各留最新一份，当前这次落地后逐条补写。 */
+  const queuedAutoSaveRef = useRef<Map<string, ToneSaveJob>>(new Map());
+  /** 当前正在看的照片 id（写盘完成时用来判断状态该不该显示在这一张上）。 */
+  const currentGroupIdRef = useRef<string | undefined>(opts.currentGroup?.id);
   /** 真正写盘的单飞函数（定义在下方，供计时器与 flush 回调调用）。 */
   const persistToneRef = useRef<((job: ToneSaveJob, auto: boolean) => Promise<void>) | null>(
     null,
@@ -339,14 +341,15 @@ export function useToneEditing(opts: {
   const persistTone = useCallback(
     async (job: ToneSaveJob, auto: boolean) => {
       // 单飞：自动保存与手动保存共用同一把锁，避免并发写 XMP / .lumen。
-      // 自动来源的新值进队列，等当前这次落地后补写最新值（不丢最后一次拖动）。
+      // 自动来源的新值按 groupId 入队，等当前这次落地后补写（不丢最后一次拖动）。
       if (saveInFlightRef.current) {
-        if (auto) queuedAutoSaveRef.current = job;
+        if (auto) queuedAutoSaveRef.current.set(job.groupId, job);
         return;
       }
       saveInFlightRef.current = true;
       setIsSavingTone(true);
-      if (auto) {
+      const isCurrent = job.groupId === currentGroupIdRef.current;
+      if (auto && isCurrent) {
         setAutoSaveStatus('saving');
         setAutoSaveError(null);
       }
@@ -356,7 +359,9 @@ export function useToneEditing(opts: {
           hasXmp: report.xmpWritten,
           tone: job.tone,
         });
-        setToneDivergent(false);
+        // 只在「写的仍是当前这张」时清分歧标记，避免 flush 上一张后
+        // 把新照片的 XMP/LUMEN 分歧警告顺手抹掉。
+        if (job.groupId === currentGroupIdRef.current) setToneDivergent(false);
         if (report.lumenApplied) {
           toast.success(
             auto
@@ -365,7 +370,7 @@ export function useToneEditing(opts: {
                 ? '调色已保存：XMP 侧边栏 + LUMEN RAW 工程。'
                 : '调色已保存：XMP 侧边栏 + LUMEN RAW。',
           );
-          if (auto) setAutoSaveStatus('saved');
+          if (auto && isCurrent) setAutoSaveStatus('saved');
         } else if (report.warnings.length > 0) {
           // XMP 写成功了，只是引擎那侧没成 —— 必须说清楚，别让用户以为两边都存了
           const reason = report.warnings[0];
@@ -374,7 +379,7 @@ export function useToneEditing(opts: {
               ? `调色已自动保存到 XMP，但 LUMEN RAW 未同步：${reason}。可点「保存调色」重试。`
               : `XMP 已写入，但 LUMEN RAW 未同步：${reason}`,
           );
-          if (auto) {
+          if (auto && isCurrent) {
             setAutoSaveStatus('error');
             setAutoSaveError(`LUMEN RAW 未同步：${reason}`);
           }
@@ -384,15 +389,17 @@ export function useToneEditing(opts: {
               ? '调色已自动保存到同名 .xmp 文件。'
               : '调色参数已写入同名 .xmp 文件。\nPhotoshop / ACR 打开时将自动载入。',
           );
-          if (auto) setAutoSaveStatus('saved');
+          if (auto && isCurrent) setAutoSaveStatus('saved');
         }
       } catch (err) {
         console.error('Failed to save tone:', err);
         const reason = String(err);
         if (auto) {
           // 失败不能静默：toast.error（role="alert" + assertive）+ 面板常驻错误行
-          setAutoSaveStatus('error');
-          setAutoSaveError(reason);
+          if (isCurrent) {
+            setAutoSaveStatus('error');
+            setAutoSaveError(reason);
+          }
           toast.error(
             `自动保存调色失败：${reason}。改动仍在内存中，可点「保存调色」重试。`,
           );
@@ -403,9 +410,14 @@ export function useToneEditing(opts: {
         // 无论成功/失败/异常都必须复位，否则按钮会永久卡在「保存中…」。
         saveInFlightRef.current = false;
         setIsSavingTone(false);
+        // 逐条补写排队的最新值：切图很快时可能同时压着两张照片的待写任务。
         const queued = queuedAutoSaveRef.current;
-        queuedAutoSaveRef.current = null;
-        if (queued) void persistToneRef.current?.(queued, true);
+        const next = queued.entries().next();
+        if (!next.done) {
+          const [queuedId, queuedJob] = next.value;
+          queued.delete(queuedId);
+          void persistToneRef.current?.(queuedJob, true);
+        }
       }
     },
     [onGroupsPatched, toast],
@@ -437,8 +449,10 @@ export function useToneEditing(opts: {
   const prevGroupIdRef = useRef<string | undefined>(currentGroup?.id);
   useEffect(() => {
     if (prevGroupIdRef.current !== currentGroup?.id) {
-      flushAutoSave();
       prevGroupIdRef.current = currentGroup?.id;
+      // 先更新「当前照片」，再 flush 上一张：写盘完成时据此判断状态归属。
+      currentGroupIdRef.current = currentGroup?.id;
+      flushAutoSave();
       setAutoSaveStatus('idle');
       setAutoSaveError(null);
     }
