@@ -1,5 +1,7 @@
 import React from 'react';
 import { Aperture, FolderOpen, RefreshCw, Settings } from 'lucide-react';
+import type { FolderProbe } from '../types';
+import { folderProbeSummary } from '../utils/folderDetection';
 
 /**
  * Row 1 — 照片从哪来 + 系统入口。
@@ -17,6 +19,13 @@ export interface SourceRowProps {
   onRawFolderChange: (val: string) => void;
   onBrowseJpg: () => void;
   onBrowseRaw: () => void;
+  /**
+   * #66：选一个文件夹 → 识别 JPG / RAW / 混合 → 自动填两个源。
+   * 两个手动输入框保留为覆盖入口。
+   */
+  onBrowseAuto: () => void;
+  /** #66：最近一次自动识别结果；null 表示用户正在手动填路径。 */
+  folderDetection?: FolderProbe | null;
   onScan: () => void;
   isLoading: boolean;
   /** UX-14：扫描进度。缺省时按钮只显示「扫描中…」，有值时显示「已发现 N 张」。 */
@@ -87,6 +96,8 @@ export const SourceRow: React.FC<SourceRowProps> = ({
   onRawFolderChange,
   onBrowseJpg,
   onBrowseRaw,
+  onBrowseAuto,
+  folderDetection,
   onScan,
   isLoading,
   scanProgress,
@@ -101,6 +112,7 @@ export const SourceRow: React.FC<SourceRowProps> = ({
   const blocked = !!scanBlockedReason;
   const scanned = scanProgress ? scanProgress.processed : 0;
   const total = scanProgress ? scanProgress.total : 0;
+  const detectionSummary = folderDetection ? folderProbeSummary(folderDetection) : null;
 
   return (
     <div className="flex items-center gap-2 min-w-0">
@@ -117,6 +129,18 @@ export const SourceRow: React.FC<SourceRowProps> = ({
           Gallery Culling
         </span>
       </div>
+
+      {/* #66 主入口：一个文件夹就够了。识别结果同时画在右侧常驻标记里，
+          不做静默改写；要分开指两个目录时继续用下面两个输入框。 */}
+      <button
+        onClick={onBrowseAuto}
+        className="focus-ring flex items-center gap-1 px-2 py-1 bg-background-surface-hover hover:bg-white/10 text-white/90 active:scale-[0.96] rounded-md transition-transform shrink-0 whitespace-nowrap"
+        title="打开一个文件夹，自动识别 JPG / RAW / 混合并填入扫描源"
+        aria-label="打开文件夹并自动识别 JPG / RAW"
+      >
+        <FolderOpen className="w-3.5 h-3.5" aria-hidden="true" />
+        <span className="hidden 2xl:inline">打开文件夹</span>
+      </button>
 
       <FolderInput
         id="topbar-jpg-input"
@@ -141,6 +165,21 @@ export const SourceRow: React.FC<SourceRowProps> = ({
         onChange={onRawFolderChange}
         onBrowse={onBrowseRaw}
       />
+
+      {/* #66：自动识别结果常驻显示。空目录用琥珀色提醒，成功识别用中性色。
+          title 里放完整文案；窄窗口下这里只做截断，不隐藏 —— 状态必须看得见。 */}
+      {detectionSummary && (
+        <span
+          role="status"
+          data-testid="topbar-folder-detection"
+          className={`text-[10px] leading-tight max-w-[170px] shrink-0 truncate ${
+            folderDetection?.mode === 'empty' ? 'text-amber-200/90' : 'text-white/60'
+          }`}
+          title={`自动识别：${detectionSummary}`}
+        >
+          已识别 {detectionSummary}
+        </span>
+      )}
 
       {/* Scan / Refresh */}
       <button

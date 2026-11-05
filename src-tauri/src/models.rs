@@ -93,6 +93,33 @@ pub struct FolderScanResult {
     pub is_viewer_mode: bool,
 }
 
+/// 单目录内容识别结果（#66）：只决定「这一目录当什么源用」，不参与配对口径。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FolderMode {
+    /// 只有 JPG（含 png/webp）
+    JpgOnly,
+    /// 只有 RAW
+    RawOnly,
+    /// JPG 与 RAW 同时存在
+    Mixed,
+    /// 根层一张可识别的照片都没有
+    Empty,
+}
+
+/// `probe_folder_cmd` 的返回：一次 `read_dir` 的扩展名计数。
+///
+/// 刻意**不读 EXIF/XMP、不递归**：只回答「选一个目录时两个源该怎么填」。
+/// `subdir_count` 只用于「根层为空但有子目录」的可操作提示。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderProbe {
+    pub mode: FolderMode,
+    pub jpg_count: usize,
+    pub raw_count: usize,
+    pub subdir_count: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {

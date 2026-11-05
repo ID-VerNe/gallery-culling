@@ -259,6 +259,10 @@ function AppShell() {
     handleCancelScan,
     handleBrowseJpg,
     handleBrowseRaw,
+    handleBrowseAuto,
+    handleJpgFolderChange,
+    handleRawFolderChange,
+    folderDetection,
     setJpgFolder,
     setRawFolder,
     setSortOrder,
@@ -639,11 +643,12 @@ function AppShell() {
     if (groups.length === 0) {
       return {
         title: '未加载照片',
-        // A5/A7：说清楚"该选什么"，去掉无操作信息的营销辞令。
+        // A5/A7 + #66：默认路径是「选一个文件夹」，JPG / RAW / 混合都支持；
+        // 只有确实想分目录存放时才需要动第二个输入框。
         description:
-          '请选择存放 JPG 的文件夹用于浏览与选片；RAW 文件夹为可选，选了即可用 LUMEN RAW 引擎预览原片。',
-        actionLabel: '选择 JPG 文件夹',
-        onAction: handleBrowseJpg,
+          '选择一个包含照片的文件夹即可（只有 JPG、只有 RAW、或两者混合都支持）；如果 RAW 单独放在另一个目录，再手动指定 RAW 路径。',
+        actionLabel: '打开照片文件夹',
+        onAction: handleBrowseAuto,
       };
     }
     if (filteredGroups.length === 0) {
@@ -659,7 +664,7 @@ function AppShell() {
       title: '未选择照片',
       description: '从右侧宫格列表中选择一张照片。',
     };
-  }, [groups.length, filteredGroups.length, handleBrowseJpg]);
+  }, [groups.length, filteredGroups.length, handleBrowseAuto]);
 
   return (
     <div className="flex flex-col h-screen w-screen bg-background-base text-white overflow-hidden antialiased">
@@ -667,10 +672,12 @@ function AppShell() {
       <TopBar
         jpgFolder={jpgFolder}
         rawFolder={rawFolder}
-        onJpgFolderChange={setJpgFolder}
-        onRawFolderChange={setRawFolder}
+        onJpgFolderChange={handleJpgFolderChange}
+        onRawFolderChange={handleRawFolderChange}
         onBrowseJpg={handleBrowseJpg}
         onBrowseRaw={handleBrowseRaw}
+        onBrowseAuto={handleBrowseAuto}
+        folderDetection={folderDetection}
         onScan={handleScan}
         isLoading={isLoading || scanTask.isRunning}
         scanProgress={

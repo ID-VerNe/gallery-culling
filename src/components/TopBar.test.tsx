@@ -18,7 +18,10 @@ const GROUPS: PhotoGroupInfo[] = [
   { id: 'd', baseName: 'd', status: 'JPG_ONLY', rating: 5, flag: 'none' as CullFlag, label: '', hasXmp: false },
 ];
 
-function renderTopBar(filterCounts?: Record<FilterMode, number>) {
+function renderTopBar(
+  filterCounts?: Record<FilterMode, number>,
+  folderDetection?: import('../types').FolderProbe | null,
+) {
   return render(
     <TopBar
       jpgFolder="D:/shoot/JPG"
@@ -28,6 +31,8 @@ function renderTopBar(filterCounts?: Record<FilterMode, number>) {
       onRawFolderChange={vi.fn()}
       onBrowseJpg={vi.fn()}
       onBrowseRaw={vi.fn()}
+      onBrowseAuto={vi.fn()}
+      folderDetection={folderDetection}
       onScan={vi.fn()}
       isLoading={false}
       filterMode="all"
@@ -47,6 +52,39 @@ const filterOptionTexts = () => {
   const select = screen.getByLabelText('照片筛选过滤') as HTMLSelectElement;
   return Array.from(select.options).map((o) => o.textContent ?? '');
 };
+
+describe('TopBar —— #66 单目录自动识别标记', () => {
+  it('混合目录把 JPG / RAW 两侧计数画在顶栏', () => {
+    renderTopBar(undefined, {
+      mode: 'mixed',
+      jpgCount: 12,
+      rawCount: 4,
+      subdirCount: 0,
+    });
+
+    expect(screen.getByTestId('topbar-folder-detection')).toHaveTextContent(
+      '已识别 JPG + RAW 混合 · JPG 12 / RAW 4',
+    );
+  });
+
+  it('空目录文案说明「路径未改动」而不是假装识别成功', () => {
+    renderTopBar(undefined, {
+      mode: 'empty',
+      jpgCount: 0,
+      rawCount: 0,
+      subdirCount: 3,
+    });
+
+    expect(screen.getByTestId('topbar-folder-detection')).toHaveTextContent(
+      '已识别 所选文件夹为空（路径未改动）',
+    );
+  });
+
+  it('没有识别结果时不渲染标记（手动填路径不应挂着自动识别的牌子）', () => {
+    renderTopBar(undefined, null);
+    expect(screen.queryByTestId('topbar-folder-detection')).toBeNull();
+  });
+});
 
 describe('TopBar —— 筛选每档数量', () => {
   it('传入 filterCounts 时每档都带 (N)，且与 countByFilter 一致', () => {

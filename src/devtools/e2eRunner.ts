@@ -494,7 +494,11 @@ const BEFORE_AFTER_BTN = 'button[aria-label="本张照片前后对照 (快捷键
  * 明确不做：#49 更新装完不自动重启依赖 NSIS 安装器与提权进程，应用内 e2e
  * 驱动不到，继续留人工回签。
  */
-async function scenarioUiContract(jpgFolder: string, el: () => string) {
+async function scenarioUiContract(
+  jpgFolder: string,
+  el: () => string,
+  mixedFolder = '',
+) {
   // 只填 JPG（12 组）；RAW 留空，避免 RAW-only 分组干扰宫格下限。
   if (!(await scanFolders(jpgFolder, '', 12, el))) return;
   if (!(await clickCell('IMG_006', el))) return;
@@ -752,6 +756,25 @@ async function scenarioUiContract(jpgFolder: string, el: () => string) {
   // 还原单图，保证下一次运行从同一状态开始（夹具会重建，但视图模式不该漂移）。
   pressKey('t', 'KeyT');
   await sleep(400);
+
+  // ── #66 单目录：只填 JPG 输入框，RAW 留空 ─────────────────
+  // 旧实现会把混合目录当纯 JPG 视图、丢掉 RAW；这里断言「一个目录就够了」：
+  // 12 张 JPG + 4 个 RAW（3 个同 stem）应自动配对成 13 组（12 JPG 组 + 1 个 RAW-only），
+  // 且顶栏出现「JPG + RAW」的识别标记。
+  if (mixedFolder) {
+    raw(`[${el()}] #66 单目录混合导入：${mixedFolder}`);
+    const ok = await scanFolders(mixedFolder, '', 13, el);
+    await sleep(500);
+    const badge = document.querySelector<HTMLElement>('[data-testid="topbar-folder-detection"]');
+    const badgeText = (badge?.textContent || '').replace(/\s+/g, ' ').trim();
+    const cells = document.querySelectorAll('[role="option"]').length;
+    raw(`[${el()}] 单目录读数：组数=${cells} 识别标记="${badgeText}"`);
+    raw(`[${el()}] >>> 断言U15 单目录混合自动配对组数=13 = ${ok && cells >= 13}`);
+    raw(`[${el()}] >>> 断言U16 顶栏出现 JPG+RAW 识别结果 = ${/JPG \+ RAW/.test(badgeText)}`);
+  } else {
+    raw(`[${el()}] >>> 断言U15 单目录混合自动配对组数=13 = false（未提供 mixed 夹具）`);
+    raw(`[${el()}] >>> 断言U16 顶栏出现 JPG+RAW 识别结果 = false（未提供 mixed 夹具）`);
+  }
 
   raw(`[${el()}] 场景结束`);
 }
@@ -1168,6 +1191,8 @@ async function scenarioDetailOneToOne(
 export interface E2EScenarioOptions {
   /** RAW 原片目录；不填则只扫 JPG。 */
   raw?: string;
+  /** #66：JPG 与 RAW 同目录的单目录夹具（`ui-contract` 用它验自动识别）。 */
+  mixed?: string;
   /** 成片导出的目标目录（`render-export` 场景必填）。 */
   out?: string;
   /** 逗号分隔的 baseName 清单（`detail-1to1` 用它锁定两张真实 RAW）。 */
@@ -1226,7 +1251,7 @@ export async function runE2E(
     } else if (scenario === 'detail-1to1') {
       await scenarioDetailOneToOne(jpgFolder, opts.raw || '', opts.names || '', el);
     } else if (scenario === 'ui-contract') {
-      await scenarioUiContract(jpgFolder, el);
+      await scenarioUiContract(jpgFolder, el, opts.mixed || '');
     } else {
       raw(`[${el()}] 未知场景: ${scenario}`);
     }
