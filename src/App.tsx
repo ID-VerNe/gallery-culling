@@ -17,6 +17,7 @@ import { LrcatDialog } from './components/LrcatDialog';
 import { ToastProvider, useToast } from './components/Toast';
 import { TaskProgressBar } from './components/TaskProgressBar';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { useLumenStartupNotice } from './hooks/useLumenStartupNotice';
 import { useAppSettings } from './hooks/useAppSettings';
 import { useAutoUpdate } from './hooks/useAutoUpdate';
 import { useCollection } from './hooks/useCollection';
@@ -49,6 +50,8 @@ import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from './utils/viewportZoom'
 
 function AppShell() {
   const toast = useToast();
+  // issue #68：随包引擎在后台预热，失败时弹常驻错误提示（不静默降级）。
+  useLumenStartupNotice();
   /** FR-09：一张表回答「现在能不能开始」。各任务只声明自己是否在跑。 */
   const mutex = useTaskMutex();
 

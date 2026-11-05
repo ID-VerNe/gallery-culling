@@ -64,17 +64,36 @@ pub fn find_lumen_cli(settings_path: &str) -> Option<PathBuf> {
     find_in_path("lumen-cli")
 }
 
-/// 探测随包分发的 sidecar（开发态与打包态各一条路径）。
+/// 打包态候选路径（纯函数，顺序即优先级）。
+///
+/// Windows 的 Tauri v2 把 `bundle.resources` 原样落到**安装目录**（`resource_dir`
+/// 与 exe 同目录），所以 `binaries/lumen-cli/**` 实际在
+/// `<exe_dir>/binaries/lumen-cli/lumen-cli.exe`（`installer.nsi` 实证）。
+/// `resources/` 两条是其它平台的资源目录布局与历史布局回退。
+pub fn bundled_candidates(exe_dir: &Path) -> Vec<PathBuf> {
+    vec![
+        exe_dir
+            .join("binaries")
+            .join("lumen-cli")
+            .join("lumen-cli.exe"),
+        exe_dir
+            .join("resources")
+            .join("lumen-cli")
+            .join("lumen-cli.exe"),
+        exe_dir
+            .join("resources")
+            .join("binaries")
+            .join("lumen-cli")
+            .join("lumen-cli.exe"),
+    ]
+}
+
+/// 探测随包分发的 sidecar（打包态候选 + 开发态 cwd 路径）。
 pub(super) fn find_bundled_lumen_cli() -> Option<PathBuf> {
     let exe_dir = std::env::current_exe().ok()?;
-    // 打包态：<exe>/../resources/lumen-cli/lumen-cli.exe
-    let bundled = exe_dir
-        .parent()?
-        .join("resources")
-        .join("lumen-cli")
-        .join("lumen-cli.exe");
-    if bundled.is_file() {
-        return Some(bundled);
+    let packaged = bundled_candidates(exe_dir.parent()?);
+    if let Some(found) = first_existing(&packaged) {
+        return Some(found);
     }
     // 开发态：cargo test 时 cwd = src-tauri
     let dev = PathBuf::from("binaries")
@@ -164,6 +183,48 @@ fn where_lumen_cli_missing_returns_none() {
 fn where_lumen_cli_parses_real_output() {
     let found = find_in_path("notepad.exe").expect("notepad.exe 应能通过 where 找到");
     assert!(found.exists(), "where 返回的路径应真实存在: {:?}", found);
+}
+
+/// issue #68：Windows 安装器把 resources 落到 `<exe_dir>/binaries/lumen-cli/`，
+/// 这条必须排第一，否则安装版永远发现不了随包引擎。
+#[test]
+fn bundled_candidates_prefers_windows_installer_layout() {
+    let dir = tmp("pkg_win");
+    let exe = dir
+        .join("binaries")
+        .join("lumen-cli")
+        .join("lumen-cli.exe");
+    std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+    std::fs::write(&exe, b"x").unwrap();
+
+    let candidates = bundled_candidates(&dir);
+    assert_eq!(
+        candidates.first(),
+        Some(&exe),
+        "安装器落点 binaries/lumen-cli 必须是第一候选"
+    );
+    assert_eq!(first_existing(&candidates), Some(exe));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 没有安装器布局时回退到 `resources/` 布局。
+#[test]
+fn bundled_candidates_falls_back_to_resources_layout() {
+    let dir = tmp("pkg_res");
+    let exe = dir
+        .join("resources")
+        .join("lumen-cli")
+        .join("lumen-cli.exe");
+    std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+    std::fs::write(&exe, b"x").unwrap();
+
+    let candidates = bundled_candidates(&dir);
+    assert_eq!(
+        first_existing(&candidates),
+        Some(exe),
+        "缺安装器布局时应回退 resources/lumen-cli"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 }

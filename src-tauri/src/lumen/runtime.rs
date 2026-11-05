@@ -10,7 +10,7 @@ use serde_json::Value;
 use super::capabilities::{detect_ai_flavor, parse_capabilities, LumenCapabilities};
 use super::cli::{run_cli, run_lumen};
 use super::mcp::McpClient;
-use super::status::{lumen_status_from, query_version, LumenStatus};
+use super::status::{lumen_status_from, lumen_status_with_error, query_version, LumenStatus};
 use super::tools::{mask_changes, project_masks, tool_to_command_id};
 use super::tone::recipe_to_tone;
 use super::transport::{ProcessTransport, MAX_RESTARTS};
@@ -61,13 +61,64 @@ impl LumenRuntime {
         if !enabled {
             return lumen_status_from(false, None, None);
         }
-        let version = self.inner.lock().ok().and_then(|g| g.version.clone());
-        lumen_status_from(true, exe_found, version)
+        let (version, last_error) = match self.inner.lock() {
+            Ok(g) => (g.version.clone(), g.last_error.clone()),
+            Err(_) => (None, None),
+        };
+        lumen_status_with_error(true, exe_found, version, last_error.as_deref())
     }
 
     /// 连续失败次数（测试/诊断用）。
     pub fn failure_count(&self) -> u32 {
         self.inner.lock().map(|g| g.failures).unwrap_or(0)
+    }
+
+    /// 最近一次失败原因（供状态行展示；成功握手后清空）。
+    pub fn last_failure(&self) -> Option<String> {
+        self.inner.lock().ok().and_then(|g| g.last_error.clone())
+    }
+
+    /// 启动预热：拉起 sidecar 并完成 MCP 握手，让第一次真实操作不必等冷启动。
+    ///
+    /// 单例语义：整个「检查 → spawn → 握手」都在 `inner` 锁内完成，和
+    /// `call_session_tool` / `render_via_mcp` 的按需拉起走同一把锁——因此无论
+    /// 预热与用户操作如何并发，**都不可能同时存在两个 sidecar**。
+    /// 调用方（`lib.rs` 的 `setup`）把它放在后台线程，首屏不等待；握手本身受
+    /// 传输层 `READ_TIMEOUT` 约束，启动阶段只尝试一次，后续按需重连仍由
+    /// `MAX_RESTARTS` 封顶。
+    pub fn warm_up(&self, exe: &Path) -> Result<(), LumenError> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| LumenError::Io("运行时锁中毒".to_string()))?;
+        if guard.client.is_some() {
+            return Ok(());
+        }
+        if guard.failures >= MAX_RESTARTS {
+            return Err(LumenError::Timeout);
+        }
+
+        let result = (|| {
+            let transport = ProcessTransport::spawn(exe, &["mcp", "--headless"])?;
+            let mut client = McpClient::new(transport);
+            client.handshake()?;
+            Ok::<_, LumenError>(client)
+        })();
+
+        match result {
+            Ok(client) => {
+                guard.version = client.server_version().map(str::to_string);
+                guard.client = Some(client);
+                guard.failures = 0;
+                guard.last_error = None;
+                Ok(())
+            }
+            Err(e) => {
+                guard.failures = guard.failures.saturating_add(1);
+                guard.last_error = Some(e.to_string());
+                Err(e)
+            }
+        }
     }
 
     /// 显式关闭：丢客户端（Drop 关 stdin → 子进程退出）。
@@ -531,5 +582,75 @@ mod export_args_tests {
         let ok = build_export_args("x", "y", 92, Some(2560));
         assert_eq!(ok["quality"], 92);
         assert_eq!(ok["long_edge"], 2560);
+    }
+}
+
+#[cfg(test)]
+mod autostart_tests {
+    use super::*;
+    use crate::lumen::test_support::tmp;
+
+    /// 生成一个「读一行、回一行」的 MCP 握手夹具，并把每次 spawn 记到计数文件。
+    fn handshake_fixture(tag: &str) -> (PathBuf, PathBuf) {
+        let dir = tmp(&format!("warmup_{}", tag));
+        std::fs::create_dir_all(&dir).unwrap();
+        let count = dir.join("spawns.txt");
+        let script = dir.join("mcp_ok.cmd");
+        // set /p 逐行消费主机请求，避免「批处理跑太快、stdin 已关」的竞态。
+        let body = format!(
+            "@echo off\r\n\
+             echo x>>\"{}\"\r\n\
+             set /p dummy=\r\n\
+             echo {{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"serverInfo\":{{\"version\":\"{}\"}}}}}}\r\n\
+             set /p dummy=\r\n\
+             echo {{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"tools\":[]}}}}\r\n",
+            count.display(),
+            crate::lumen::PINNED_LUMEN_VERSION
+        );
+        std::fs::write(&script, body).unwrap();
+        (script, count)
+    }
+
+    /// issue #68：重复预热必须复用同一个 client，不能拉起第二个进程。
+    #[test]
+    fn warm_up_spawns_at_most_once() {
+        let (script, count) = handshake_fixture("once");
+        let rt = LumenRuntime::new();
+
+        rt.warm_up(&script).expect("首次预热应握手成功");
+        assert!(rt.has_live_client(), "预热成功后应持有常驻 client");
+        rt.warm_up(&script).expect("重复预热应直接复用");
+
+        let spawns = std::fs::read_to_string(&count).unwrap_or_default();
+        assert_eq!(
+            spawns.lines().count(),
+            1,
+            "重复 warm_up 不应拉起第二个 sidecar"
+        );
+
+        rt.shutdown();
+        let _ = std::fs::remove_dir_all(script.parent().unwrap());
+    }
+
+    /// issue #68：二进制缺失时错误文案必须说清「缺什么 + 下一步」。
+    #[test]
+    fn warm_up_missing_binary_reports_actionable_text() {
+        let rt = LumenRuntime::new();
+        let bogus = tmp("warmup_missing").join("lumen-cli-xyz.exe");
+
+        let err = rt.warm_up(&bogus).expect_err("不存在的二进制必须失败");
+        let text = err.to_string();
+        assert!(
+            text.contains("未检测到 LUMEN RAW 引擎"),
+            "文案要说明缺什么，实际: {}",
+            text
+        );
+        assert!(
+            text.contains("设置中指定"),
+            "文案要给出下一步，实际: {}",
+            text
+        );
+        assert!(!rt.has_live_client());
+        assert_eq!(rt.failure_count(), 1, "失败必须计入重试上限");
     }
 }

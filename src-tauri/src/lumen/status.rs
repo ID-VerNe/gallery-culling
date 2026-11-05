@@ -66,9 +66,22 @@ pub fn lumen_status_from(
     exe_found: Option<PathBuf>,
     version: Option<String>,
 ) -> LumenStatus {
+    lumen_status_with_error(enabled, exe_found, version, None)
+}
+
+/// 同 [`lumen_status_from`]，但把「最近一次启动/握手失败」原样带进 detail。
+///
+/// issue #68：启动 warm-up 失败时，用户不必打开设置再去猜——状态行直接给出
+/// 失败原因（例如「sidecar 已退出」），而不是只有一句泛化的「版本不匹配」。
+pub fn lumen_status_with_error(
+    enabled: bool,
+    exe_found: Option<PathBuf>,
+    version: Option<String>,
+    last_error: Option<&str>,
+) -> LumenStatus {
     let pinned = version.as_deref() == Some(PINNED_LUMEN_VERSION);
     let available = enabled && exe_found.is_some() && pinned;
-    let detail = if !enabled {
+    let mut detail = if !enabled {
         "未启用 LUMEN RAW 引擎集成".to_string()
     } else if exe_found.is_none() {
         "未找到 lumen-cli.exe，请安装 LUMEN RAW 或在设置中指定路径".to_string()
@@ -81,11 +94,53 @@ pub fn lumen_status_from(
     } else {
         "LUMEN RAW 引擎就绪".to_string()
     };
+    // 只有「找到了 exe 但仍不可用」才追加失败原因；exe 缺失时上面的文案
+    // 已经包含下一步，再叠一条会重复。
+    if !available && exe_found.is_some() {
+        if let Some(err) = last_error {
+            detail = format!("{}（最近一次启动失败：{}）", detail, err);
+        }
+    }
     LumenStatus {
         available,
         enabled,
         pinned_version: PINNED_LUMEN_VERSION.to_string(),
         found_version: version,
         detail,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// issue #68：找到了 exe 但握手失败时，detail 必须保留具体失败原因。
+    #[test]
+    fn status_with_error_appends_failure_reason() {
+        let status = lumen_status_with_error(
+            true,
+            Some(PathBuf::from(r"C:\lumen\lumen-cli.exe")),
+            None,
+            Some("sidecar 已退出"),
+        );
+        assert!(!status.available);
+        assert!(
+            status.detail.contains("最近一次启动失败"),
+            "detail 必须标出这是启动失败: {}",
+            status.detail
+        );
+        assert!(
+            status.detail.contains("sidecar 已退出"),
+            "detail 必须带上原始失败原因: {}",
+            status.detail
+        );
+    }
+
+    /// exe 都没找到时不再叠加失败原因（文案本身已含下一步）。
+    #[test]
+    fn status_without_exe_ignores_last_error() {
+        let status = lumen_status_with_error(true, None, None, Some("重复的失败原因"));
+        assert!(status.detail.contains("未找到 lumen-cli.exe"));
+        assert!(!status.detail.contains("重复的失败原因"));
     }
 }

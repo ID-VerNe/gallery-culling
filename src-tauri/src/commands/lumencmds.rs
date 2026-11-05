@@ -50,7 +50,12 @@ pub async fn lumen_status_cmd(state: State<'_, AppState>) -> Result<LumenStatus,
     })
     .await?;
 
-    Ok(lumen::lumen_status_from(true, Some(exe), version))
+    Ok(lumen::lumen_status_with_error(
+        true,
+        Some(exe),
+        version,
+        state.lumen.last_failure().as_deref(),
+    ))
 }
 
 /// `probe_lumen_cmd` 的返回：直接回答"这个路径能不能用"。
