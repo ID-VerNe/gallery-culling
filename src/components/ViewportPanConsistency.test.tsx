@@ -74,9 +74,6 @@ describe('PreviewViewport 平移（绝对系）', () => {
         group={GROUP}
         onPrev={vi.fn()}
         onNext={vi.fn()}
-        onRate={vi.fn()}
-        onFlag={vi.fn()}
-        onOpenExternal={vi.fn()}
       />,
     );
 
@@ -108,9 +105,6 @@ describe('PreviewViewport 平移（绝对系）', () => {
         group={GROUP}
         onPrev={vi.fn()}
         onNext={vi.fn()}
-        onRate={vi.fn()}
-        onFlag={vi.fn()}
-        onOpenExternal={vi.fn()}
       />,
     );
 
@@ -140,8 +134,6 @@ describe('SplitCompareViewport 平移（绝对系）', () => {
         onTogglePinLeft={vi.fn()}
         onTogglePinRight={vi.fn()}
         onSwap={vi.fn()}
-        onRate={vi.fn()}
-        onFlag={vi.fn()}
         {...props}
       />,
     );
@@ -177,8 +169,6 @@ describe('BeforeAfterViewport 平移（绝对系）', () => {
     render(
       <BeforeAfterViewport
         group={GROUP}
-        onRate={vi.fn()}
-        onFlag={vi.fn()}
         {...props}
       />,
     );

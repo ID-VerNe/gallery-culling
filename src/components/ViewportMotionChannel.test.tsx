@@ -60,9 +60,6 @@ function renderPreview(extra: Partial<ComponentProps<typeof PreviewViewport>> = 
       group={GROUP}
       onPrev={vi.fn()}
       onNext={vi.fn()}
-      onRate={vi.fn()}
-      onFlag={vi.fn()}
-      onOpenExternal={vi.fn()}
       {...extra}
     />,
   );
@@ -84,8 +81,6 @@ function renderSplit() {
       onTogglePinLeft={vi.fn()}
       onTogglePinRight={vi.fn()}
       onSwap={vi.fn()}
-      onRate={vi.fn()}
-      onFlag={vi.fn()}
     />,
   );
   const imgs = Array.from(container.querySelectorAll('img')) as HTMLImageElement[];
@@ -94,7 +89,7 @@ function renderSplit() {
 
 function renderBeforeAfter(props: Partial<ComponentProps<typeof BeforeAfterViewport>> = {}) {
   const { container } = render(
-    <BeforeAfterViewport group={GROUP} onRate={vi.fn()} onFlag={vi.fn()} {...props} />,
+    <BeforeAfterViewport group={GROUP} {...props} />,
   );
   const imgs = Array.from(container.querySelectorAll('img')) as HTMLImageElement[];
   return {

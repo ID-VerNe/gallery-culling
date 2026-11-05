@@ -15,7 +15,7 @@
  * 依旧不成立 —— 翻页由 App 的全局快捷键与单图视口承担。这里不写「永远查不到按钮」
  * 的假用例，只如实说明。
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { BeforeAfterViewport } from './BeforeAfterViewport';
@@ -37,8 +37,6 @@ function renderBA(props: Partial<ComponentProps<typeof BeforeAfterViewport>> = {
   const { container } = render(
     <BeforeAfterViewport
       group={withJpg('IMG_0001')}
-      onRate={vi.fn()}
-      onFlag={vi.fn()}
       {...props}
     />,
   );
@@ -110,8 +108,6 @@ describe('BeforeAfterViewport —— 空态', () => {
   it('没有 group 时渲染统一的空态文案，而不是崩溃', () => {
     render(
       <BeforeAfterViewport
-        onRate={vi.fn()}
-        onFlag={vi.fn()}
         emptyState={{ title: '未加载照片', description: '选择 JPG 或 RAW 文件夹。' }}
       />,
     );
@@ -125,241 +121,34 @@ describe('BeforeAfterViewport —— 空态', () => {
 });
 
 /**
- * 底栏几何契约（issue #12）：与单图视口同一套口径 —— 悬停/聚焦**不改尺寸**。
+ * 常驻状态栏替代悬浮底栏（issue #62）。
  *
- * #10 的 `group-hover/bar:px-4 py-2` + `w-0 → w-auto` 让外接盒随悬停变化，
- * 指针在边缘反复进出就会自激闪烁。jsdom 不跑 CSS，所以锁 className：
- * 变体里出现 padding / width / height / scale 即红。
+ * 前后对照视口原先复制了单图视口那套底板 + 手柄；现在评分 / 旗标 / 色标
+ * 统一由窗口底部的 `BottomBar` 承载（同一组件、同一分组），视口内不得残留
+ * 任何底栏，也不得留下永久遮挡照片的胶囊。
  */
-describe('BeforeAfterViewport —— 底栏几何冻结（issue #12）', () => {
-  const GEOMETRY_PREFIXES = ['group-hover/bar:', 'group-focus-within/bar:'];
-  const GEOMETRY_UTILITIES = [
-    /^px-/,
-    /^py-/,
-    /^p-/,
-    /^pl-/,
-    /^pr-/,
-    /^pt-/,
-    /^pb-/,
-    /^w-/,
-    /^h-/,
-    /^min-w-/,
-    /^min-h-/,
-    /^max-w-/,
-    /^max-h-/,
-    /^gap-/,
-    // translate/scale 走合成层、不参与布局，是标签在常驻槽位里淡入的手法；
-    // 真浏览器几何验收（静息 == 悬停）兜住例外情况。
-    /^text-/,
-    /^leading-/,
-    /^tracking-/,
-  ];
-
-  function classTokens(el: Element): string[] {
-    return (el.getAttribute('class') ?? '').split(/\s+/).filter(Boolean);
-  }
-
-  function geometryLeaks(el: Element): string[] {
-    return classTokens(el).filter((token) => {
-      const prefix = GEOMETRY_PREFIXES.find((p) => token.startsWith(p));
-      if (!prefix) return false;
-      const utility = token.slice(prefix.length);
-      return GEOMETRY_UTILITIES.some((re) => re.test(utility));
-    });
-  }
-
-  /**
-   * 底栏分组宿主：带 `group/bar` 命名组的那一层。它是**包裹层**而非底板
-   * （issue #14 根因），几何断言瞄准的仍是底板。
-   */
-  function groupHostOf(container: HTMLElement): HTMLElement {
-    const anchor = container.querySelector('[aria-label="照片星级打分"]');
-    expect(anchor).not.toBeNull();
-    const host = anchor!.closest('div[class*="group/bar"]');
-    expect(host, '底栏应带 group/bar 命名组').not.toBeNull();
-    return host as HTMLElement;
-  }
-
-  /** 底栏底板：分组宿主的直接子层（命中层所在的那一层）。 */
-  function barOf(container: HTMLElement): HTMLElement {
-    const host = groupHostOf(container);
-    const plate = host.querySelector('[data-bar-plate]');
-    expect(plate, '底栏底板应为分组宿主的子层').toBeTruthy();
-    expect(plate).not.toBe(host);
-    return plate as HTMLElement;
-  }
-
-  it('底栏与其内部元素都不许用悬停变体改尺寸', () => {
+describe('BeforeAfterViewport —— 不再有悬浮底栏（issue #62）', () => {
+  it('视口内没有底板、手柄与旧分组，照片区有坐标锚点', () => {
     const { container } = renderBA();
-    const bar = barOf(container);
 
-    expect(geometryLeaks(bar)).toEqual([]);
-    const leaks: string[] = [];
-    bar.querySelectorAll<HTMLElement>('*').forEach((el) => {
-      for (const token of geometryLeaks(el)) leaks.push(`${el.tagName}:${token}`);
-    });
-    expect(leaks).toEqual([]);
+    expect(container.querySelector('[data-bar-plate]')).toBeNull();
+    expect(container.querySelector('[data-bar-handle]')).toBeNull();
+    expect(container.querySelector('[aria-label="照片星级打分"]')).toBeNull();
+    expect(container.querySelector('[aria-label="照片色标"]')).toBeNull();
+    expect(container.querySelector('[data-viewport-photo]')).not.toBeNull();
   });
 
-  it('Pick / Reject 标签常驻槽位且不换行', () => {
+  it('不留下 hover / 位移 / 命中层那套旧机制', () => {
     const { container } = renderBA();
-    const bar = barOf(container);
 
-    for (const label of ['Pick', 'Reject']) {
-      // 只认按钮里的可见标签（<title> 里也有同名文案）。
-      const span = Array.from(bar.querySelectorAll('button > span')).find(
-        (el) => el.textContent === label,
-      );
-      expect(span, `底栏应有「${label}」标签`).toBeDefined();
-      const called = classTokens(span!);
-
-      expect(called, `「${label}」不得再用零宽折叠`).not.toContain('w-0');
-      expect(span!.className).not.toContain('group-hover/bar:w-auto');
-      expect(called, `「${label}」必须禁止换行`).toContain('whitespace-nowrap');
-      expect(called, `「${label}」应标 bar-label 槽位`).toContain('bar-label');
-    }
+    expect(container.querySelectorAll('[class*="group-hover"]')).toHaveLength(0);
+    expect(container.querySelectorAll('[data-bar-hit-area]')).toHaveLength(0);
   });
 
-  it('静息态无底色：底板底色只在变体上出现', () => {
+  it('顶部控制条与两个窗格不受影响（只搬底栏，不动几何）', () => {
     const { container } = renderBA();
-    const called = classTokens(barOf(container));
 
-    // `group/bar` 现在挂在外层宿主上（issue #14），底板只剩变体类。
-    expect(classTokens(groupHostOf(container))).toContain('group/bar');
-    expect(called).not.toContain('group/bar');
-    expect(called).not.toContain('bg-background-base/90');
-    expect(called).not.toContain('shadow-2xl');
-    expect(called).toContain('group-hover/bar:bg-background-base/90');
-    expect(called).toContain('group-focus-within/bar:bg-background-base/90');
-  });
-
-  it('底板必须能接点击、且不存在自动命中层（issue #46）', () => {
-    const { container } = renderBA();
-    const bar = barOf(container);
-    const called = classTokens(bar);
-
-    expect(called, '底板不得把 none 继承给按钮').not.toContain('pointer-events-none');
-    expect(called, '底板必须接收点击').toContain('pointer-events-auto');
-    expect(bar.querySelector('[data-bar-hit-area]')).toBeNull();
-    const autoEmptyLayers = Array.from(bar.querySelectorAll<HTMLElement>('[aria-hidden="true"]'))
-      .filter((el) => classTokens(el).includes('pointer-events-auto'));
-    expect(autoEmptyLayers, '透明命中层不得再挂 pointer-events-auto').toEqual([]);
-  });
-
-  it('星标不再用 hover 改尺寸', () => {
-    const { container } = renderBA();
-    const stars = barOf(container).querySelectorAll('[aria-label^="评 "]');
-
-    expect(stars).toHaveLength(5);
-    stars.forEach((star) => {
-      expect(star.className).not.toContain('hover:scale');
-      expect(star.className).toContain('tap-target');
-    });
-  });
-});
-
-/** 底栏视觉层级（issue #14）：与单图视口同形，共享 `viewportBarStyles.ts`。 */
-describe('BeforeAfterViewport —— 底栏视觉层级（issue #14）', () => {
-  function tokens(el: Element): string[] {
-    return (el.getAttribute('class') ?? '').split(/\s+/).filter(Boolean);
-  }
-
-  function groupHostOf(container: HTMLElement): HTMLElement {
-    const anchor = container.querySelector('[aria-label="照片星级打分"]');
-    const host = anchor?.closest('div[class*="group/bar"]');
-    expect(host, '底栏应带 group/bar 命名组').toBeTruthy();
-    return host as HTMLElement;
-  }
-
-  function barOf(container: HTMLElement): HTMLElement {
-    const host = groupHostOf(container);
-    const plate = host.querySelector('[data-bar-plate]');
-    expect(plate, '底栏底板应为分组宿主的子层').toBeTruthy();
-    return plate as HTMLElement;
-  }
-
-  /**
-   * 根因防回归（issue #14）：Tailwind 把 `group-hover/bar:x` 编译成**后代
-   * 选择器**，元素不可能是自己的祖先。`group/bar` 一旦和变体类同元素，
-   * 那批规则全部静默失效，而 jsdom 与 className 断言都看不出来。
-   */
-  it('group/bar 必须是变体元素的严格祖先', () => {
-    const { container } = renderBA();
-    const host = groupHostOf(container as HTMLElement);
-    const variantEls = Array.from(
-      container.querySelectorAll('[class*="group-hover/bar:"], [class*="group-focus-within/bar:"]'),
-    );
-
-    expect(variantEls.length).toBeGreaterThan(0);
-    for (const el of variantEls) {
-      expect(el.matches('[class*="group/bar"]')).toBe(false);
-      expect(host !== el && host.contains(el)).toBe(true);
-    }
-    expect(barOf(container as HTMLElement).parentElement).toBe(host);
-  });
-
-  it('整条 bar 静息移出视口、悬停/聚焦回正（issue #47）', () => {
-    const { container } = renderBA();
-    const bar = barOf(container as HTMLElement);
-    const called = tokens(bar);
-
-    expect(called, '静息应整条移出视口').toContain('translate-y-[calc(100%_+_1rem)]');
-    expect(called, '静息应不可见').toContain('opacity-0');
-    expect(called, '旧的 4px 下沉必须消失').not.toContain('translate-y-1');
-    expect(called).toContain('group-hover/bar:translate-y-0');
-    expect(called).toContain('group-focus-within/bar:translate-y-0');
-    expect(called).toContain('group-hover/bar:opacity-100');
-    expect(called).toContain('group-focus-within/bar:opacity-100');
-    expect(bar.className).not.toMatch(/group-(hover|focus-within)\/bar:scale-/);
-  });
-
-  it('图标静息半透明（.bar-icons），不是全隐', () => {
-    const { container } = renderBA();
-    const bar = barOf(container as HTMLElement);
-    const star = bar.querySelector('[aria-label="评 1 星"]')!;
-
-    expect(tokens(star)).toContain('bar-icons');
-    expect(star.className).not.toContain('opacity-0');
-    expect(bar.querySelectorAll('[class*="bar-icons"]').length).toBeGreaterThanOrEqual(7);
-  });
-
-  it('静息保留可聚焦的展开手柄（issue #47 · F-02）', () => {
-    const { container } = renderBA();
-    const host = groupHostOf(container as HTMLElement);
-    const handle = host.querySelector('[data-bar-handle]');
-
-    expect(handle, '底栏应有展开手柄').not.toBeNull();
-    expect(handle!.getAttribute('tabindex')).toBe('0');
-    expect(handle!.getAttribute('aria-label')).toBe('展开底栏工具栏');
-    expect(handle!.className, '手柄必须能接指针').toContain('pointer-events-auto');
-    expect(handle!.className, '展开后手柄应让位').toContain('group-hover/bar:opacity-0');
-    expect(handle!.className).not.toMatch(/group-(hover|focus-within)\/bar:(w|h)-/);
-    expect(barOf(container as HTMLElement).previousElementSibling, '手柄应在底板之前').toBe(handle);
-  });
-});
-
-/** SH-01（issue #32）：前后对照视口的色标入口也必须鼠标可达。 */
-describe('BeforeAfterViewport —— 色标鼠标入口（SH-01）', () => {
-  it('点击紫点把 Purple 交给宿主（紫色不能只靠 Shift+5）', () => {
-    const onLabel = vi.fn();
-    renderBA({ onLabel });
-
-    fireEvent.click(screen.getByRole('button', { name: '紫色标（快捷 Shift+5）' }));
-
-    expect(onLabel).toHaveBeenCalledTimes(1);
-    expect(onLabel).toHaveBeenCalledWith('Purple');
-  });
-
-  it('aria-pressed 跟随当前色标', () => {
-    renderBA({ group: { ...withJpg('IMG_0001'), label: 'Yellow' }, onLabel: vi.fn() });
-
-    expect(screen.getByRole('button', { name: '黄色标（快捷 Shift+2）' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
-    expect(screen.getByRole('button', { name: '红色标（快捷 Shift+1）' })).toHaveAttribute(
-      'aria-pressed',
-      'false',
-    );
+    expect(container.querySelectorAll('img')).toHaveLength(2);
+    expect(screen.getByLabelText('放大')).toBeInTheDocument();
   });
 });

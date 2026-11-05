@@ -1,39 +1,27 @@
 import React from 'react';
-import { useCallback, useEffect, useRef } from 'react';
-import {
-  ChevronLeft,
-  ChevronRight,
-  Star,
-  Check,
-  X,
-  ExternalLink,
-  RotateCcw,
-  Sparkles,
-  Sliders,
-  ZoomIn,
-  ZoomOut,
-} from 'lucide-react';
-import { PhotoGroupInfo, ToneAdjustments, LumenStatus, ColorLabel } from '../types';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
+import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
 import { getToneFilterString } from '../utils/autoTone';
-import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, isFitScale, scaleLabel } from '../utils/viewportZoom';
+import { isFitScale } from '../utils/viewportZoom';
 import { useZoomPan } from '../hooks/useZoomPan';
 import { useViewportImage } from '../hooks/useViewportImage';
 import { useLumenDetail } from '../hooks/useLumenDetail';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
 import { ExifCapsule } from './ExifCapsule';
-import { LabelDots } from './LabelDots';
-import {
-  BAR_BUTTON,
-  BAR_DIVIDER,
-  BAR_GROUP_HOST,
-  BAR_HANDLE,
-  BAR_ICONS,
-  BAR_ICON_BUTTON,
-  BAR_LABEL,
-  BAR_PLATE,
-  BAR_STAR_BUTTON,
-} from './viewportBarStyles';
+
+/**
+ * 单图视口上交给宿主状态栏的缩放面（issue #62）。
+ *
+ * 缩放状态仍归视口自己（双栏 / 前后对照各有自己的顶部控制条，`Z` 该切哪个
+ * 说不清），宿主只拿到这三个稳定入口，用来把读数与按钮画在窗口底栏里。
+ */
+export interface PreviewZoomApi {
+  scale: number;
+  zoomBy: (factor: number) => void;
+  reset: () => void;
+}
 
 interface PreviewViewportProps {
   group?: PhotoGroupInfo;
@@ -41,16 +29,8 @@ interface PreviewViewportProps {
   isHoldOriginal?: boolean;
   onPrev: () => void;
   onNext: () => void;
-  onRate: (rating: number) => void;
-  onFlag: (flag: 'pick' | 'reject' | 'none') => void;
-  /** SH-01：底栏色点（鼠标可达），语义与 `Shift+1…5` 完全一致。 */
-  onLabel?: (label: ColorLabel) => void;
-  onOpenExternal: () => void;
-  onOpenLuminar?: () => void;
-  onToggleTonalAdjuster?: () => void;
-  isLuminarRunning?: boolean;
-  /** Whether the tonal panel is currently shown, for the toggle's pressed state. */
-  isTonalPanelOpen?: boolean;
+  /** 状态栏缩放组（issue #62）：视口把缩放面交给宿主，读数和按钮画在底栏。 */
+  onZoomApi?: (api: PreviewZoomApi | null) => void;
   /**
    * Receives the rendered <img> so the shell can sample the histogram for
    * auto-tone. Previously the shell did `querySelector('img[alt=...]')`,
@@ -85,15 +65,8 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
   isHoldOriginal = false,
   onPrev,
   onNext,
-  onRate,
-  onFlag,
-  onLabel,
-  onOpenExternal,
-  onOpenLuminar,
-  onToggleTonalAdjuster,
-  isLuminarRunning = false,
+  onZoomApi,
   onImageElement,
-  isTonalPanelOpen = false,
   lumenStatus,
   lumenPreviewWidth = 1600,
   oneToOneRef,
@@ -104,6 +77,26 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
 }) => {
   // 缩放/平移机器（绝对系拖拽、命中光标缩放、夹紧、换图复位）。
   const zoom = useZoomPan(group?.id, onImageElement);
+
+  /**
+   * 把缩放面交给宿主状态栏（issue #62）。
+   *
+   * 卸载时发 `null`，否则宿主会留着一个指向已卸载视口的按钮组 —— 双图 /
+   * 前后对照根本没有这条缩放组，残影会让「点不动」看起来像 bug。
+   */
+  const zoomApi = useMemo<PreviewZoomApi>(
+    () => ({ scale: zoom.scale, zoomBy: zoom.zoomBy, reset: zoom.reset }),
+    [zoom.scale, zoom.zoomBy, zoom.reset],
+  );
+  useEffect(() => {
+    onZoomApi?.(zoomApi);
+  }, [onZoomApi, zoomApi]);
+  useEffect(
+    () => () => {
+      onZoomApi?.(null);
+    },
+    [onZoomApi],
+  );
 
   // 图片源解析（LUMEN 预览 + 失败 latch + C2 口径，三视口共用）。
   const image = useViewportImage(group, lumenStatus ?? LUMEN_UNAVAILABLE, lumenPreviewWidth);
@@ -322,12 +315,10 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
     );
   }
 
-  // C6：scale=1 实为「适应窗口」，并非 1:1 像素，别显示误导性的 100%。
-  const zoomLabel = scaleLabel(zoom.scale);
-
   return (
     <div
       ref={zoom.containerRef}
+      data-viewport-photo
       onWheel={zoom.bind.onWheel}
       onPointerDown={zoom.bind.onPointerDown}
       onPointerMove={zoom.bind.onPointerMove}
@@ -473,198 +464,9 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
         <ChevronRight className="w-6 h-6" aria-hidden="true" />
       </button>
 
-      {/* Floating Bottom Quick Action Bar — geometry frozen (issue #12)
-          The bar carries the app's core culling verbs, so it must never be a
-          hover-only affordance (F-02, .plan/ux-audit-2026-10-13.md:39): the
-          buttons stay reachable by Tab, and a small handle keeps the bar
-          discoverable while it rests (issue #47).
+      {/* 选片动词（星级 / 旗标 / 色标）已迁到窗口底部常驻状态栏
+          （issue #62）：视口里不再有悬浮底板、手柄或 hover 才显现的分组。 */}
 
-          #10 made the outer box change size on hover (px-3→px-4 / py-1→py-2 /
-          w-0→w-auto), which measured 497px → 753px in a real browser. A box
-          that grows under the cursor makes `:hover` flicker: this is the bug
-          #12 replaces. The rules that keep it frozen live in
-          `viewportBarStyles.ts` — read that first.
-
-          Notes specific to this call site:
-          - Hover is pure CSS: no `useState`, so a stale "left open" frame
-            (the other failure mode F-02 recorded) cannot happen.
-          - `overflow-hidden` is deliberately absent on the plate: it would
-            clip the 2px `.focus-ring` outline (index.css focus-ring).
-          - Issue #46: the plate itself is `pointer-events-auto` (the wrapper
-            keeps `pointer-events-none`, so the empty space around the bar
-            still passes clicks to the photo). There is **no** transparent
-            oversized hit layer: it painted above the buttons and swallowed
-            every click.
-          - Issue #47: at rest the whole plate is translated out of the
-            viewport; only the 4px `BAR_HANDLE` remains. It is a descendant of
-            `group/bar`, so hovering/focusing it slides the plate back.
-          - The `group/bar` host is a separate wrapper (issue #14): Tailwind
-            compiles `group-hover/bar:x` to a DESCENDANT selector, so an
-            element can never be its own group ancestor. See the root-cause
-            note in `viewportBarStyles.ts`. */}
-      <div className={BAR_GROUP_HOST}>
-        {/* 展开手柄（issue #47）：静息时唯一留在屏幕上的底栏痕迹。 */}
-        <div
-          className={BAR_HANDLE}
-          data-bar-handle
-          tabIndex={0}
-          aria-label="展开底栏工具栏"
-        />
-        <div
-          onClick={(e) => e.stopPropagation()}
-          className={BAR_PLATE}
-          data-bar-plate
-        >
-          {/* Rating Stars (1 to 5) */}
-          <div className={BAR_DIVIDER} role="group" aria-label="照片星级打分">
-            {[1, 2, 3, 4, 5].map((star) => (
-              <button
-                key={star}
-                onClick={() => onRate(group.rating === star ? 0 : star)}
-                className={`${BAR_STAR_BUTTON} ${BAR_ICONS} ${
-                  group.rating >= star
-                    ? 'text-amber-400 hover:text-amber-300'
-                    : 'text-white/60 hover:text-white'
-                }`}
-                title={`评 ${star} 星（${star}）`}
-                aria-label={`评 ${star} 星`}
-                aria-pressed={group.rating >= star}
-              >
-                <Star
-                  className={`w-4 h-4 ${group.rating >= star ? 'fill-amber-400' : ''}`}
-                  aria-hidden="true"
-                />
-              </button>
-            ))}
-          </div>
-
-          {/* Pick / Reject / Unflag */}
-          <div className={BAR_DIVIDER} role="group" aria-label="保留或淘汰标记">
-            <button
-              onClick={() => onFlag(group.flag === 'pick' ? 'none' : 'pick')}
-              className={`${BAR_BUTTON} ${BAR_ICONS} ${
-                group.flag === 'pick'
-                  ? 'bg-emerald-600/40 text-emerald-300 border border-emerald-500/50'
-                  : 'bg-transparent text-white/80 hover:bg-white/20 border border-transparent'
-              }`}
-              title="保留 (P)"
-              aria-label="标记保留 (Pick)"
-              aria-pressed={group.flag === 'pick'}
-            >
-              <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-              <span className={BAR_LABEL}>Pick</span>
-            </button>
-            <button
-              onClick={() => onFlag(group.flag === 'reject' ? 'none' : 'reject')}
-              className={`${BAR_BUTTON} ${BAR_ICONS} ${
-                group.flag === 'reject'
-                  ? 'bg-rose-600/40 text-rose-300 border border-rose-500/50'
-                  : 'bg-transparent text-white/80 hover:bg-white/20 border border-transparent'
-              }`}
-              title="淘汰 (X)"
-              aria-label="标记淘汰 (Reject)"
-              aria-pressed={group.flag === 'reject'}
-            >
-              <X className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-              <span className={BAR_LABEL}>Reject</span>
-            </button>
-          </div>
-
-          {/* 色标（SH-01）：鼠标可达的五色入口，与 Shift+1…5 同语义。 */}
-          {onLabel && (
-            <div className={BAR_DIVIDER}>
-              <LabelDots label={group.label} onSelect={onLabel} />
-            </div>
-          )}
-
-          {/* Zoom: – / readout / reset / +
-              Zoom used to live only on wheel and double-click, both of which
-              are undiscoverable and keyboard-inaccessible (F-25). */}
-          <div className={BAR_DIVIDER} role="group" aria-label="缩放控制">
-            <button
-              onClick={() => zoom.zoomBy(1 / ZOOM_STEP)}
-              disabled={zoom.scale <= ZOOM_MIN}
-              className={`${BAR_ICON_BUTTON} ${BAR_ICONS}`}
-              title="缩小"
-              aria-label="缩小"
-            >
-              <ZoomOut className="w-3.5 h-3.5" aria-hidden="true" />
-            </button>
-            {/* Zoom readout: same constant-width slot as the text labels, so
-                the value going 100% → 1000% cannot drag the plate wider. */}
-            <span
-              className={`${BAR_LABEL} font-mono tabular-nums text-[11px] text-white/80 select-none`}
-              aria-label={`当前缩放 ${zoomLabel}`}
-            >
-              {zoomLabel}
-            </span>
-            <button
-              onClick={() => zoom.zoomBy(ZOOM_STEP)}
-              disabled={zoom.scale >= ZOOM_MAX}
-              className={`${BAR_ICON_BUTTON} ${BAR_ICONS}`}
-              title="放大"
-              aria-label="放大"
-            >
-              <ZoomIn className="w-3.5 h-3.5" aria-hidden="true" />
-            </button>
-            <button
-              onClick={zoom.reset}
-              className={`${BAR_ICON_BUTTON} ${BAR_ICONS}`}
-              title={`重置缩放与平移（当前 ${zoomLabel}）`}
-              aria-label={`重置缩放与平移，当前 ${zoomLabel}`}
-            >
-              <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
-            </button>
-          </div>
-
-          {/* Tonal Adjuster Toggle */}
-          {onToggleTonalAdjuster && (
-            <button
-              onClick={onToggleTonalAdjuster}
-              className={`${BAR_BUTTON} bg-white/10 hover:bg-white/20 text-white`}
-              title="调色面板 (E)"
-              aria-label="调色面板"
-              aria-pressed={isTonalPanelOpen}
-              aria-expanded={isTonalPanelOpen}
-              aria-controls="tonal-adjuster-panel"
-            >
-              <Sliders className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-              <span className={BAR_LABEL}>调色</span>
-            </button>
-          )}
-
-          {/* Luminar AI Roundtrip */}
-          {onOpenLuminar && (
-            <button
-              onClick={onOpenLuminar}
-              disabled={isLuminarRunning}
-              className={`${BAR_BUTTON} bg-white/10 hover:bg-white/20 text-white border border-border-default disabled:opacity-40 disabled:cursor-not-allowed`}
-              title="Luminar AI 修图"
-              aria-label="在 Luminar AI 中修图"
-            >
-              <Sparkles
-                className={`w-3.5 h-3.5 shrink-0 ${isLuminarRunning ? 'animate-spin' : ''}`}
-                aria-hidden="true"
-              />
-              {/* 槽位宽度由 .bar-label 常驻给足，「运行中…」不会把盒子撑开。 */}
-              <span className={BAR_LABEL}>
-                {isLuminarRunning ? '运行中…' : 'Luminar AI'}
-              </span>
-            </button>
-          )}
-
-          {/* Open in Photoshop / External app */}
-          <button
-            onClick={onOpenExternal}
-            className={`${BAR_BUTTON} bg-white/10 hover:bg-white/20 text-white`}
-            title="外部打开 (W)"
-            aria-label="在修图或外部程序中打开"
-          >
-            <ExternalLink className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-            <span className={BAR_LABEL}>外部打开</span>
-          </button>
-        </div>
-      </div>
     </div>
   );
 };

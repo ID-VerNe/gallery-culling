@@ -52,11 +52,12 @@ describe('B8 P2 收敛（issue #18）', () => {
 
     it('BottomBar 文件名容器带 tabular-nums（切换照片整行不横向抖动）', () => {
       const bb = readSrc('src/components/BottomBar.tsx');
-      // 文件名容器是 `flex items-center gap-1.5 font-mono ... min-w-0`，审计原
-      // 证据缺 tabular-nums。取该 className 串断言含 tabular-nums。
-      const fileRow = bb.match(/flex items-center gap-1\.5 font-mono[^'"]*/);
+      const styles = readSrc('src/components/viewportBarStyles.ts');
+      // issue #62：底栏统一由 `viewportBarStyles.ts` 的 `STATUS_VALUE` 承载
+      // 「等宽 + 数字对齐」，文件名直接复用它，不再各视口各写一份。
+      expect(styles).toMatch(/STATUS_VALUE\s*=\s*'[^']*tabular-nums/);
+      const fileRow = bb.match(/className=\{`\$\{STATUS_VALUE\}[^`]*`\}/);
       expect(fileRow).not.toBeNull();
-      expect(fileRow[0]).toContain('tabular-nums');
     });
   });
 

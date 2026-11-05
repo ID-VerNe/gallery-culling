@@ -61,12 +61,16 @@ describe('材质三档令牌（issue #18 · PC-1 + PC-3）', () => {
     expect(sc).toContain('gap-0.5 bg-background-surface rounded text-[11px]');
   });
 
-  it('Preview 的 Pick/Reject 静息走 bg-transparent，与 BeforeAfter 同动词同材质', () => {
-    // 审计 PC-1：同位 Pick/Reject 在 BeforeAfter 是 bg-transparent、在 Preview 是
-    // bg-white/10 —— 同一动词两个视口两种材质。收敛 Preview 到 bg-transparent。
-    const pv = readSrc('src/components/PreviewViewport.tsx');
-    expect(pv).toContain(
-      'bg-transparent text-white/80 hover:bg-white/20 border border-transparent',
+  it('状态栏的 Pick/Reject 静息无底色、选中才叠语义色（三视口同动词同材质）', () => {
+    // 审计 PC-1：同一动词在不同视口用了两种材质。issue #62 把三个视口的选片
+    // 动作统一收到窗口底栏后，静息只保留 `STATUS_BUTTON` 基底（无 bg → 透明），
+    // 选中态才叠 emerald / rose，不再出现 bg-white/10 的静息底色。
+    const bb = readSrc('src/components/BottomBar.tsx');
+    expect(bb).toMatch(
+      /`\$\{STATUS_BUTTON\} \$\{group\.flag === 'pick' \? 'bg-emerald-600\/25 text-emerald-300' : ''\}`/,
+    );
+    expect(bb).toMatch(
+      /`\$\{STATUS_BUTTON\} \$\{group\.flag === 'reject' \? 'bg-rose-600\/25 text-rose-300' : ''\}`/,
     );
   });
 });

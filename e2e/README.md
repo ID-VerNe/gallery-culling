@@ -19,7 +19,7 @@ npm run e2e:rust      # Rust 单测（cargo test --lib）
 npm run e2e:render    # 真窗口：调色成片导出
 npm run e2e:preset    # 真窗口：LUMEN 预设 + 自动调色
 npm run e2e:detail    # 真窗口：RAW-only 1:1 细节（需要真实 ARW，见下）
-npm run e2e:ui        # 真窗口：底栏命中 / 静息收起 / 左手别名（issue #53）
+npm run e2e:ui        # 真窗口：状态栏常驻 / 按钮命中 / 左手别名（issue #53 → #62）
 npm run e2e           # 全档串起来（unit + rust + render + ui），全绿才算过
 ```
 
@@ -76,15 +76,18 @@ Tauri 的 WebView2 不把 DOM 暴露给 Windows UI Automation，所以界面断�
 `e2e/run.mjs` + `suites/01-08` 是旧的 Playwright 路线，本机只会白等到超时，
 保留只为在 CDP 正常的机器上仍可用。
 
-## `ui-contract` 覆盖什么（issue #53）
+## `ui-contract` 覆盖什么（issue #53 · issue #62 改写）
 
-底栏的三类契约只有真实浏览器能证伪，vitest（jsdom）只能看 `className`：
+底栏的几类契约只有真实浏览器能证伪，vitest（jsdom）只能看 `className`：
 
-- **静息收起**：`[data-bar-plate]` 的 `getBoundingClientRect().top >= 照片区定位容器 bottom - 1`
-  且 `opacity <= 0.05`；展开手柄仍在视口内、`tabIndex=0`。基准刻意不取
-  `window.innerHeight`：照片区下方还有 36px 窗口底栏（实测容器 bottom=864、innerHeight=900），
-  `translate-y-[calc(100%_+_1rem)]` 只把底板停到容器下沿，拿窗口高度当基准会把「已腾出照片区」误判成还在视口里。
-- **按钮命中**：聚焦手柄唤回底板后，对每个启用按钮的中心做 `document.elementFromPoint`，
+- **常驻与占位**（#62 替代 #47 的「静息整条移出视口」）：`[data-status-bar]` 必须是
+  文档流元素，`top >= [data-viewport-photo] 的 bottom - 1`，`opacity >= 0.95`，
+  且落在窗口底部之内；旧的 `[data-bar-handle]` **必须不存在**（旧方案被加回来就红）。
+  照片区底部内侧 18px 处做 `elementFromPoint` 探针，命中不得是状态栏 —— 这是
+  「照片区真的缩短了、没被盖住」的直接证据。
+- **键盘与几何**：状态栏首个星级按钮可聚焦；聚焦前后 `top` 差 ≤1px（不再有
+  「唤回」位移，#47 的可发现性问题在常驻方案下不再成立）。
+- **按钮命中**：对每个启用按钮的中心做 `document.elementFromPoint`，
   断言命中的是按钮自身或其后代（透明命中层 / `pointer-events:none` 继承都会在这里断）。
 - **左手别名**：同一张照片上 `F`↔`P`、`R`↔`0`、`T`↔`Y`、`Shift+1…5`↔`6–9`/`Shift+6`
   产生同一组 `aria-pressed` 真值；`V`↔`\` 按住时读的是「正在查看原片」横幅，

@@ -464,26 +464,6 @@ async function scenarioRenderExport(
   raw(`[${el()}] 场景结束`);
 }
 
-/**
- * 读主视口底栏底板的**真实布局**（`getBoundingClientRect` 已含 transform）。
- *
- * jsdom 不跑层叠与布局，`PreviewViewport.test.tsx` 只能断言 class 串里「有没有
- * 那个类」；这里读的是浏览器算出来的矩形与透明度 —— issue #47 的「整条移出
- * 视口」只有这一步能证明。
- */
-interface BarPlateState {
-  top: number;
-  bottom: number;
-  opacity: number;
-}
-
-function readBarPlateState(): BarPlateState | null {
-  const plate = document.querySelector<HTMLElement>('[data-bar-plate]');
-  if (!plate) return null;
-  const r = plate.getBoundingClientRect();
-  return { top: r.top, bottom: r.bottom, opacity: Number(getComputedStyle(plate).opacity) };
-}
-
 /** 按 DOM 顺序读一组元素 `aria-pressed` 快照（`1`/`0` 串，便于整体比较）。 */
 function readPressed(selector: string): string {
   return Array.from(document.querySelectorAll<HTMLElement>(selector))
@@ -497,17 +477,19 @@ const LABEL_GROUP = '[aria-label="照片色标"] button';
 const BEFORE_AFTER_BTN = 'button[aria-label="本张照片前后对照 (快捷键 T)"]';
 
 /**
- * 场景：主视口底栏的可交互契约（issue #53）。
+ * 场景：主视口状态栏的可交互契约（issue #53 · issue #62 改写）。
  *
  * 为什么需要它：#46（按钮点不动）、#47（静息没整条收起）、#45（左手别名）
  * 都是**只在真实浏览器里成立**的契约 —— 命中、层叠、几何。既有 vitest 用
- * jsdom，只能断言 `className` 里有没有某个类（`PreviewViewport.test.tsx:903`），
- * 类在不在 ≠ 浏览器里矩形在不在视口外、按钮能不能被 `elementFromPoint` 命中。
+ * jsdom，只能断言 `className` 里有没有某个类，类在不在 ≠ 浏览器里矩形在不在
+ * 视口外、按钮能不能被 `elementFromPoint` 命中。
  *
- * 三段断言：
- *   U1–U4  静息：底板整条在视口外 + 透明；手柄在视口内且可聚焦（#47）
- *   U5–U8  唤回：聚焦手柄后底板回正；逐按钮中心 `elementFromPoint` 命中按钮自身（#46）
- *   U9–U14 只认左手键：左手入口生效、右手旧键按下后状态不变（#61）
+ * issue #62 把悬浮底栏换成了文档流常驻状态栏，旧的「静息移出视口 + 手柄唤回」
+ * 断言随之失效，但 #46/#47 的回归保护不能删掉，改成语义等价的三段：
+ *   U1–U6  常驻：状态栏在照片区下方（不遮挡）、恒可见、手柄不存在、
+ *          按钮可键盘聚焦、聚焦前后几何零位移
+ *   U7–U8  命中：每个按钮中心 `elementFromPoint` 命中按钮自身（#46）
+ *   U9–U14 左手别名与旧键在同一张照片上产生同一状态（#61，原 #45）
  *
  * 明确不做：#49 更新装完不自动重启依赖 NSIS 安装器与提权进程，应用内 e2e
  * 驱动不到，继续留人工回签。
@@ -519,99 +501,101 @@ async function scenarioUiContract(jpgFolder: string, el: () => string) {
 
   const mounted = await waitFor(
     () => {
-      const plate = document.querySelector('[data-bar-plate]');
-      const handle = document.querySelector('[data-bar-handle]');
-      return plate && handle ? true : null;
+      const bar = document.querySelector('[data-status-bar]');
+      const pane = document.querySelector('[data-status-pane]');
+      return bar && pane ? true : null;
     },
     20_000,
     300,
   );
-  raw(`[${el()}] >>> 断言U0 单图视口底栏挂载 = ${!!mounted}`);
+  raw(`[${el()}] >>> 断言U0 窗口底部状态栏挂载 = ${!!mounted}`);
   if (!mounted) {
     raw(`[${el()}] body 快照: ${document.body.innerText.replace(/\s+/g, ' ').slice(0, 500)}`);
     return;
   }
-  // 200ms 过渡 + 视口图片首帧
+  // 视口图片首帧 + 字体回落后再量几何。
   await sleep(800);
 
-  // ── 静息：整条移出照片区（#47）────────────────────────
-  // 参照物必须是底栏的定位容器（照片区），不是 window.innerHeight：
-  // 容器下方还有 36px 的窗口底栏，`translate-y-[calc(100%+1rem)]` 把底板
-  // 停在容器下沿（实测 top=864 / 容器 bottom=864 / innerHeight=900）。
-  // 拿 innerHeight 当基准会把「已腾出照片区」误判成「还在视口里」。
-  const plateEl = document.querySelector<HTMLElement>('[data-bar-plate]');
-  const viewportBox = plateEl?.parentElement?.offsetParent as HTMLElement | null;
-  const viewportBottom = viewportBox
-    ? viewportBox.getBoundingClientRect().bottom
-    : window.innerHeight;
-
-  const rest = readBarPlateState();
+  // ── 常驻：文档流占位、零遮挡（替代 #47 的「静息移出视口」几何）──
+  // 旧方案（#47）把整条底板 translate 出视口，只有 4px 手柄留在屏幕上；
+  // 新方案的等价保护是「状态栏在照片区下方，且照片区底部不被它盖住」。
+  const barEl = document.querySelector<HTMLElement>('[data-status-bar]');
+  const photoEl = document.querySelector<HTMLElement>('[data-viewport-photo]');
+  if (!barEl || !photoEl) {
+    raw(`[${el()}] 状态栏或照片区锚点缺失，后续断言中止`);
+    return;
+  }
+  const barRect = barEl.getBoundingClientRect();
+  const photoRect = photoEl.getBoundingClientRect();
   raw(
-    `[${el()}] 静息底板 top=${rest ? rest.top.toFixed(1) : '?'} bottom=${
-      rest ? rest.bottom.toFixed(1) : '?'
-    } opacity=${rest ? rest.opacity.toFixed(3) : '?'} 照片区bottom=${viewportBottom.toFixed(
+    `[${el()}] 状态栏 top=${barRect.top.toFixed(1)} bottom=${barRect.bottom.toFixed(
+      1,
+    )} h=${barRect.height.toFixed(1)} 照片区bottom=${photoRect.bottom.toFixed(
       1,
     )} innerHeight=${window.innerHeight}`,
   );
   raw(
-    `[${el()}] >>> 断言U1 静息底板整条落在照片区下沿之外 = ${
-      !!rest && rest.top >= viewportBottom - 1
+    `[${el()}] >>> 断言U1 状态栏在照片区下方且不遮挡 = ${barRect.top >= photoRect.bottom - 1}`,
+  );
+
+  const barOpacity = Number(getComputedStyle(barEl).opacity);
+  raw(
+    `[${el()}] >>> 断言U2 状态栏常驻可见（不依赖 hover/手柄唤回） = ${
+      barOpacity >= 0.95 && barRect.height > 0
     }`,
   );
-  raw(`[${el()}] >>> 断言U2 静息底板不可见 = ${!!rest && rest.opacity <= 0.05}`);
 
-  // 「腾出空间」的直接证据：照片区底部内侧一点不能被底栏吞掉。
-  // 探针取照片区下沿往上 18px —— 底栏静止时高度约 36px，若只挪了几像素
-  // （#47 的旧行为），这 18px 仍会被透明底板盖住，U2b 就会红。
-  const probeY = viewportBottom - 18;
+  // 「腾出空间」的直接证据：照片区底部内侧一点不能被状态栏吞掉。
+  const probeY = photoRect.bottom - 18;
   const probe = document.elementFromPoint(window.innerWidth / 2, probeY);
-  const probeHitsPlate = !!(probe && plateEl?.contains(probe));
+  const probeHitsBar = !!(probe && barEl.contains(probe));
   raw(
     `[${el()}] 照片区底部探针 y=${probeY.toFixed(1)} 命中=${
       probe ? probe.tagName : 'null'
     }`,
   );
-  raw(`[${el()}] >>> 断言U2b 静息底板不拦截照片区点击 = ${!probeHitsPlate}`);
+  raw(`[${el()}] >>> 断言U2b 状态栏不拦截照片区点击 = ${!probeHitsBar}`);
 
+  // #47 的 4px 手柄已随悬浮方案一起删除（issue #62）。这里断言它**不存在**，
+  // 而不是把断言删掉 —— 旧方案若被谁偷偷加回来，U3 立刻红。
   const handle = document.querySelector<HTMLElement>('[data-bar-handle]');
-  const handleRect = handle?.getBoundingClientRect();
-  raw(
-    `[${el()}] 手柄 top=${handleRect ? handleRect.top.toFixed(1) : '?'} h=${
-      handleRect ? handleRect.height.toFixed(1) : '?'
-    } tabIndex=${handle?.tabIndex ?? '?'}`,
+  raw(`[${el()}] >>> 断言U3 旧悬浮手柄已移除 = ${!handle}`);
+
+  // 键盘可达：状态栏的星级按钮（旧底栏的等价入口）必须能被 Tab/焦点触达。
+  const firstStar = document.querySelector<HTMLButtonElement>(
+    '[aria-label="照片星级打分"] button',
   );
+  firstStar?.focus();
   raw(
-    `[${el()}] >>> 断言U3 静息手柄留在视口内 = ${
-      !!handleRect &&
-      handleRect.height > 0 &&
-      handleRect.top < window.innerHeight &&
-      handleRect.bottom > 0
+    `[${el()}] >>> 断言U4 状态栏按钮可键盘聚焦 = ${
+      !!firstStar && document.activeElement === firstStar
     }`,
   );
-  raw(`[${el()}] >>> 断言U4 手柄可聚焦 = ${handle?.tabIndex === 0}`);
-  if (!handle) return;
 
-  // ── 聚焦手柄：底板回正（#47 的可发现性入口）──────────
-  handle.focus();
-  await sleep(600);
-  const shown = readBarPlateState();
+  // 常驻占位：状态栏落在窗口底部之内，而不是被裁掉或浮在照片上。
   raw(
-    `[${el()}] 唤回后 top=${shown ? shown.top.toFixed(1) : '?'} opacity=${
-      shown ? shown.opacity.toFixed(3) : '?'
-    } activeElement=${document.activeElement === handle}`,
+    `[${el()}] >>> 断言U5 状态栏在窗口底部之内 = ${
+      barRect.bottom <= window.innerHeight + 1 && barRect.top < window.innerHeight
+    }`,
   );
-  // 「唤回」必须是相对静息位置的回退，而不是「只要还在视口里」——
-  // 静息态本身也满足 top < innerHeight，单看它证明不了底板被唤回。
-  const revealed = !!rest && !!shown && shown.top < rest.top - 1 && shown.bottom > 0;
+
+  // #47 的等价保护：聚焦前后几何零位移 —— 状态栏不再有「唤回」位移。
+  firstStar?.blur();
+  const restTop = barRect.top;
+  firstStar?.focus();
+  await sleep(300);
+  const focusedRect = barEl.getBoundingClientRect();
   raw(
-    `[${el()}] >>> 断言U5 聚焦手柄相对静息上移 = ${revealed}`,
+    `[${el()}] 聚焦前后 top=${restTop.toFixed(1)}→${focusedRect.top.toFixed(1)}`,
   );
-  raw(`[${el()}] >>> 断言U6 唤回后底板可见 = ${!!shown && shown.opacity >= 0.95}`);
+  raw(
+    `[${el()}] >>> 断言U6 聚焦不改变状态栏几何 = ${Math.abs(focusedRect.top - restTop) <= 1}`,
+  );
 
   // ── 命中：每个按钮中心必须命中按钮自身（#46）─────────
-  const plate = document.querySelector<HTMLElement>('[data-bar-plate]');
-  const buttons = plate
-    ? Array.from(plate.querySelectorAll<HTMLButtonElement>('button')).filter((btn) => {
+  const bar = document.querySelector<HTMLElement>('[data-status-bar]');
+  const buttons = bar
+    ? Array.from(bar.querySelectorAll<HTMLButtonElement>('button')).filter((btn) => {
         const r = btn.getBoundingClientRect();
         return !btn.disabled && r.width > 0 && r.height > 0;
       })

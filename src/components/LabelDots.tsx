@@ -7,7 +7,7 @@ import {
   LABEL_SHORTCUTS,
   isColorLabel,
 } from '../utils/labels';
-import { BAR_ICONS } from './viewportBarStyles';
+import { STATUS_DOT_BUTTON } from './viewportBarStyles';
 
 interface LabelDotsProps {
   /** 当前色标；后端字段是字符串，非法值按「未设置」处理。 */
@@ -51,9 +51,7 @@ export const LabelDots: React.FC<LabelDotsProps> = ({ label, onSelect, scopeName
             key={color}
             type="button"
             onClick={() => onSelect(color)}
-            className={`focus-ring tap-target p-1 rounded-full transition-colors ${BAR_ICONS} ${
-              pressed ? 'ring-2 ring-white/80' : ''
-            }`}
+            className={`${STATUS_DOT_BUTTON} ${pressed ? 'ring-2 ring-white/80' : ''}`}
             title={text}
             aria-label={accessibleName}
             aria-pressed={pressed}

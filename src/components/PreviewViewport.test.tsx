@@ -36,9 +36,6 @@ function renderViewport() {
       group={group}
       onPrev={vi.fn()}
       onNext={vi.fn()}
-      onRate={vi.fn()}
-      onFlag={vi.fn()}
-      onOpenExternal={vi.fn()}
     />,
   );
   return { wheelHost: container.firstElementChild as HTMLElement, container };
@@ -104,9 +101,7 @@ describe('PreviewViewport —— RAW-only 图片解析（C2）', () => {
         group={rawGroup}
         onPrev={vi.fn()}
         onNext={vi.fn()}
-        onRate={vi.fn()}
-        onFlag={vi.fn()}
-        onOpenExternal={vi.fn()}
+
         lumenStatus={lumenStatus}
       />,
     );
@@ -250,9 +245,7 @@ describe('PreviewViewport —— 1:1 细节（FR-05）', () => {
         group={group}
         onPrev={vi.fn()}
         onNext={vi.fn()}
-        onRate={vi.fn()}
-        onFlag={vi.fn()}
-        onOpenExternal={vi.fn()}
+
         lumenStatus={status}
         oneToOneRef={ref}
       />,
@@ -607,376 +600,66 @@ describe('PreviewViewport —— 1:1 细节（FR-05）', () => {
 });
 
 /**
- * 底栏几何契约（issue #12，替代 #10）。
+ * 常驻状态栏替代悬浮底栏（issue #62）。
  *
- * #10 的实现全绿但不可用，原因是一个 jsdom 永远测不到的层：
- * 底板挂 `group-hover/bar:px-4 py-2`、标签 `w-0 → w-auto`，悬停时外接盒
- * 从 497px 跳到 753px（真浏览器实测）。盒子一变大，指针就可能「掉到盒外」
- * → `:hover` 失效 → 收起 → 指针又落回 → 再展开，这就是用户看到的闪烁。
- *
- * 所以本组断言的口径变了：**不再测「折叠成什么样」，而是测「什么不允许出现」**。
- * jsdom 不跑 CSS 层叠，但 className 是契约的唯一载体，全部锁在类名上：
- *
- *  1. 底板与任何分组，className 里**不得出现** `group-hover/bar:` /
- *     `group-focus-within/bar:` 前缀的 padding / width / height / scale 类 ——
- *     这类变体会让外接盒尺寸随悬停变化，也就是本 issue 的根因。
- *  2. 文字标签必须标了 `bar-label`（槽位宽度由 CSS 常驻分配）且带
- *     `whitespace-nowrap`（否则 `w-0` 只压宽度不阻止换行，中文会被断成
- *     竖排方块 —— 实测静息态按钮高 87px 就是这么来的）。
- *  3. 静息态无底色：`bg-background-base/90` 只出现在变体上。
- *  4. 悬停热区是**独立的一层**（透明命中层），不靠底板自身撑开尺寸去接指针。
+ * #47 把静息态做成整条 `translate-y` 移出视口、只剩 48×4 手柄，用户重启后
+ * 以为「菜单栏消失了」。现在底栏统一到窗口底部的文档流状态栏（`BottomBar`），
+ * 视口里**不允许**再出现底板 / 手柄 / 旧分组，否则就是双份控件与永久遮挡。
  */
-describe('PreviewViewport —— 底栏几何冻结（issue #12）', () => {
-  const BAR_LABELS = ['Pick', 'Reject', '调色', 'Luminar AI', '外部打开'];
-
-  /** 会让外接盒尺寸随悬停变化的前缀（本 issue 的根因，一条都不许有）。 */
-  const GEOMETRY_PREFIXES = ['group-hover/bar:', 'group-focus-within/bar:'];
-
-  /** 变体前缀 + 这些属性 = 尺寸会动。颜色/透明度/阴影不在禁止之列。 */
-  const GEOMETRY_UTILITIES = [
-    /^px-/,
-    /^py-/,
-    /^p-/,
-    /^pl-/,
-    /^pr-/,
-    /^pt-/,
-    /^pb-/,
-    /^w-/,
-    /^h-/,
-    /^min-w-/,
-    /^min-h-/,
-    /^max-w-/,
-    /^max-h-/,
-    /^gap-/,
-    // `translate-*` / `scale-*` 是有意放行的：它们走合成层、不参与布局，
-    // 且是「标签在常驻槽位里淡入」的唯一入场手法。真正要禁的是会改变
-    // 外接盒的行内尺寸（上面这些）。万一将来改用 translate 做位移式展开，
-    // 真浏览器几何验收（静息 == 悬停，逐像素）会兜住。
-    /^text-/,
-    /^leading-/,
-    /^tracking-/,
-  ];
-
-  function classTokens(el: Element): string[] {
-    return (el.getAttribute('class') ?? '').split(/\s+/).filter(Boolean);
-  }
-
-  /** 找出 className 里所有「变体前缀 + 几何工具类」的组合。 */
-  function geometryLeaks(el: Element): string[] {
-    return classTokens(el).filter((token) => {
-      const prefix = GEOMETRY_PREFIXES.find((p) => token.startsWith(p));
-      if (!prefix) return false;
-      const utility = token.slice(prefix.length);
-      return GEOMETRY_UTILITIES.some((re) => re.test(utility));
-    });
-  }
-
-  /**
-   * 「调色」与「Luminar AI」只在对应回调传入时才渲染（App 里恒传，这里默认漏了）。
-   * 几何口径必须覆盖全部五类标签，所以本组用例自己把两个回调补齐。
-   */
-  function renderFullBar() {
-    render(
-      <PreviewViewport
-        group={group}
-        onPrev={vi.fn()}
-        onNext={vi.fn()}
-        onRate={vi.fn()}
-        onFlag={vi.fn()}
-        onOpenExternal={vi.fn()}
-        onOpenLuminar={vi.fn()}
-        onToggleTonalAdjuster={vi.fn()}
-      />,
+describe('PreviewViewport —— 不再有悬浮底栏（issue #62）', () => {
+  function renderViewport() {
+    const { container } = render(
+      <PreviewViewport group={group} onPrev={vi.fn()} onNext={vi.fn()} />,
     );
-    return { container: document.body };
+    return container;
   }
 
-  /**
-   * 底栏分组宿主：带 `group/bar` 命名组的那一层。
-   *
-   * 注意它现在是**包裹层**而不是底板本身（issue #14 根因）—— 见下面的
-   * 「group/bar 必须是变体元素的祖先」用例。几何断言瞄准的仍是底板。
-   */
-  function groupHostOf(container: HTMLElement): HTMLElement {
-    const anchor = container.querySelector('[aria-label="照片星级打分"]');
-    expect(anchor).not.toBeNull();
-    const host = anchor!.closest('div[class*="group/bar"]');
-    expect(host, '底栏应带 group/bar 命名组').not.toBeNull();
-    return host as HTMLElement;
-  }
+  it('视口内没有悬浮底板、手柄与旧底栏分组', () => {
+    const container = renderViewport();
 
-  /** 底栏本体（底板）：分组宿主的直接子层，命中层所在的这一层。 */
-  function barOf(container: HTMLElement): HTMLElement {
-    const host = groupHostOf(container);
-    const plate = host.querySelector('[data-bar-plate]');
-    expect(plate, '底栏底板应为分组宿主的子层').toBeTruthy();
-    expect(plate).not.toBe(host);
-    return plate as HTMLElement;
-  }
-
-  it('底栏本体：任何悬停/聚焦变体都不改尺寸（只允许颜色、透明度、阴影）', () => {
-    const { container } = renderFullBar();
-    const bar = barOf(container);
-
-    expect(geometryLeaks(bar)).toEqual([]);
-    // 过渡属性里也不能带 padding，否则尺寸一变就有 150ms 的「拉扯」观感。
-    expect(bar.className).not.toMatch(/transition-\[[^\]]*padding[^\]]*\]/);
+    expect(container.querySelector('[data-bar-plate]')).toBeNull();
+    expect(container.querySelector('[data-bar-handle]')).toBeNull();
+    expect(container.querySelector('[aria-label="照片星级打分"]')).toBeNull();
+    expect(container.querySelector('[aria-label="照片色标"]')).toBeNull();
+    expect(container.querySelector('[data-bar-hit-area]')).toBeNull();
   });
 
-  it('底栏内部每个元素都不得用 group-hover/bar: 改几何（含分隔线的 pr-3）', () => {
-    const { container } = renderFullBar();
-    const bar = barOf(container);
+  it('不留下 hover / 位移 / 命中层那套旧机制', () => {
+    const container = renderViewport();
+    const root = container.querySelector('[data-viewport-photo]');
 
-    const leaks: string[] = [];
-    bar.querySelectorAll<HTMLElement>('*').forEach((el) => {
-      for (const token of geometryLeaks(el)) leaks.push(`${el.tagName}:${token}`);
-    });
-    expect(leaks).toEqual([]);
+    expect(root, '照片区需要坐标锚点供 e2e 量边界').not.toBeNull();
+    expect(container.querySelectorAll('[class*="group-hover"]')).toHaveLength(0);
+    // 允许点击的覆盖层只剩「上一张 / 下一张」两个导航按钮；旧底栏那套
+    // 透明命中层（#46 的元凶）必须不存在。
+    expect(container.querySelectorAll('[class*="pointer-events-auto"]')).toHaveLength(2);
+    expect(container.querySelectorAll('[data-bar-hit-area]')).toHaveLength(0);
   });
 
-  it('文字标签常驻槽位且不换行：w-0/w-auto 已消失，whitespace-nowrap 必须在', () => {
-    const { container } = renderFullBar();
-    const bar = barOf(container);
-
-    for (const label of BAR_LABELS) {
-      // 只认按钮里的可见标签（<title> 里也有同名文案，不能用父节点反推）。
-      const span = Array.from(bar.querySelectorAll('button > span')).find(
-        (el) => el.textContent === label,
-      );
-      expect(span, `底栏应有「${label}」标签`).toBeDefined();
-      const called = classTokens(span!);
-
-      // w-0 + overflow-hidden 不阻止换行，正是静息态被撑成竖排方块的根因。
-      expect(called, `「${label}」不得再用零宽折叠`).not.toContain('w-0');
-      expect(span!.className).not.toContain('group-hover/bar:w-auto');
-      expect(called, `「${label}」必须禁止换行`).toContain('whitespace-nowrap');
-      // 槽位宽度由 CSS 常驻分配（.bar-label），折叠只动 opacity/transform。
-      expect(called, `「${label}」应标 bar-label 槽位`).toContain('bar-label');
-    }
-  });
-
-  it('静息态无底色：底板底色与阴影只在变体上出现', () => {
-    const { container } = renderFullBar();
-    const called = classTokens(barOf(container));
-
-    // `group/bar` 现在挂在外层宿主上（issue #14），底板只剩变体类。
-    expect(classTokens(groupHostOf(container))).toContain('group/bar');
-    expect(called).not.toContain('group/bar');
-    expect(called).not.toContain('bg-background-base/90');
-    expect(called).not.toContain('shadow-2xl');
-    expect(called).not.toContain('border-white/15');
-    expect(called).toContain('group-hover/bar:bg-background-base/90');
-    expect(called).toContain('group-focus-within/bar:bg-background-base/90');
-    expect(called).toContain('group-hover/bar:shadow-2xl');
-  });
-
-  /**
-   * issue #46 的另一半：底板自己必须是 `pointer-events-auto`。
-   * `pointer-events` 可继承，底板一旦 `none`，内部所有按钮都是 `none`。
-   */
-  it('底板必须能接点击：pointer-events-auto 常驻、不得 none（issue #46）', () => {
-    const { container } = renderFullBar();
-    const called = classTokens(barOf(container));
-
-    expect(called, '底板不得把 none 继承给按钮').not.toContain('pointer-events-none');
-    expect(called, '底板必须接收点击').toContain('pointer-events-auto');
-  });
-
-  /**
-   * issue #46 的根因防回归：不允许存在任何盖在按钮之上的 `pointer-events-auto`
-   * 空层。透明的层看不见，但会接走点击（`elementFromPoint` 命中的是它）。
-   */
-  it('底栏内不存在会吞点击的自动命中层（issue #46）', () => {
-    const { container } = renderFullBar();
-    const bar = barOf(container);
-
-    expect(bar.querySelector('[data-bar-hit-area]')).toBeNull();
-    const autoEmptyLayers = Array.from(bar.querySelectorAll<HTMLElement>('[aria-hidden="true"]'))
-      .filter((el) => classTokens(el).includes('pointer-events-auto'));
-    expect(autoEmptyLayers, '透明命中层不得再挂 pointer-events-auto').toEqual([]);
-  });
-
-  it('可访问名不依赖可见文字：折叠只影响视觉，不影响无障碍名', () => {
-    renderFullBar();
-    expect(screen.getByLabelText('标记保留 (Pick)')).toBeInTheDocument();
-    expect(screen.getByLabelText('标记淘汰 (Reject)')).toBeInTheDocument();
-    expect(screen.getByLabelText('调色面板')).toBeInTheDocument();
-    expect(screen.getByLabelText('在 Luminar AI 中修图')).toBeInTheDocument();
-    expect(screen.getByLabelText('在修图或外部程序中打开')).toBeInTheDocument();
-  });
-
-  it('星标不再用 hover 改尺寸（原来 hover:scale-125 会溢出 24px 命中盒）', () => {
-    const { container } = renderFullBar();
-    const bar = barOf(container);
-    const stars = bar.querySelectorAll('[aria-label^="评 "]');
-
-    expect(stars).toHaveLength(5);
-    stars.forEach((star) => {
-      expect(star.className, '星标不得缩放').not.toContain('hover:scale');
-      // 24×24 保底（WCAG 2.2 SC 2.5.8）要留着。
-      expect(star.className).toContain('tap-target');
-    });
-  });
-});
-
-/**
- * 底栏视觉层级（issue #14）。
- *
- * #12 只把**文字**收了起来，图标与底板盒子都还是常驻绘制，用户看到的是
- * 「一条永远在的工具条」，等于没隐藏。本组钉住三件事：
- *
- * 1. 整条 bar 静息时下沉 4px、悬停回到 0 —— 位移走 `translate`，不重排，
- *    所以 #12 的几何冻结不受影响（上一组用例仍在跑，是交叉验证）；
- * 2. 图标静息压到半透明（不是 0：F-02 要求核心动词可发现）；
- * 3. 命中层纯透明，不再自绘 3% 白（那是悬停瞬间多出来的一层「闪」）。
- */
-describe('PreviewViewport —— 底栏视觉层级（issue #14）', () => {
-  function renderFullBar() {
-    render(
-      <PreviewViewport
-        group={group}
-        onPrev={vi.fn()}
-        onNext={vi.fn()}
-        onRate={vi.fn()}
-        onFlag={vi.fn()}
-        onOpenExternal={vi.fn()}
-        onOpenLuminar={vi.fn()}
-        onToggleTonalAdjuster={vi.fn()}
-      />,
+  it('滚轮缩放不受影响（状态栏改造只搬控件，不动几何）', () => {
+    const { container } = render(
+      <PreviewViewport group={group} onPrev={vi.fn()} onNext={vi.fn()} />,
     );
-    return { container: document.body };
-  }
+    const wheelHost = container.firstElementChild as HTMLElement;
+    const img = container.querySelector('img') as HTMLImageElement;
 
-  function groupHostOf(container: HTMLElement): HTMLElement {
-    const anchor = container.querySelector('[aria-label="照片星级打分"]');
-    const host = anchor?.closest('div[class*="group/bar"]');
-    expect(host, '底栏应带 group/bar 命名组').toBeTruthy();
-    return host as HTMLElement;
-  }
+    fireEvent.wheel(wheelHost, { clientX: 600, clientY: 400, deltaY: -100 });
+    expect(img.style.transform).toContain('scale(1.25)');
+  });
 
-  function barOf(container: HTMLElement): HTMLElement {
-    const host = groupHostOf(container);
-    const plate = host.querySelector('[data-bar-plate]');
-    expect(plate, '底栏底板应为分组宿主的子层').toBeTruthy();
-    return plate as HTMLElement;
-  }
-
-  function tokens(el: Element): string[] {
-    return (el.getAttribute('class') ?? '').split(/\s+/).filter(Boolean);
-  }
-
-  /**
-   * 根因防回归（issue #14）。
-   *
-   * Tailwind 把 `group-hover/bar:x` 编译成**后代选择器**
-   * `.group\/bar:hover .group-hover\/bar\:x`。元素不可能是自己的祖先，
-   * 所以只要 `group/bar` 和变体类挂在同一个元素上，那 8 条规则**一条都不
-   * 命中** —— 而 jsdom 不跑层叠、原先的 className 断言也照样全绿。
-   *
-   * 这条用例不测「长什么样」，只测「结构与选择器语义一致」：带 `group/bar`
-   * 的元素必须是带 `group-hover/bar:` 变体的那个元素的**严格祖先**。
-   */
-  it('group/bar 必须是变体元素的严格祖先（后代选择器不会把自身当祖先）', () => {
-    const { container } = renderFullBar();
-    const host = groupHostOf(container);
-    const variantEls = Array.from(
-      container.querySelectorAll('[class*="group-hover/bar:"], [class*="group-focus-within/bar:"]'),
+  it('缩放能力通过 onZoomApi 交给宿主状态栏', () => {
+    const onZoomApi = vi.fn();
+    const { unmount } = render(
+      <PreviewViewport group={group} onPrev={vi.fn()} onNext={vi.fn()} onZoomApi={onZoomApi} />,
     );
+    expect(onZoomApi).toHaveBeenCalled();
+    const calls = onZoomApi.mock.calls;
+    const api = calls[calls.length - 1]?.[0];
+    expect(api?.scale).toBe(1);
+    expect(typeof api?.zoomBy).toBe('function');
+    expect(typeof api?.reset).toBe('function');
 
-    expect(variantEls.length, '底栏应存在悬停/聚焦变体').toBeGreaterThan(0);
-
-    for (const el of variantEls) {
-      expect(
-        el.matches('[class*="group/bar"]'),
-        `${(el.getAttribute('class') ?? '').slice(0, 60)} 不得同时挂 group/bar`,
-      ).toBe(false);
-      expect(
-        host.contains(el) && host !== el,
-        '带变体的元素必须落在 group/bar 宿主的子树内',
-      ).toBe(true);
-    }
-
-    // 宿主自己就是那个严格的祖先：底板是它的子层。
-    expect(barOf(container).parentElement).toBe(host);
-  });
-
-  it('整条 bar 静息移出视口、悬停/聚焦回正（issue #47 替代 #14 的 4px 下沉）', () => {
-    const { container } = renderFullBar();
-    const called = tokens(barOf(container));
-
-    // 静息必须整条移出：只收文字会让容器/图标/槽位继续遮挡照片（issue #47）。
-    expect(called, '静息应整条移出视口').toContain('translate-y-[calc(100%_+_1rem)]');
-    expect(called, '静息应不可见').toContain('opacity-0');
-    expect(called, '旧的 4px 下沉必须消失').not.toContain('translate-y-1');
-    expect(called, '悬停应回到原位').toContain('group-hover/bar:translate-y-0');
-    expect(called, '聚焦也应回到原位').toContain('group-focus-within/bar:translate-y-0');
-    expect(called, '悬停应恢复可见').toContain('group-hover/bar:opacity-100');
-    expect(called, '聚焦也应恢复可见').toContain('group-focus-within/bar:opacity-100');
-    // 位移式浮现绝不能用 scale：它会连动命中层并放大像素边界。
-    expect(barOf(container).className).not.toMatch(/group-(hover|focus-within)\/bar:scale-/);
-  });
-
-  it('图标静息半透明、悬停全亮：用 .bar-icons 统一承载，不是 0（可发现性）', () => {
-    const { container } = renderFullBar();
-    const bar = barOf(container);
-    const star = bar.querySelector('[aria-label="评 1 星"]')!;
-
-    expect(tokens(star), '星标应挂 bar-icons').toContain('bar-icons');
-    // 半透明而非全隐：静息态仍要能看出「这里有一排控件」。
-    expect(star.className).not.toContain('opacity-0');
-    // 取样足够多的按钮，确认不是只给星标挂了。
-    const withIcons = bar.querySelectorAll('[class*="bar-icons"]');
-    expect(withIcons.length).toBeGreaterThanOrEqual(8);
-  });
-
-  it('静息保留可聚焦的展开手柄，且展开后底板盖住它（issue #47 · F-02）', () => {
-    const { container } = renderFullBar();
-    const host = groupHostOf(container);
-    const handle = host.querySelector('[data-bar-handle]');
-
-    expect(handle, '底栏应有展开手柄').not.toBeNull();
-    expect(handle!.getAttribute('tabindex')).toBe('0');
-    expect(handle!.getAttribute('aria-label')).toBe('展开底栏工具栏');
-    expect(handle!.className, '手柄必须能接指针').toContain('pointer-events-auto');
-    expect(handle!.className, '展开后手柄应让位').toContain('group-hover/bar:opacity-0');
-    // 手柄不得随悬停改尺寸（#12 的几何冻结仍然成立）。
-    expect(handle!.className).not.toMatch(/group-(hover|focus-within)\/bar:(w|h)-/);
-    // 手柄在 DOM 顺序上先于底板：展开时底板绘制在它之上，不会互相压字。
-    expect(barOf(container).previousElementSibling, '手柄应在底板之前').toBe(handle);
-  });
-});
-
-/**
- * SH-01（issue #32）：单图视口底栏必须有鼠标可达的色标入口。
- *
- * 修复前 `git grep "onLabel:" -- src/components` 无命中，色标只能靠键盘操作
- * （issue #61 后仅剩左手 `Shift+1…5`），mouse-only 用户完全无法设置色标。
- */
-describe('PreviewViewport —— 色标鼠标入口（SH-01）', () => {
-  it('点击红点把 Red 交给宿主，aria-pressed 跟随当前色标', () => {
-    const onLabel = vi.fn();
-    const props = {
-      onPrev: vi.fn(),
-      onNext: vi.fn(),
-      onRate: vi.fn(),
-      onFlag: vi.fn(),
-      onOpenExternal: vi.fn(),
-      onLabel,
-    };
-    const { rerender } = render(<PreviewViewport group={group} {...props} />);
-
-    fireEvent.click(screen.getByRole('button', { name: '红色标（快捷 Shift+1）' }));
-    expect(onLabel).toHaveBeenCalledTimes(1);
-    expect(onLabel).toHaveBeenCalledWith('Red');
-
-    rerender(<PreviewViewport group={{ ...group, label: 'Red' }} {...props} />);
-    expect(screen.getByRole('button', { name: '红色标（快捷 Shift+1）' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
-    expect(screen.getByRole('button', { name: '蓝色标（快捷 Shift+4）' })).toHaveAttribute(
-      'aria-pressed',
-      'false',
-    );
+    unmount();
+    expect(onZoomApi).toHaveBeenLastCalledWith(null);
   });
 });

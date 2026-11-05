@@ -3,16 +3,13 @@ import {
   Columns2,
   Link,
   Unlink,
-  Star,
-  Check,
-  X,
   Sparkles,
   Sliders,
   RotateCcw,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { PhotoGroupInfo, ToneAdjustments, LumenStatus, ColorLabel } from '../types';
+import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
 import { api } from '../services/api';
 import { getToneFilterString } from '../utils/autoTone';
 import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from '../utils/viewportZoom';
@@ -22,27 +19,11 @@ import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import type { ViewportEmptyState } from './PreviewViewport';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
 import { ExifCapsule } from './ExifCapsule';
-import { LabelDots } from './LabelDots';
-import {
-  BAR_BUTTON,
-  BAR_DIVIDER,
-  BAR_GROUP,
-  BAR_GROUP_HOST,
-  BAR_HANDLE,
-  BAR_ICONS,
-  BAR_LABEL,
-  BAR_PLATE,
-  BAR_STAR_BUTTON,
-} from './viewportBarStyles';
 
 interface BeforeAfterViewportProps {
   group?: PhotoGroupInfo;
   tone?: ToneAdjustments;
   isHoldOriginal?: boolean;
-  onRate: (rating: number) => void;
-  onFlag: (flag: 'pick' | 'reject' | 'none') => void;
-  /** SH-01：底栏色点（鼠标可达），与单图视口同语义。 */
-  onLabel?: (label: ColorLabel) => void;
   onOpenLuminar?: () => void;
   onToggleTonalAdjuster?: () => void;
   isLuminarRunning?: boolean;
@@ -62,9 +43,6 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
   group,
   tone,
   isHoldOriginal = false,
-  onRate,
-  onFlag,
-  onLabel,
   onOpenLuminar,
   onToggleTonalAdjuster,
   isLuminarRunning = false,
@@ -256,6 +234,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
         {/* Left: Before (Original) */}
         <div
           ref={beforeBind.ref}
+          data-viewport-photo
           onWheel={beforeBind.onWheel}
           onMouseDown={() => zoom.focusPane('before')}
           onPointerDown={beforeBind.onPointerDown}
@@ -315,6 +294,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
         {/* Right: After (Adjusted or Luminar Edit) */}
         <div
           ref={afterBind.ref}
+          data-viewport-photo
           onWheel={afterBind.onWheel}
           onMouseDown={() => zoom.focusPane('after')}
           onPointerDown={afterBind.onPointerDown}
@@ -390,95 +370,9 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
         </div>
       </div>
 
-      {/* Bottom Floating Rating & Flag Capsule — geometry frozen (issue #12)
-          与单图视口同一套形态与同一套硬规则（规则正文在 `viewportBarStyles.ts`）：
-          按钮始终可 Tab 进入，静息只留一个 4px 手柄保持可发现性（issue #47）。
-          **变体里只改颜色/透明度/阴影**——#10 在这里复刻了一份
-          `px-3→px-4` / `py-1→py-2` / `w-0→w-auto`，同样会让外接盒随悬停变化，
-          指针在边缘反复进出就自激闪烁。reduced-motion 由 index.css 全局收敛。
+      {/* 评级 / 旗标 / 色标已迁到窗口底部常驻状态栏（issue #62）：
+          这里不再有悬浮胶囊与 4px 手柄。 */}
 
-          issue #46：底板自己 `pointer-events-auto`（宿主仍是 `none`，空白处的
-          点击照旧穿透到照片）；不再有盖在按钮上的透明命中层。
-
-          `group/bar` 由外层 `BAR_GROUP_HOST` 持有：Tailwind 把
-          `group-hover/bar:x` 编译成后代选择器，挂在自己身上永远不命中
-          （issue #14 根因，详见 viewportBarStyles.ts）。 */}
-      <div className={BAR_GROUP_HOST}>
-        {/* 展开手柄（issue #47）：静息时唯一留在屏幕上的底栏痕迹。 */}
-        <div
-          className={BAR_HANDLE}
-          data-bar-handle
-          tabIndex={0}
-          aria-label="展开底栏工具栏"
-        />
-        <div
-          onClick={(e) => e.stopPropagation()}
-          className={BAR_PLATE}
-          data-bar-plate
-        >
-          {/* Rating Stars */}
-          <div className={BAR_DIVIDER} role="group" aria-label="照片星级打分">
-            {[1, 2, 3, 4, 5].map((star) => (
-              <button
-                key={star}
-                onClick={() => onRate(group.rating === star ? 0 : star)}
-                className={`${BAR_STAR_BUTTON} ${BAR_ICONS} ${
-                  group.rating >= star
-                    ? 'text-amber-400 hover:text-amber-300'
-                    : 'text-white/60 hover:text-white'
-                }`}
-                title={`评 ${star} 星（${star}）`}
-                aria-label={`评 ${star} 星`}
-                aria-pressed={group.rating >= star}
-              >
-                <Star
-                  className={`w-4 h-4 ${group.rating >= star ? 'fill-amber-400' : ''}`}
-                  aria-hidden="true"
-                />
-              </button>
-            ))}
-          </div>
-
-          {/* Pick / Reject */}
-          <div className={BAR_GROUP} role="group" aria-label="保留或淘汰标记">
-            <button
-              onClick={() => onFlag(group.flag === 'pick' ? 'none' : 'pick')}
-              className={`${BAR_BUTTON} ${BAR_ICONS} ${
-                group.flag === 'pick'
-                  ? 'bg-emerald-600/40 text-emerald-300 border border-emerald-500/50'
-                  : 'bg-transparent text-white/80 hover:bg-white/20 border border-transparent'
-              }`}
-              title="保留 (P)"
-              aria-label="标记保留 (Pick)"
-              aria-pressed={group.flag === 'pick'}
-            >
-              <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-              <span className={BAR_LABEL}>Pick</span>
-            </button>
-            <button
-              onClick={() => onFlag(group.flag === 'reject' ? 'none' : 'reject')}
-              className={`${BAR_BUTTON} ${BAR_ICONS} ${
-                group.flag === 'reject'
-                  ? 'bg-rose-600/40 text-rose-300 border border-rose-500/50'
-                  : 'bg-transparent text-white/80 hover:bg-white/20 border border-transparent'
-              }`}
-              title="淘汰 (X)"
-              aria-label="标记淘汰 (Reject)"
-              aria-pressed={group.flag === 'reject'}
-            >
-              <X className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-              <span className={BAR_LABEL}>Reject</span>
-            </button>
-          </div>
-
-          {/* 色标（SH-01）：鼠标可达的五色入口，与 Shift+1…5 同语义。 */}
-          {onLabel && (
-            <div className={BAR_DIVIDER}>
-              <LabelDots label={group.label} onSelect={onLabel} />
-            </div>
-          )}
-        </div>
-      </div>
     </div>
   );
 };

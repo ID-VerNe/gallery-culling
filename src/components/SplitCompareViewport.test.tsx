@@ -51,8 +51,6 @@ function renderSplit(props: Partial<ComponentProps<typeof SplitCompareViewport>>
       onTogglePinLeft={vi.fn()}
       onTogglePinRight={vi.fn()}
       onSwap={vi.fn()}
-      onRate={vi.fn()}
-      onFlag={vi.fn()}
       {...props}
     />,
   );
@@ -170,40 +168,31 @@ describe('SplitCompareViewport —— 命中光标缩放（M-08）', () => {
 });
 
 /**
- * SH-01（issue #32）：双图对比的色标入口必须**按窗格**作用于各自的 group，
- * 不能像单图视口那样只有一组（否则给左图点红标会误改右图）。
+ * 常驻状态栏替代窗格胶囊（issue #62）。
+ *
+ * 双图原先每个窗格 `absolute bottom-3` 一份评分/旗标/色标胶囊，永久压在
+ * 图像下沿；现在统一到窗口底部状态栏，用 `L` / `R` 分组区分左右（见
+ * `BottomBar.test.tsx` 的双窗格分流转发用例），窗格内不得再留常驻胶囊。
  */
-describe('SplitCompareViewport —— 色标鼠标入口（SH-01）', () => {
-  it('左窗格点红标只把 leftGroup 交给宿主', () => {
-    const left = withJpg('left');
-    const right = withJpg('right');
-    const onLabel = vi.fn();
-    renderSplit({ leftGroup: left, rightGroup: right, onLabel });
+describe('SplitCompareViewport —— 底栏迁到窗口底部（issue #62）', () => {
+  it('两个窗格内都没有评分 / 旗标 / 色标胶囊', () => {
+    const { container } = renderSplit({
+      leftGroup: withJpg('left'),
+      rightGroup: withJpg('right'),
+    });
 
-    fireEvent.click(screen.getByRole('button', { name: 'left：红色标（快捷 Shift+1）' }));
-
-    expect(onLabel).toHaveBeenCalledTimes(1);
-    expect(onLabel).toHaveBeenCalledWith(left, 'Red');
+    expect(container.querySelectorAll('[aria-label="照片星级打分"]')).toHaveLength(0);
+    expect(container.querySelector('[data-bar-plate]')).toBeNull();
+    expect(container.querySelector('[data-bar-handle]')).toBeNull();
+    expect(container.querySelectorAll('[class*="bottom-3"]')).toHaveLength(0);
   });
 
-  it('右窗格点蓝标只作用于 rightGroup，并按各自 label 显示按下态', () => {
-    const left = withJpg('left');
-    const right = { ...withJpg('right'), label: 'Green' };
-    const onLabel = vi.fn();
-    renderSplit({ leftGroup: left, rightGroup: right, onLabel });
+  it('照片区仍有两个可量边界的窗格锚点', () => {
+    const { container } = renderSplit({
+      leftGroup: withJpg('left'),
+      rightGroup: withJpg('right'),
+    });
 
-    fireEvent.click(screen.getByRole('button', { name: 'right：蓝色标（快捷 Shift+4）' }));
-
-    expect(onLabel).toHaveBeenCalledTimes(1);
-    expect(onLabel).toHaveBeenCalledWith(right, 'Blue');
-
-    expect(screen.getByRole('button', { name: 'right：绿色标（快捷 Shift+3）' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
-    expect(screen.getByRole('button', { name: 'left：绿色标（快捷 Shift+3）' })).toHaveAttribute(
-      'aria-pressed',
-      'false',
-    );
+    expect(container.querySelectorAll('[data-viewport-photo]')).toHaveLength(2);
   });
 });
