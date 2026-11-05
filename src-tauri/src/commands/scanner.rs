@@ -7,8 +7,8 @@ use std::sync::atomic::Ordering;
 
 use tauri::{Emitter, State};
 
-use crate::models::FolderScanResult;
-use crate::scanner::scan_folders;
+use crate::models::{FolderProbe, FolderScanResult};
+use crate::scanner::{probe_folder, scan_folders};
 
 use super::{blocking, AppState, ProgressThrottle};
 
@@ -28,6 +28,15 @@ pub struct ScanProgress {
 pub fn cancel_scan_cmd(state: State<'_, AppState>) -> Result<(), String> {
     state.scan_cancel.store(true, Ordering::SeqCst);
     Ok(())
+}
+
+/// 识别一个目录是「只有 JPG / 只有 RAW / 混合 / 空」（#66）。
+///
+/// 只读一次目录名、不读 EXIF/XMP、不递归；供「打开文件夹」在选目录后
+/// 自动配置两个源。放在 Rust 侧是为了扩展名白名单只有一份。
+#[tauri::command]
+pub async fn probe_folder_cmd(folder: String) -> Result<FolderProbe, String> {
+    blocking("目录识别任务异常", move || probe_folder(&folder)).await
 }
 
 #[tauri::command]

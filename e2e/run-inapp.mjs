@@ -272,6 +272,7 @@ async function main() {
       VITE_E2E_SCENARIO: scenario,
       VITE_E2E_JPG: JPG,
       VITE_E2E_RAW: scenario === 'detail-1to1' ? detailRaw : RAW,
+      VITE_E2E_MIXED: fx.mixedDir,
       VITE_E2E_OUT: OUT,
       VITE_E2E_NAMES: detailNames,
       // 刻意**不传** WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS：

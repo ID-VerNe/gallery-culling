@@ -89,6 +89,7 @@ const e2eLogEndpoint = (): Plugin => ({
           scenario: process.env.VITE_E2E_SCENARIO || '',
           jpg: process.env.VITE_E2E_JPG || '',
           raw: process.env.VITE_E2E_RAW || '',
+          mixed: process.env.VITE_E2E_MIXED || '',
           out: process.env.VITE_E2E_OUT || '',
           names: process.env.VITE_E2E_NAMES || '',
         }),

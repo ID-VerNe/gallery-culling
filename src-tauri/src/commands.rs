@@ -38,9 +38,9 @@ pub use thumbnail::{
 };
 
 pub use scanner::{
-    __cmd__cancel_scan_cmd, __cmd__scan_folders_cmd,
-    __tauri_command_name_cancel_scan_cmd, __tauri_command_name_scan_folders_cmd,
-    cancel_scan_cmd, scan_folders_cmd,
+    __cmd__cancel_scan_cmd, __cmd__probe_folder_cmd, __cmd__scan_folders_cmd,
+    __tauri_command_name_cancel_scan_cmd, __tauri_command_name_probe_folder_cmd,
+    __tauri_command_name_scan_folders_cmd, cancel_scan_cmd, probe_folder_cmd, scan_folders_cmd,
 };
 
 pub use lumencmds::{

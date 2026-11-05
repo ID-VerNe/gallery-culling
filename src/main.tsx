@@ -33,6 +33,7 @@ if (import.meta.env.DEV) {
         scenario?: string;
         jpg?: string;
         raw?: string;
+        mixed?: string;
         out?: string;
         names?: string;
       };
@@ -45,6 +46,7 @@ if (import.meta.env.DEV) {
       const mod = await import('./devtools/e2eRunner');
       await mod.runE2E(cfg.scenario, cfg.jpg || '', {
         raw: cfg.raw || '',
+        mixed: cfg.mixed || '',
         out: cfg.out || '',
         names: cfg.names || '',
       });

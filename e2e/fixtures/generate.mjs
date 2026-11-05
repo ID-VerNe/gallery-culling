@@ -6,6 +6,7 @@
  *   <root>/JPG/IMG_001..007.xmp   真 XMP sidecar，覆盖全部评级/旗标分支
  *   <root>/RAW/IMG_001|002|004.ARW   与 JPG 同 stem（应配对成 JPG+RAW）
  *   <root>/RAW/RAW_ONLY_009.ARW      只有 RAW 无 JPG（应触发 C2 占位规则）
+ *   <root>/MIXED/                     #66：JPG 与 RAW 同目录（单目录导入夹具）
  *   <root>/OUT/                       批量导出目标
  *
  * RAW 说明：这里写入的是「JPEG 字节 + .ARW 扩展名」的合成文件。e2e 关心的是
@@ -20,6 +21,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const FIXTURE_ROOT = path.resolve(HERE, '..', '.tmp', 'fixtures');
 export const JPG = path.join(FIXTURE_ROOT, 'JPG');
 export const RAW = path.join(FIXTURE_ROOT, 'RAW');
+export const MIXED = path.join(FIXTURE_ROOT, 'MIXED');
 export const OUT = path.join(FIXTURE_ROOT, 'OUT');
 
 /** 64x48 的合法 JPEG（base64）。够小，直接内嵌，不依赖 ImageMagick。 */
@@ -149,7 +151,20 @@ export function generateFixtures(root = FIXTURE_ROOT) {
   }
   fs.writeFileSync(path.join(rawDir, `${RAW_ONLY_STEM}.ARW`), jpeg);
 
-  return { root, jpgDir, rawDir, outDir };
+  // #66 单目录夹具：12 张 JPG + 4 个 RAW（3 个同 stem 配对 + 1 个 RAW-only）
+  // 只填 JPG 输入框、RAW 留空时，期望识别为混合并得到 13 组。
+  const mixedDir = path.join(root, 'MIXED');
+  fs.mkdirSync(mixedDir, { recursive: true });
+  for (let i = 1; i <= 12; i++) {
+    const stem = `IMG_${String(i).padStart(3, '0')}`;
+    fs.writeFileSync(path.join(mixedDir, `${stem}.jpg`), jpeg);
+  }
+  for (const stem of PAIRED_STEMS) {
+    fs.writeFileSync(path.join(mixedDir, `${stem}.ARW`), jpeg);
+  }
+  fs.writeFileSync(path.join(mixedDir, `${RAW_ONLY_STEM}.ARW`), jpeg);
+
+  return { root, jpgDir, rawDir, mixedDir, outDir };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

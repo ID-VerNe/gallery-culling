@@ -22,6 +22,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   onRawFolderChange,
   onBrowseJpg,
   onBrowseRaw,
+  onBrowseAuto,
+  folderDetection,
   onScan,
   isLoading,
   scanProgress,
@@ -69,6 +71,8 @@ export const TopBar: React.FC<TopBarProps> = ({
       onRawFolderChange={onRawFolderChange}
       onBrowseJpg={onBrowseJpg}
       onBrowseRaw={onBrowseRaw}
+      onBrowseAuto={onBrowseAuto}
+      folderDetection={folderDetection}
       onScan={onScan}
       isLoading={isLoading}
       scanProgress={scanProgress}
