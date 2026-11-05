@@ -155,17 +155,18 @@ npm run parity                             # CI 等价复跑：在被推送 sha 
 
 1. 版本号改两处：`package.json` + `src-tauri/tauri.conf.json`（`Cargo.toml` 的 lib 版本恒为 1.0.0，**不跟随**）。版本约定 `vX.Y.Z`。
 2. bump 提交并 push。
-3. 签名构建（thin LTO 首编约 12 分钟）：
+3. **发版前必跑真窗口 e2e**：`scripts/release.mjs` 会先跑 `npm run e2e:ui`（ui-contract），**红则中止**、不产出 `updater.json`；确需跳过只能用 `SKIP_E2E=1` 并在发布输出留痕。
+4. 签名构建（thin LTO 首编约 12 分钟）：
    ```bash
    RELEASE_NOTES="$(cat notes.txt)" node scripts/release.mjs
    ```
    `RELEASE_NOTES` 会写进 `updater.json` 的 `notes`（客户端更新弹窗文案），缺省为「🚀 应用有新版本发布啦！」。
-4. 提交 `updater.json`（仓库根，tracked）并 push——**老客户端读 master 的 raw 地址，推上去即触发更新弹窗**。签名私钥 `updater.key`（gitignored）。
-5. 打 annotated tag，**指向 updater.json 的提交**，message = 版本号：
+5. 提交 `updater.json`（仓库根，tracked）并 push——**老客户端读 master 的 raw 地址，推上去即触发更新弹窗**。签名私钥 `updater.key`（gitignored）。
+6. 打 annotated tag，**指向 updater.json 的提交**，message = 版本号：
    ```bash
    git tag -a v2.0.3 -m "v2.0.3" && git push origin v2.0.3
    ```
-6. 创建 Release，资产**只传 NSIS setup.exe**（MSI 不传）：
+7. 创建 Release，资产**只传 NSIS setup.exe**（MSI 不传）：
    ```bash
    gh release create v2.0.3 --verify-tag --notes-file release-notes.md \
      "src-tauri/target/release/bundle/nsis/gallery-culling_2.0.3_x64-setup.exe"
