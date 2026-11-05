@@ -227,7 +227,11 @@ export function useFolderScan(opts: {
   const handleBrowseJpg = useCallback(async () => {
     try {
       const selected = await api.selectFolderDialog(jpgFolder);
-      if (selected) setJpgFolder(selected);
+      if (selected) {
+        setJpgFolder(selected);
+        // 浏览按钮同样是手动接管：不能把上一次「自动识别」的标记留在旧路径上。
+        setFolderDetection(null);
+      }
     } catch (err) {
       toast.error(`无法打开文件夹选择器：${String(err)}`);
     }
@@ -236,7 +240,10 @@ export function useFolderScan(opts: {
   const handleBrowseRaw = useCallback(async () => {
     try {
       const selected = await api.selectFolderDialog(rawFolder);
-      if (selected) setRawFolder(selected);
+      if (selected) {
+        setRawFolder(selected);
+        setFolderDetection(null);
+      }
     } catch (err) {
       toast.error(`无法打开文件夹选择器：${String(err)}`);
     }

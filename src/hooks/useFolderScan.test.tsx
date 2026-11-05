@@ -162,6 +162,26 @@ describe('useFolderScan —— 单目录自动识别', () => {
     expect(result.current.folderDetection).toBeNull();
   });
 
+  it('用输入框内的浏览按钮换目录也会清掉自动识别标记', async () => {
+    const o = opts();
+    mockInvokeCommand('probe_folder_cmd', probe('mixed'));
+    chooseFolder('D:/shoot');
+    const { result } = renderHook(() => useFolderScan(o));
+
+    await act(async () => {
+      await result.current.handleBrowseAuto();
+    });
+    expect(result.current.folderDetection).not.toBeNull();
+
+    chooseFolder('D:/other');
+    await act(async () => {
+      await result.current.handleBrowseJpg();
+    });
+
+    expect(result.current.jpgFolder).toBe('D:/other');
+    expect(result.current.folderDetection).toBeNull();
+  });
+
   it('扫描结果反填识别状态：混合目录即使手填也能看到 JPG/RAW 两侧', async () => {
     const o = opts();
     mockInvokeCommand('scan_folders_cmd', {
