@@ -6,6 +6,22 @@ import { groupPath } from '../utils/groupPath';
 import type { PhotoGroupInfo, ToneAdjustments, ViewMode } from '../types';
 
 /**
+ * 调色自动保存的静默窗口（issue #67）。
+ *
+ * 与 `.plan/adr-002-write-coalescing.md` 的 400ms 合并窗口取同一时长：
+ * 连续拖动期间只折叠成一次写盘。ADR-002 的 Coalescer 只服务评级/旗标/色标，
+ * 调色还带 `.lumen` 工程写入，语义不同，因此折叠发生在调用侧而不是第二套后端队列。
+ */
+export const TONE_AUTOSAVE_DEBOUNCE_MS = 400;
+
+/** 一次待落盘的调色任务：拍照/路径/值在**调度时**固化，切图后仍能正确写回。 */
+interface ToneSaveJob {
+  groupId: string;
+  path: string;
+  tone: ToneAdjustments;
+}
+
+/**
  * 调色编辑态：内存中的调色值、面板开关、离开保护、保存与 AI 蒙版。
  *
  * 关键不变量：
@@ -14,13 +30,16 @@ import type { PhotoGroupInfo, ToneAdjustments, ViewMode } from '../types';
  *   保存成功时才把基线更新为新值，dirty 随之清零。
  * - 面板可见性是**派生值**（用户意图 && 当前有可调对象），不是意图本身。
  *   此前显示层只读意图，于是筛选变空时会出现「按钮说开着、屏幕显示着宫格」。
- * - 离开（切图 / 关面板 / 换筛选）前若 dirty，先确认，绝不静默丢改动。
+ * - 离开（切图 / 关面板 / 换筛选）前若 dirty，先确认，绝不静默丢改动；
+ *   自动保存开启时改为「先 flush 再离开」，不让用户为 400ms 的乐观写盘反复确认。
  */
 export function useToneEditing(opts: {
   currentGroup: PhotoGroupInfo | undefined;
   viewMode: ViewMode;
   lumenAvailable: boolean;
   lumenCapsAiMasks: boolean | undefined;
+  /** 调色自动保存是否开启（设置项 `toneAutoSave`，默认开启）。 */
+  autoSaveEnabled: boolean;
   /** 保存成功后要把新基线写回集合（groups[].tone / hasXmp）。 */
   onGroupsPatched: (id: string, patch: Partial<PhotoGroupInfo>) => void;
   /** AI 蒙版读回后交给上层渲染。 */
@@ -31,6 +50,7 @@ export function useToneEditing(opts: {
     viewMode,
     lumenAvailable,
     lumenCapsAiMasks,
+    autoSaveEnabled,
     onGroupsPatched,
     onMasksLoaded,
   } = opts;
@@ -45,6 +65,24 @@ export function useToneEditing(opts: {
   /** UX-12：auto-tone 计算中。RAW-only 要等 LUMEN 预览渲染，采样也是异步的，
       全程数秒无任何反馈，按钮看起来像没生效。 */
   const [isAutoToning, setIsAutoToning] = useState(false);
+  /** 自动保存的可见状态（issue #67）：保存中 / 已保存 / 失败。 */
+  const [autoSaveStatus, setAutoSaveStatus] = useState<
+    'idle' | 'saving' | 'saved' | 'error'
+  >('idle');
+  /** 自动保存失败原因（常驻在面板里，不随 toast 消失）。 */
+  const [autoSaveError, setAutoSaveError] = useState<string | null>(null);
+  /** 400ms 静默窗口的计时器；同一时刻只允许一个。 */
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 等待窗口结束的任务（已固化 groupId/path/tone，切图后仍能写回原照片）。 */
+  const pendingAutoSaveRef = useRef<ToneSaveJob | null>(null);
+  /** 正在写盘：自动保存与手动保存共用，避免同一张照片并发写 XMP/工程。 */
+  const saveInFlightRef = useRef(false);
+  /** 写盘期间又产生的新值：当前这次落地后补写「最新的那一份」（trailing latest）。 */
+  const queuedAutoSaveRef = useRef<ToneSaveJob | null>(null);
+  /** 真正写盘的单飞函数（定义在下方，供计时器与 flush 回调调用）。 */
+  const persistToneRef = useRef<((job: ToneSaveJob, auto: boolean) => Promise<void>) | null>(
+    null,
+  );
   /** C3：调色未保存时"离开"动作的暂存。用户在确认框里选"放弃改动"才执行它，
       选"继续编辑"就丢弃。null = 没有待确认的离开。 */
   const [pendingLeaveTone, setPendingLeaveTone] = useState<
@@ -82,6 +120,10 @@ export function useToneEditing(opts: {
     ? toneMap[currentGroup.id] || currentGroup.tone || DEFAULT_TONE
     : undefined;
 
+  /**
+   * 程序化写入内存值：读回真值、套用预设等**不是用户拖动**的场景走这里，
+   * 绝不触发自动保存（否则读回即写盘、预设套用后再多写一次）。
+   */
   const handleToneChange = useCallback(
     (newTone: ToneAdjustments) => {
       if (!currentGroup) return;
@@ -90,10 +132,63 @@ export function useToneEditing(opts: {
     [currentGroup],
   );
 
+  /** 清掉待写盘计时器（手动保存 / flush 会接管这次任务）。 */
+  const clearAutoSaveTimer = useCallback(() => {
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+  }, []);
+
+  /**
+   * 立即落盘待写任务（切图 / 关面板 / 卸载前调用）。
+   *
+   * 任务在**调度时**就固化了 path 与 tone，即使用户已经切到下一张，
+   * 也会正确写回上一张。
+   */
+  const flushAutoSave = useCallback(() => {
+    clearAutoSaveTimer();
+    const pending = pendingAutoSaveRef.current;
+    pendingAutoSaveRef.current = null;
+    if (pending) void persistToneRef.current?.(pending, true);
+  }, [clearAutoSaveTimer]);
+
+  /**
+   * 用户拖动滑杆 / 自动调色 / 重置：写内存 + （开启时）400ms 静默窗口后写盘。
+   *
+   * 同一照片连续改动会重置计时器，只落盘最后一次；写盘期间的新改动进
+   * `queuedAutoSaveRef`，当前这次落地后再补写最新值，不丢最后一次拖动。
+   */
+  const handleUserToneChange = useCallback(
+    (newTone: ToneAdjustments) => {
+      if (!currentGroup) return;
+      setToneMap((prev) => ({ ...prev, [currentGroup.id]: newTone }));
+      if (!autoSaveEnabled) return;
+      const path = groupPath(currentGroup);
+      if (!path) return;
+      pendingAutoSaveRef.current = {
+        groupId: currentGroup.id,
+        path,
+        tone: newTone,
+      };
+      setAutoSaveStatus('saving');
+      setAutoSaveError(null);
+      clearAutoSaveTimer();
+      autoSaveTimerRef.current = setTimeout(() => {
+        autoSaveTimerRef.current = null;
+        const pending = pendingAutoSaveRef.current;
+        pendingAutoSaveRef.current = null;
+        if (pending) void persistToneRef.current?.(pending, true);
+      }, TONE_AUTOSAVE_DEBOUNCE_MS);
+    },
+    [autoSaveEnabled, clearAutoSaveTimer, currentGroup],
+  );
+
+  /** 重置也是用户改动：自动保存开启时同样要落盘。 */
   const handleResetTone = useCallback(() => {
     if (!currentGroup) return;
-    setToneMap((prev) => ({ ...prev, [currentGroup.id]: { ...DEFAULT_TONE } }));
-  }, [currentGroup]);
+    handleUserToneChange({ ...DEFAULT_TONE });
+  }, [currentGroup, handleUserToneChange]);
 
   /** C3：调色是否有未保存改动（当前编辑值 ≠ 磁盘基线）。 */
   const toneDirty =
@@ -126,9 +221,17 @@ export function useToneEditing(opts: {
   /**
    * C3：离开保护。切图 / 关面板前若存在未保存改动，先弹确认，避免静默丢失。
    * 用户选"放弃改动"才真正执行离开动作（并丢弃内存中的编辑）。
+   *
+   * issue #67：自动保存开启时不弹确认 —— 待写任务会先 flush，改动不会丢；
+   * 让用户为 400ms 的乐观写盘反复点「放弃」只会训练出盲点确认。
    */
   const guardToneLeave = useCallback(
     (run: () => void) => {
+      if (autoSaveEnabled) {
+        flushAutoSave();
+        run();
+        return;
+      }
       if (toneDirty) {
         setPendingLeaveTone({
           run: () => {
@@ -140,7 +243,7 @@ export function useToneEditing(opts: {
         run();
       }
     },
-    [toneDirty, discardToneEdits],
+    [autoSaveEnabled, flushAutoSave, toneDirty, discardToneEdits],
   );
 
   /** C3：关闭调色面板（带未保存保护）。 */
@@ -154,7 +257,8 @@ export function useToneEditing(opts: {
     const finish = (img: HTMLImageElement): boolean => {
       const result = computeAutoTone(img);
       if (!result) return false;
-      handleToneChange(result);
+      // 自动调色同样是用户主动改动：自动保存开启时要落盘。
+      handleUserToneChange(result);
       setIsAutoToning(false);
       return true;
     };
@@ -221,51 +325,125 @@ export function useToneEditing(opts: {
     toast.error(
       '无法读取该照片的像素数据：RAW 自动调色需要启用 LUMEN RAW 引擎（或同时选择 JPG 文件夹）。',
     );
-  }, [currentGroup, handleToneChange, isAutoToning, toast, viewMode, lumenAvailable]);
+  }, [currentGroup, handleUserToneChange, isAutoToning, toast, viewMode, lumenAvailable]);
 
   /**
    * 统一保存调色：**一条命令、两个落点**。
    * - 总是写 XMP（Lightroom / Capture One / Photoshop 互操作）；
    * - 引擎可用时同时写入 LUMEN RAW 编辑态并落盘 .lumen 工程；
    * - 引擎失败不回滚 XMP，只把 warning 如实提示出来。
+   *
+   * `auto` 区分两种来源：手动点「保存调色」沿用既有文案；自动保存的
+   * 成败另有一套可见状态（面板状态位 + 常驻错误行），失败绝不静默。
    */
+  const persistTone = useCallback(
+    async (job: ToneSaveJob, auto: boolean) => {
+      // 单飞：自动保存与手动保存共用同一把锁，避免并发写 XMP / .lumen。
+      // 自动来源的新值进队列，等当前这次落地后补写最新值（不丢最后一次拖动）。
+      if (saveInFlightRef.current) {
+        if (auto) queuedAutoSaveRef.current = job;
+        return;
+      }
+      saveInFlightRef.current = true;
+      setIsSavingTone(true);
+      if (auto) {
+        setAutoSaveStatus('saving');
+        setAutoSaveError(null);
+      }
+      try {
+        const report = await api.applyTone(job.path, job.tone);
+        onGroupsPatched(job.groupId, {
+          hasXmp: report.xmpWritten,
+          tone: job.tone,
+        });
+        setToneDivergent(false);
+        if (report.lumenApplied) {
+          toast.success(
+            auto
+              ? '调色已自动保存：XMP 侧边栏 + LUMEN RAW 工程。'
+              : report.projectPath
+                ? '调色已保存：XMP 侧边栏 + LUMEN RAW 工程。'
+                : '调色已保存：XMP 侧边栏 + LUMEN RAW。',
+          );
+          if (auto) setAutoSaveStatus('saved');
+        } else if (report.warnings.length > 0) {
+          // XMP 写成功了，只是引擎那侧没成 —— 必须说清楚，别让用户以为两边都存了
+          const reason = report.warnings[0];
+          toast.error(
+            auto
+              ? `调色已自动保存到 XMP，但 LUMEN RAW 未同步：${reason}。可点「保存调色」重试。`
+              : `XMP 已写入，但 LUMEN RAW 未同步：${reason}`,
+          );
+          if (auto) {
+            setAutoSaveStatus('error');
+            setAutoSaveError(`LUMEN RAW 未同步：${reason}`);
+          }
+        } else {
+          toast.success(
+            auto
+              ? '调色已自动保存到同名 .xmp 文件。'
+              : '调色参数已写入同名 .xmp 文件。\nPhotoshop / ACR 打开时将自动载入。',
+          );
+          if (auto) setAutoSaveStatus('saved');
+        }
+      } catch (err) {
+        console.error('Failed to save tone:', err);
+        const reason = String(err);
+        if (auto) {
+          // 失败不能静默：toast.error（role="alert" + assertive）+ 面板常驻错误行
+          setAutoSaveStatus('error');
+          setAutoSaveError(reason);
+          toast.error(
+            `自动保存调色失败：${reason}。改动仍在内存中，可点「保存调色」重试。`,
+          );
+        } else {
+          toast.error(`保存调色失败：${reason}`);
+        }
+      } finally {
+        // 无论成功/失败/异常都必须复位，否则按钮会永久卡在「保存中…」。
+        saveInFlightRef.current = false;
+        setIsSavingTone(false);
+        const queued = queuedAutoSaveRef.current;
+        queuedAutoSaveRef.current = null;
+        if (queued) void persistToneRef.current?.(queued, true);
+      }
+    },
+    [onGroupsPatched, toast],
+  );
+  persistToneRef.current = persistTone;
+
+  /** 手动保存：清掉待自动保存任务，立即写当前值（不新增第二个入口）。 */
   const handleSaveTone = useCallback(async () => {
     // 重入短路：一次保存还没落地时，再点（键盘/程序化触发）直接忽略。
-    if (isSavingTone) return;
+    if (saveInFlightRef.current) return;
     if (!currentGroup) return;
     const toneToSave =
       toneMap[currentGroup.id] || currentGroup.tone || DEFAULT_TONE;
     const targetPath = groupPath(currentGroup);
     if (!targetPath) return;
 
-    setIsSavingTone(true);
-    try {
-      const report = await api.applyTone(targetPath, toneToSave);
-      onGroupsPatched(currentGroup.id, {
-        hasXmp: report.xmpWritten,
-        tone: toneToSave,
-      });
-      setToneDivergent(false);
-      if (report.lumenApplied) {
-        toast.success(
-          report.projectPath
-            ? '调色已保存：XMP 侧边栏 + LUMEN RAW 工程。'
-            : '调色已保存：XMP 侧边栏 + LUMEN RAW。',
-        );
-      } else if (report.warnings.length > 0) {
-        // XMP 写成功了，只是引擎那侧没成 —— 必须说清楚，别让用户以为两边都存了
-        toast.error(`XMP 已写入，但 LUMEN RAW 未同步：${report.warnings[0]}`);
-      } else {
-        toast.success('调色参数已写入同名 .xmp 文件。\nPhotoshop / ACR 打开时将自动载入。');
-      }
-    } catch (err) {
-      console.error('Failed to save tone:', err);
-      toast.error(`保存调色失败：${String(err)}`);
-    } finally {
-      // 无论成功/失败/异常都必须复位，否则按钮会永久卡在「保存中…」。
-      setIsSavingTone(false);
+    clearAutoSaveTimer();
+    pendingAutoSaveRef.current = null;
+    await persistTone(
+      { groupId: currentGroup.id, path: targetPath, tone: toneToSave },
+      false,
+    );
+  }, [currentGroup, toneMap, clearAutoSaveTimer, persistTone]);
+
+  /**
+   * 切图 / 卸载前 flush（issue #67）：400ms 窗口内的待写任务不能因为换照片
+   * 或关应用而丢。任务固化在调度时，所以这里即使已经切到新照片，写的仍是上一张。
+   */
+  const prevGroupIdRef = useRef<string | undefined>(currentGroup?.id);
+  useEffect(() => {
+    if (prevGroupIdRef.current !== currentGroup?.id) {
+      flushAutoSave();
+      prevGroupIdRef.current = currentGroup?.id;
+      setAutoSaveStatus('idle');
+      setAutoSaveError(null);
     }
-  }, [currentGroup, toneMap, toast, isSavingTone, onGroupsPatched]);
+  }, [currentGroup?.id, flushAutoSave]);
+  useEffect(() => () => flushAutoSave(), [flushAutoSave]);
 
   /**
    * 打开调色面板时读回统一状态：生效值 + XMP 真值 + lumen 工程真值 + 是否分歧。
@@ -428,6 +606,10 @@ export function useToneEditing(opts: {
     triggerRef,
     handleToggleTonalPanel,
     handleToneChange,
+    /** 用户改动入口（滑杆/重置/自动调色）：自动保存开启时会调度写盘。 */
+    handleUserToneChange,
+    autoSaveStatus,
+    autoSaveError,
     handleResetTone,
     discardToneEdits,
     discardToneEditsFor,

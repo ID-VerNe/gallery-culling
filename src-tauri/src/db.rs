@@ -46,6 +46,7 @@ pub(crate) fn settings_pairs(settings: &AppSettings) -> Vec<(&'static str, Strin
             settings.lumen_grid_thumbnails.to_string(),
         ),
         ("lumen_expect_ai", settings.lumen_expect_ai.to_string()),
+        ("tone_auto_save", settings.tone_auto_save.to_string()),
     ]
 }
 
@@ -67,6 +68,13 @@ pub(crate) fn apply_setting(settings: &mut AppSettings, key: &str, value: &str) 
         "lumen_cli_path" => settings.lumen_cli_path = value.to_string(),
         "lumen_grid_thumbnails" => settings.lumen_grid_thumbnails = value == "true",
         "lumen_expect_ai" => settings.lumen_expect_ai = value == "true",
+        // issue #67：默认是**开**，所以不能沿用 `value == "true"` —— 那会把
+        // 垃圾值（"yes" / 空串）误判成「用户主动关闭」。只接受明确的布尔字面量。
+        "tone_auto_save" => {
+            if let Ok(v) = value.parse::<bool>() {
+                settings.tone_auto_save = v;
+            }
+        }
         _ => {}
     }
 }
@@ -757,10 +765,12 @@ mod tests {
         );
         apply_setting(&mut s, "lumen_grid_thumbnails", "true");
         assert!(s.lumen_grid_thumbnails);
+        // issue #67：调色自动保存默认开启，且必须与其它键一起落盘
+        assert_eq!(map.get("tone_auto_save").map(String::as_str), Some("true"));
         // 既有 5 键不回归
         assert!(map.contains_key("photoshop_path"));
         assert!(map.contains_key("thumbnail_width"));
-        assert_eq!(map.len(), 9);
+        assert_eq!(map.len(), 10);
     }
 
     #[test]
@@ -794,6 +804,51 @@ mod tests {
         apply_setting(&mut s, "thumbnail_width", "not-a-number");
         assert_eq!(s.thumbnail_width, 200); // 默认值不被污染
         apply_setting(&mut s, "unknown_future_key", "x"); // 未知键静默忽略
+    }
+
+    /// issue #67：调色自动保存的默认值与「显式关闭」口径。
+    ///
+    /// - 缺键 → 默认开启（全新安装与老库都走这条）；
+    /// - 显式 `"false"` → 保持关闭，不因为「默认改成开」被翻回来；
+    /// - 垃圾值 → 保持当前值，不能把默认开启误读成关闭。
+    #[test]
+    fn tone_auto_save_defaults_on_and_keeps_explicit_off() {
+        let mut s = AppSettings::default();
+        assert!(s.tone_auto_save, "全新安装必须默认开启");
+        assert_eq!(
+            settings_pairs(&s)
+                .into_iter()
+                .find(|(k, _)| *k == "tone_auto_save")
+                .map(|(_, v)| v)
+                .as_deref(),
+            Some("true")
+        );
+
+        apply_setting(&mut s, "tone_auto_save", "false");
+        assert!(!s.tone_auto_save);
+        apply_setting(&mut s, "tone_auto_save", "not-a-bool");
+        assert!(!s.tone_auto_save, "垃圾值不能把显式关闭翻回开启");
+    }
+
+    /// issue #67：显式关闭必须跨「保存 → 重新读取」存活（重启后仍关）。
+    #[test]
+    fn tone_auto_save_explicit_off_survives_reload() {
+        let (db, path) = temp_db("tone_auto_save_reload");
+        let mut s = AppSettings::default();
+        s.tone_auto_save = false;
+        db.save_settings(&s).unwrap();
+        let loaded = db.load_settings().unwrap();
+        assert!(!loaded.tone_auto_save);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// issue #67：老库完全没有这个键时，读回必须是默认开启。
+    #[test]
+    fn tone_auto_save_missing_key_loads_as_enabled() {
+        let (db, path) = temp_db("tone_auto_save_missing");
+        let loaded = db.load_settings().unwrap();
+        assert!(loaded.tone_auto_save);
+        let _ = std::fs::remove_file(&path);
     }
 
     fn cursor(path: &str, mtime: i64, rating: u8, flag: &str, label: &str) -> XmpCursor {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Settings, Save } from 'lucide-react';
-import { AboutSection, EditorPathSection, LumenSettingsSection, ThumbnailSection, type UpdateCheckState } from './SettingsSections';
+import { AboutSection, EditorPathSection, LumenSettingsSection, ThumbnailSection, ToneAutoSaveSection, type UpdateCheckState } from './SettingsSections';
 import { AppSettings, LumenCapabilities, LumenStatus } from '../types';
 import { api } from '../services/api';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -211,6 +211,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <ThumbnailSection
             width={settings.thumbnailWidth}
             onChange={(v) => setSettings({ ...settings, thumbnailWidth: v })}
+          />
+
+          <ToneAutoSaveSection
+            enabled={settings.toneAutoSave ?? true}
+            onChange={(v) =>
+              setSettings({ ...settings, toneAutoSave: v })
+            }
           />
 
           <AboutSection
