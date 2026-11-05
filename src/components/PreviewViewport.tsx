@@ -443,7 +443,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
           role="status"
           className="absolute top-4 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3.5 py-1.5 rounded-md text-xs font-semibold text-amber-300 border border-amber-500/40 flex items-center gap-2 pointer-events-none"
         >
-          <span>正在查看原片（松开 \ 键恢复）</span>
+          <span>正在查看原片（松开 V / \ 键恢复）</span>
         </div>
       )}
 

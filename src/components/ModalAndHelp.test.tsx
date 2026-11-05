@@ -84,3 +84,30 @@ describe('UX-18 —— 快捷键帮助可搜索', () => {
     expect(live).toBeTruthy();
   });
 });
+
+/**
+ * issue #45：帮助清单必须与「左手别名 + 旧键并存」的实现同步。
+ *
+ * 锁两件事：条目总数（防止增删后忘改文案）与五条关键键位文案
+ * （防止再出现「帮助写 P、实际按 F」或反过来）。每行都是「左手在前、
+ * 旧键在后」，用户扫一眼就能看到替代关系。
+ */
+describe('issue #45 —— 帮助弹窗锁住左手别名文案', () => {
+  it('条目总数为 41，且新旧键位成对出现', () => {
+    render(<ShortcutHelpModal isOpen onClose={() => {}} />);
+
+    expect(screen.getByText('共 41 项')).toBeTruthy();
+
+    for (const keys of [
+      'F / P', // 保留：左手 F + 旧键 P
+      'R / 0 / U', // 清除：左手 R + 旧键 0 / U
+      'Shift + 1 ~ 5', // 色标：左手 Shift+1…5
+      'T / Y', // 前后对照：左手 T + 旧键 Y
+      'V / \\（按住）', // 按住看原片：左手 V + 旧键 \
+      '6 / 7 / 8 / 9', // 旧键仍保留
+      'Shift + 6', // 旧键紫色仍保留
+    ]) {
+      expect(screen.getByText(keys)).toBeTruthy();
+    }
+  });
+});
