@@ -1,0 +1,18 @@
+{
+  "version": "1.6.0",
+  "source": {
+    "type": "local-path",
+    "upstream": "hety0211/lumen-raw v1.6.0",
+    "note": "上游 Release 只发 GUI 安装包，其中 lumen-cli.exe 是 15,920,050 字节的另一构建；随包精简 onedir（exe 6,702,168 字节 + _internal/，1150 个文件）没有可稳定取回的公开来源。"
+  },
+  "exe": {
+    "sha256": "9ead90d542b2f2da9ae7f08856789a84150c84a7d98f48a63c9112affd5f6dde",
+    "bytes": 6702168
+  },
+  "directory": {
+    "fileCount": 1150,
+    "totalBytes": 190420760,
+    "contentSha256": "49d97b9b8bc5cde93ccb50e6772a8f295be1f53f52ed7b2001c9df91b2204698"
+  },
+  "generatedAt": "2026-11-05T13:09:07.687Z"
+}

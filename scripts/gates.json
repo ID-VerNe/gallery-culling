@@ -61,6 +61,12 @@
       "why": "扫 src 里所有描边颜色类，逐个去 Tailwind 产物里核对有没有规则（issue #18 · PD-1）。`border.default` 生成的是 `border-border-default`，写成 `border-default` 时一条规则都不产出、回落 currentColor（body 为 text-white，看起来是 100% 白线），只有这条能盯住"
     },
     {
+      "name": "check-sidecar-lock.mjs",
+      "cmd": ["node", "scripts/check-sidecar-lock.mjs"],
+      "shard": "static",
+      "why": "sidecar 锁文件与磁盘产物一致（issue #73）：锁文件字段齐全、`version` 与 `PINNED_LUMEN_VERSION` 一致；产物在盘时再核 exe 哈希、目录文件数与 contentSha256。锁文件入库而 181.6MB 产物不入库，换产物没人报警只能靠这条。干净检出恒无产物，此时打印「未取回」并放行——CI 上固定红就失去意义"
+    },
+    {
       "name": "vitest",
       "cmd": ["node", "node_modules/vitest/vitest.mjs", "run", "--pool=vmForks"],
       "shard": "unit",
