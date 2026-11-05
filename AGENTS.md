@@ -44,10 +44,11 @@ npm run parity                             # CI 等价复跑：在被推送 sha 
 | 5 | `static` | `check-theme-alpha.mjs` | 扫 src 里实际用到的「主题色+透明度」组合，逐个去 Tailwind 产物里核对有没有规则（issue #15）。配色写成 var(--color-*) 时 /NN 会被**静默丢弃**，不报错不警告，只有这条能盯住 |
 | 6 | `static` | `check-version-sync.mjs` | `package.json`、`src-tauri/tauri.conf.json`、`package-lock.json` 的两处根版本必须一致（issue #23）。2.0.4 那次 bump 漏了 lock，`npm ci` 不报错、也没有门禁拦，不一致躺了一个版本 |
 | 7 | `static` | `check-borders-emitted.mjs` | 扫 src 里所有描边颜色类，逐个去 Tailwind 产物里核对有没有规则（issue #18 · PD-1）。`border.default` 生成的是 `border-border-default`，写成 `border-default` 时一条规则都不产出、回落 currentColor（body 为 text-white，看起来是 100% 白线），只有这条能盯住 |
-| 8 | `unit` | `vitest` | 前端全量用例；--pool=vmForks 见 vitest.config.ts 的 pool 说明（Windows 上的既定跑法）。直指包内入口而非 `npx vitest`：本地缺席时 npx 会去 registry 装 vitest@5（另一个大版本，可能真报绿），绕过了 package-lock（issue #24） |
-| 9 | `rust` | `cargo test --lib` | 后端全量单测（真 tmpdir，不 mock fs）；7 例真机冒烟默认 ignored |
+| 8 | `static` | `check-sidecar-lock.mjs` | sidecar 锁文件与磁盘产物一致（issue #73）：锁文件字段齐全、`version` 与 `PINNED_LUMEN_VERSION` 一致；产物在盘时再核 exe 哈希、目录文件数与 contentSha256。锁文件入库而 181.6MB 产物不入库，换产物没人报警只能靠这条。干净检出恒无产物，此时打印「未取回」并放行——CI 上固定红就失去意义 |
+| 9 | `unit` | `vitest` | 前端全量用例；--pool=vmForks 见 vitest.config.ts 的 pool 说明（Windows 上的既定跑法）。直指包内入口而非 `npx vitest`：本地缺席时 npx 会去 registry 装 vitest@5（另一个大版本，可能真报绿），绕过了 package-lock（issue #24） |
+| 10 | `rust` | `cargo test --lib` | 后端全量单测（真 tmpdir，不 mock fs）；7 例真机冒烟默认 ignored |
 
-共 9 个 CI 门禁，分 3 个分片（static 7、unit 1、rust 1）；manual 2、support 1 见 `scripts/gates.json`。
+共 10 个 CI 门禁，分 3 个分片（static 8、unit 1、rust 1）；manual 2、support 1 见 `scripts/gates.json`。
 <!-- gates:ci:end -->
 
 ### 0.2 证据与验证纪律
@@ -142,6 +143,12 @@ npm run parity                             # CI 等价复跑：在被推送 sha 
 - **子模块命名避让**：`xmprw`（不叫 xmp）、`lumencmds`（不叫 lumen）。
 - **Tauri v2 ACL**：`core:window:default` 的 28 项权限**不含** `allow-destroy` / `allow-close`。前端 `preventDefault()` 后调 `appWindow.destroy()` 必须在 capabilities 里显式授 `core:window:allow-destroy`，否则窗口被拦住且永远关不掉。jsdom mock 抓不到这类问题，只能真窗口验。
 - **Tauri 命令参数即 IPC 契约**：参数多了触发 `too_many_arguments` 时加 `#[allow]` + 注释，不要为闭嘴去拆结构体（会连带改前端调用形状）。
+- **sidecar 产物不在版本库、锁文件在（issue #73）**：`src-tauri/binaries/lumen-cli/`（1150 个文件 / 190,420,760 字节）被 `.gitignore` 忽略，干净检出里**没有**它；入库的是 `src-tauri/sidecar.lock.json`，钉住版本、exe 哈希、目录文件数与 `contentSha256`。换机器 / 清空 binaries 后，构建前必须先取回，否则 `beforeBuildCommand` 里的 `prepare-sidecar` 会 fail-closed：
+  ```bash
+  $env:LUMEN_SIDECAR_SRC="<产物目录>"; node scripts/prepare-sidecar.mjs   # 复制 + 校验
+  node scripts/prepare-sidecar.mjs --fetch                                  # 看「无公开来源」的说明
+  ```
+  只有**有意更换产物**才允许 `node scripts/prepare-sidecar.mjs --update-lock`，且必须核对来源并说明理由；门禁 `check-sidecar-lock.mjs` 会在产物在盘时逐项比对，不一致即红。
 
 ## 5. Commit 与发布
 
@@ -152,6 +159,8 @@ npm run parity                             # CI 等价复跑：在被推送 sha 
 - Commit message 里**禁止** `Co-Authored-By:` 行——`.githooks/commit-msg` 会直接拦下；同一钩子也校验首行格式。
 
 ### 发布流程（v2.0.1/v2.0.3 实证）
+
+> **发版前先确认 sidecar 产物到位**：`node scripts/prepare-sidecar.mjs` 必须打印「与锁文件一致」。换机器 / 清空 `src-tauri/binaries/` 后先用 `LUMEN_SIDECAR_SRC` 复制（见 §4）；产物与 `src-tauri/sidecar.lock.json` 不一致时**禁止发版**——那说明装进去的是另一个引擎。
 
 1. 版本号改两处：`package.json` + `src-tauri/tauri.conf.json`（`Cargo.toml` 的 lib 版本恒为 1.0.0，**不跟随**）。版本约定 `vX.Y.Z`。
 2. bump 提交并 push。
