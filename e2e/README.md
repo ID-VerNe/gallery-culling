@@ -80,12 +80,15 @@ Tauri 的 WebView2 不把 DOM 暴露给 Windows UI Automation，所以界面断�
 
 底栏的三类契约只有真实浏览器能证伪，vitest（jsdom）只能看 `className`：
 
-- **静息收起**：`[data-bar-plate]` 的 `getBoundingClientRect().top >= innerHeight - 1`
-  且 `opacity <= 0.05`；展开手柄仍在视口内、`tabIndex=0`。
+- **静息收起**：`[data-bar-plate]` 的 `getBoundingClientRect().top >= 照片区定位容器 bottom - 1`
+  且 `opacity <= 0.05`；展开手柄仍在视口内、`tabIndex=0`。基准刻意不取
+  `window.innerHeight`：照片区下方还有 36px 窗口底栏（实测容器 bottom=864、innerHeight=900），
+  `translate-y-[calc(100%_+_1rem)]` 只把底板停到容器下沿，拿窗口高度当基准会把「已腾出照片区」误判成还在视口里。
 - **按钮命中**：聚焦手柄唤回底板后，对每个启用按钮的中心做 `document.elementFromPoint`，
   断言命中的是按钮自身或其后代（透明命中层 / `pointer-events:none` 继承都会在这里断）。
-- **左手别名**：同一张照片上 `V`↔`\`、`F`↔`P`、`R`↔`0`、`T`↔`Y`、
-  `Shift+1…5`↔`6–9`/`Shift+6` 产生同一组 `aria-pressed` 真值。
+- **左手别名**：同一张照片上 `F`↔`P`、`R`↔`0`、`T`↔`Y`、`Shift+1…5`↔`6–9`/`Shift+6`
+  产生同一组 `aria-pressed` 真值；`V`↔`\` 按住时读的是「正在查看原片」横幅，
+  松开后必须消失。
 
 更新装完不自动重启（#49）依赖 NSIS 安装器与提权进程，应用内驱动够不到，仍留人工回签。
 

@@ -599,10 +599,11 @@ async function scenarioUiContract(jpgFolder: string, el: () => string) {
       shown ? shown.opacity.toFixed(3) : '?'
     } activeElement=${document.activeElement === handle}`,
   );
+  // 「唤回」必须是相对静息位置的回退，而不是「只要还在视口里」——
+  // 静息态本身也满足 top < innerHeight，单看它证明不了底板被唤回。
+  const revealed = !!rest && !!shown && shown.top < rest.top - 1 && shown.bottom > 0;
   raw(
-    `[${el()}] >>> 断言U5 聚焦手柄唤回底板 = ${
-      !!shown && shown.top < window.innerHeight && shown.bottom > 0
-    }`,
+    `[${el()}] >>> 断言U5 聚焦手柄相对静息上移 = ${revealed}`,
   );
   raw(`[${el()}] >>> 断言U6 唤回后底板可见 = ${!!shown && shown.opacity >= 0.95}`);
 
