@@ -18,6 +18,8 @@ import { ToastProvider, useToast } from './components/Toast';
 import { TaskProgressBar } from './components/TaskProgressBar';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useLumenStartupNotice } from './hooks/useLumenStartupNotice';
+import { useLumenEngine } from './hooks/useLumenEngine';
+import { LumenEngineBanner } from './components/LumenEngineBanner';
 import { useAppSettings } from './hooks/useAppSettings';
 import { useAutoUpdate } from './hooks/useAutoUpdate';
 import { useCollection } from './hooks/useCollection';
@@ -53,6 +55,8 @@ function AppShell() {
   const toast = useToast();
   // issue #68：随包引擎在后台预热，失败时弹常驻错误提示（不静默降级）。
   useLumenStartupNotice();
+  // issue #75：引擎改为运行时下载；这里只显示下载/失败状态与重试入口，不阻塞首屏。
+  const lumenEngine = useLumenEngine();
   /** FR-09：一张表回答「现在能不能开始」。各任务只声明自己是否在跑。 */
   const mutex = useTaskMutex();
 
@@ -716,6 +720,13 @@ function AppShell() {
         albumName={album.path ? baseNameOfPath(album.path) : null}
         albumCount={album.path ? groups.length : undefined}
         onImportLrcat={() => setIsLrcatOpen(true)}
+      />
+
+      {/* 引擎下载状态（issue #75）：进度/失败常驻在顶栏下方，不阻塞任何操作 */}
+      <LumenEngineBanner
+        status={lumenEngine.status}
+        retrying={lumenEngine.retrying}
+        onRetry={lumenEngine.retry}
       />
 
       {/* Scan progress (M-05) — 空闲时不渲染，不留空白条 */}

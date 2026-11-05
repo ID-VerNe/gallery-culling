@@ -16,6 +16,7 @@
  *   - `detail-1to1`：RAW-only 1:1 细节（`VITE_E2E_RAW` 必须是**真实 ARW**，
  *     `VITE_E2E_NAMES` 给两张的 baseName）
  *   - `ui-contract`：主视口底栏的命中 / 静息收起 / 左手别名真窗口契约（issue #53）
+ *   - `engine-download`：引擎缓存缺失 + 下载失败时，主界面可用并给出中文失败与重试（issue #75）
  *
  * 触发：`npm run e2e:render` / `npm run e2e:preset` / `npm run e2e:ui`（见 `e2e/run-inapp.mjs`），
  * 或手动 `VITE_E2E_SCENARIO=<场景> … npm run tauri dev`。
@@ -1216,6 +1217,46 @@ async function scenarioDetailOneToOne(
   raw(`[${el()}] 场景 D 结束`);
 }
 
+/**
+ * issue #75：引擎缓存缺失且下载失败时，主界面必须可用，并给出中文失败原因与重试入口。
+ *
+ * 起点由编排器注入：`GALLERY_ENGINE_URL` 指向本地返回坏数据的地址、
+ * `GALLERY_ENGINE_CACHE_DIR` 指向临时空目录。所以这里不造数据，只断言 UI 形态。
+ */
+async function scenarioEngineDownload(el: () => string) {
+  const banner = await waitFor(
+    () => document.querySelector('[data-engine-banner="failed"]'),
+    180_000,
+    500,
+  );
+  raw(`[${el()}] >>> 断言E1 下载失败横幅出现 = ${!!banner}`);
+  if (!banner) {
+    raw(
+      `[${el()}] body 快照: ${document.body.innerText.replace(/\s+/g, ' ').slice(0, 300)}`,
+    );
+    return;
+  }
+  const text = (banner.textContent || '').replace(/\s+/g, ' ');
+  raw(`[${el()}] 横幅: ${text.slice(0, 300)}`);
+  raw(`[${el()}] >>> 断言E2 失败文案含下一步 = ${/下一步/.test(text)}`);
+  raw(`[${el()}] >>> 断言E3 常驻画出重试入口 = ${!!findButton('重试')}`);
+  raw(
+    `[${el()}] >>> 断言E4 常驻画出手动指定路径退路 = ${/手动指定 lumen-cli\.exe/.test(text)}`,
+  );
+  // 主界面没有被横幅挡住或卸载：设置的入口仍在，扫描按钮仍可读。
+  raw(`[${el()}] >>> 断言E5 主界面仍可用 = ${!!findButton('设置') && !!findButton('扫描')}`);
+
+  const retry = findButton('重试');
+  if (retry) {
+    retry.click();
+    await sleep(2000);
+    const still = document.querySelector('[data-engine-banner="failed"]');
+    raw(
+      `[${el()}] >>> 断言E6 重试后仍给出失败与重试入口 = ${!!still && !!findButton('重试')}`,
+    );
+  }
+}
+
 /** 场景的附加素材/输出目录（缺省为空串，场景自行判断是否必需）。 */
 export interface E2EScenarioOptions {
   /** RAW 原片目录；不填则只扫 JPG。 */
@@ -1281,6 +1322,8 @@ export async function runE2E(
       await scenarioDetailOneToOne(jpgFolder, opts.raw || '', opts.names || '', el);
     } else if (scenario === 'ui-contract') {
       await scenarioUiContract(jpgFolder, el, opts.mixed || '');
+    } else if (scenario === 'engine-download') {
+      await scenarioEngineDownload(el);
     } else {
       raw(`[${el()}] 未知场景: ${scenario}`);
     }

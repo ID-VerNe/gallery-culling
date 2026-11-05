@@ -215,6 +215,27 @@ export interface LumenStatus {
   detail: string;
 }
 
+/**
+ * LUMEN 引擎包的下载状态（issue #75）。
+ *
+ * 引擎不再随安装包分发，首次需要时由后台从独立 Release 资产拉取。
+ * `detail` 是**面向用户的中文说明**，失败时已包含「下一步怎么办」。
+ */
+export type LumenEnginePhase =
+  | 'missing'
+  | 'downloading'
+  | 'verifying'
+  | 'ready'
+  | 'failed';
+
+export interface LumenEngineStatus {
+  phase: LumenEnginePhase;
+  version: string;
+  detail: string;
+  downloadedBytes: number;
+  totalBytes: number;
+}
+
 export interface ExportItem {
   baseName: string;
   jpgPath?: string;

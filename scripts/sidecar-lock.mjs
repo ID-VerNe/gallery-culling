@@ -33,13 +33,21 @@ export const LOCK_FILE_NAME = 'sidecar.lock.json';
 export const SEMVER = /^\d+\.\d+\.\d+$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 
-/** 首次生成锁文件时的来源说明。已有锁文件时 `--update-lock` 会原样保留 `source`。 */
+/**
+ * 首次生成锁文件时的来源说明。已有锁文件时 `--update-lock` 会原样保留 `source`。
+ *
+ * issue #75 起引擎作为独立 Release 资产分发：`type: 'url'` 必须同时钉住
+ * zip 的 `zipSha256` 与 `zipBytes`，运行时下载后先校验这两项再解压。
+ */
 export const DEFAULT_SOURCE = {
-  type: 'local-path',
-  upstream: 'hety0211/lumen-raw v1.6.0',
-  note:
-    '上游 Release 只发 GUI 安装包，其中 lumen-cli.exe 是 15,920,050 字节的另一构建；' +
-    '随包精简 onedir（exe 6,702,168 字节 + _internal/，1150 个文件）没有可稳定取回的公开来源。',
+  type: 'url',
+  upstream: 'hety0211/lumen-raw v1.6.0（随包精简 onedir）',
+  tag: 'lumen-cli-v1.6.0',
+  asset: 'lumen-cli-1.6.0-win-x64.zip',
+  url: 'https://github.com/ID-VerNe/gallery-culling/releases/download/lumen-cli-v1.6.0/lumen-cli-1.6.0-win-x64.zip',
+  zipSha256: '0bb3d801a1e9e9edbdfe003c12ab1083a72bdef9ec6266f8d2866ad6a93c7462',
+  zipBytes: 77144680,
+  note: '引擎不再随主安装包分发：运行时按本文件下载 zip 并逐个校验目录内容；该 release 为 prerelease，不占用 releases/latest。',
 };
 
 export function sha256File(file) {
@@ -108,6 +116,14 @@ export function lockShapeProblems(lock) {
     }
     if (source.type === 'url') {
       needString(source.url, 'source.url');
+      // issue #75：运行时下载必须能校验「下到的就是资产那一份」。
+      // 缺这两个字段时下载链无法拒绝被代理改写的 zip，必须 fail-closed。
+      if (typeof source.zipSha256 !== 'string' || !SHA256.test(source.zipSha256)) {
+        problems.push(
+          `source.zipSha256 必须是 64 位小写十六进制（实际 ${JSON.stringify(source.zipSha256)}）`,
+        );
+      }
+      needBytes(source.zipBytes, 'source.zipBytes');
     } else {
       // local-path 必须写清「为什么没有公开来源」，否则后人不知道能否换成 --fetch。
       needString(source.note, 'source.note（local-path 必须说明为什么没有公开来源）');

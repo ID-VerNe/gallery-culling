@@ -55,6 +55,8 @@ pub use lumencmds::{
     __cmd__lumen_apply_preset_cmd, __tauri_command_name_lumen_apply_preset_cmd,
     __cmd__lumen_apply_mask_cmd, __tauri_command_name_lumen_apply_mask_cmd,
     __cmd__lumen_list_masks_cmd, __tauri_command_name_lumen_list_masks_cmd,
+    __cmd__lumen_engine_status_cmd, __tauri_command_name_lumen_engine_status_cmd,
+    __cmd__lumen_engine_ensure_cmd, __tauri_command_name_lumen_engine_ensure_cmd,
     lumen_status_cmd,
     probe_lumen_cmd,
     lumen_preview_cmd,
@@ -66,6 +68,8 @@ pub use lumencmds::{
     lumen_apply_preset_cmd,
     lumen_apply_mask_cmd,
     lumen_list_masks_cmd,
+    lumen_engine_status_cmd,
+    lumen_engine_ensure_cmd,
 };
 
 pub use tone::{
@@ -140,6 +144,8 @@ pub struct AppState {
     /// 而这里是「同一时刻只渲一张」的资源上限 —— 第二个请求应当立刻
     /// `E_BUSY` 让前端队列自己排队，不该让导出按钮变灰。
     pub detail_busy: Arc<AtomicBool>,
+    /// 引擎包下载/校验/缓存（issue #75）：单飞 + 状态机。
+    pub engine: lumen::EngineManager,
 }
 
 impl AppState {
@@ -155,6 +161,7 @@ impl AppState {
             sync: Arc::new(syncqueue::Coalescer::new(sink)),
             tasks: crate::taskgate::TaskGate::new(),
             detail_busy: Arc::new(AtomicBool::new(false)),
+            engine: lumen::EngineManager::new(),
         }
     }
 }

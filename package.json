@@ -24,6 +24,7 @@
     "e2e:preset": "node e2e/run-inapp.mjs --scenario=lumen-preset",
     "e2e:detail": "node e2e/run-inapp.mjs --scenario=detail-1to1",
     "e2e:ui": "node e2e/run-inapp.mjs --scenario=ui-contract",
+    "e2e:engine": "node e2e/run-inapp.mjs --scenario=engine-download",
     "e2e": "npm run e2e:unit && npm run e2e:rust && npm run e2e:render && npm run e2e:ui"
   },
   "dependencies": {
