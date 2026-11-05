@@ -150,6 +150,19 @@ describe('useKeyboardShortcuts 守卫作用域', () => {
     expect(h.onRate).not.toHaveBeenCalled();
   });
 
+  it('文本输入框内数字键不触发评星（issue #65 的 toggle 也不得穿透）', () => {
+    const h = setup();
+    const input = document.createElement('input');
+    input.type = 'text';
+    mount(input);
+
+    const notPrevented = fireEvent.keyDown(input, { key: '1' });
+
+    expect(h.onRate).not.toHaveBeenCalled();
+    // 让位给输入框原生输入，不得 preventDefault。
+    expect(notPrevented).toBe(true);
+  });
+
   it('宫格 listbox 聚焦时按住 `V` 生效、松手复位（keyup 早于通用守卫）', () => {
     const h = setup();
     const listbox = document.createElement('div');

@@ -135,28 +135,38 @@ export function useRatingFlagSync(opts: {
       const targetPath = groupPath(targetGroup);
       if (!targetPath) return;
 
+      // issue #65：重复按同一个数字键 = 清零（与 `setLabel` 的同值取消同构，
+      // 也和帮助弹窗「再按一次同星取消」一致）。
+      //
+      // 只在这里做单张 toggle：`applyRating` 的多选分支仍走批量「设为 N 星」，
+      // 批量不能按各自动值切换，否则 20 张里已有 3 星的结果无法预期。
+      // `rating > 0` 排除传入 0 的路径（鼠标点当前星级、`R` 的清除），避免把
+      // 「已是 0」再当成一次切换。
+      const nextRating =
+        rating > 0 && rating === targetGroup.rating ? 0 : rating;
+
       // 评分必须与淘汰态互斥：给「已淘汰」的照片打星 = 解除淘汰。
       //
       // 否则原样透传 flag=reject，后端按 reject 写 Rating=-1 ——
       // 界面显示「4 星」、磁盘仍是 -1，用户打多少星都摆脱不掉淘汰标记。
       // pick 语义与评分正交（打了星仍是 pick），故只有 reject 被清掉。
       const nextFlag: CullFlag =
-        targetGroup.flag === 'reject' && rating > 0 ? 'none' : targetGroup.flag;
+        targetGroup.flag === 'reject' && nextRating > 0 ? 'none' : targetGroup.flag;
 
-      pushSingle(summarizeRating(rating), targetGroup, targetPath, {
-        rating,
+      pushSingle(summarizeRating(nextRating), targetGroup, targetPath, {
+        rating: nextRating,
         flag: nextFlag,
         label: targetGroup.label,
       });
 
-      onGroupPatched(targetGroup.id, { rating, flag: nextFlag });
+      onGroupPatched(targetGroup.id, { rating: nextRating, flag: nextFlag });
 
       // Sync to XMP in background
       try {
         // 色标整组透传：只改星级不能顺手把用户设的色标清掉。
         await api.updateRatingFlag(
           targetPath,
-          rating,
+          nextRating,
           nextFlag,
           true,
           true,
