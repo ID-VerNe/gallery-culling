@@ -1,11 +1,11 @@
 {
-  "version": "v2.0.7",
-  "notes": "v2.0.7\n\n- 底栏改为常驻底部状态栏：照片不再被底栏遮挡，光圈、快门、ISO 等参数一眼可见，同时保留常用按钮与快捷提示。\n- 快捷键收敛为左手键位：A/D 翻页，F 保留、X 淘汰、R 清除，T 前后对照，按住 V 看原片，Shift+1~5 色标，W 外部打开，G 镜头元数据，Q / Shift+Q 设基准，F1 打开全部快捷键。\n- 原先的右手键位已全部移除，误按不会再触发任何操作；完整键位以 F1 帮助弹窗为准。",
-  "pub_date": "2026-11-05T11:23:12.516Z",
+  "version": "v2.0.8",
+  "notes": "v2.0.8\n\n- 星级数字键改为同键再按清零：1→1 归零，1→2 变两星；R 仍同时清星级与旗标。\n- 扫描只需填一个目录，JPG、RAW 或混合会自动识别；空目录或只选了子文件夹时不会改写已填路径，并给出提示。\n- 调色自动保存（默认开启，停止操作约 400 毫秒后写入，失败会明确提示）；设置里可关闭，关闭后仍能手动保存。\n- LUMEN 引擎改为按需下载：首次使用时自动拉取并校验，失败可重试、也可手动指定路径。安装包体积从 55.6 MB 降到约 6.3 MB。",
+  "pub_date": "2026-11-05T16:47:31.420Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNHJyajc2Skl6Y1VSSWs4WGc1WE05bHZuM0pyb09Xc3lSaVNsL2tCR0RSSHlHZHF6N0JOUjJFbTlPYkRsaXZOK1FiOUhvR25FeTJwS0Fsa1ZZbDRpcXdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzODc3NzkyCWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC43X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjAuNwpxVUJ4L3UvSmZKUXJmRDlHRnVFb1dMRXpmZjEwVUVsMWFraGlPU1VoVkxtNWN3emxFU3Z3cENudjF5ckVpVjNSS0pBQWZhNjAzZWEvWEJoTW5SSW1Ddz09Cg==",
-      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.7/gallery-culling_2.0.7_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNHBLcWN5NU1nekRPS3EyNlJiM3VvZ1BOcDQ1UUpMQnFVWThQaklPcldRTDhWY2NXamkxV09OaHlmcnN4UkxsRitKWGlWWjNqb2gzcWhNWkNYaW1aNHdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzODk3MjUwCWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC44X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjAuOAovc2FPNXZBdXRYL3pIaXJpMHJmOXJHTVNnTWNBdmZOVnZJdXpmSGZPY0NmMjdML1BMZmhTbnIzYVpUanhQeU5OKzlnaUNYRGd1dHdWZm1WQWFYcEpCQT09Cg==",
+      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.8/gallery-culling_2.0.8_x64-setup.exe"
     }
   }
 }
