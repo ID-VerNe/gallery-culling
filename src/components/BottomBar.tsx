@@ -309,8 +309,8 @@ function formatMb(size: number): string {
 /**
  * 一个窗格的信息组。
  *
- * 断点策略：参数组单图 `lg`、双图 `xl`（双图宽度翻倍，`lg` 会挤爆 1024）；
- * 体积与镜头型号 `2xl`；旗标文字 `2xl`，以下只留图标但保留 `aria-label`。
+ * 断点策略：参数组仅单图 `lg`（双图不渲染，见下）；体积与镜头型号 `2xl`；
+ * 双图状态文字 `xl`；旗标文字 `2xl`，以下只留图标但保留 `aria-label`。
  */
 const StatusPaneView: React.FC<{ pane: StatusPane; twoPane: boolean }> = ({ pane, twoPane }) => {
   const { group, tone, slot, onRate, onFlag, onLabel } = pane;
