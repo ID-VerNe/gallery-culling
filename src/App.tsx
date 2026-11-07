@@ -933,6 +933,18 @@ function AppShell() {
         onRedo={() => void handleRedo()}
         canRedo={canRedo}
         redoSummary={redoSummary}
+        // issue #32 / SH-15 + SH-06：双图里「当前照片」语义歧义，且 V 不作用于
+        // 双图视口 —— 这两个入口只给单图 / 前后对照接线。
+        isPinnedCurrent={
+          external.viewMode !== 'split' && !!currentGroup && pinnedId === currentGroup.id
+        }
+        onTogglePinCurrent={
+          external.viewMode !== 'split' ? handleTogglePinCurrent : undefined
+        }
+        onHoldOriginalStart={
+          external.viewMode !== 'split' ? handleHoldOriginalStart : undefined
+        }
+        onHoldOriginalEnd={external.viewMode !== 'split' ? handleHoldOriginalEnd : undefined}
       />
 
       {/* Batch Export Modal */}

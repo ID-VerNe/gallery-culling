@@ -6,7 +6,7 @@
  * 双图要在同一行里区分左右窗格。本文件同时保留 #51 的键位文案断言。
  */
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { BottomBar, type StatusPane } from './BottomBar';
 import { BAR_SHORTCUT_IDS, findShortcut } from '../utils/shortcutCatalog';
 import type { PhotoGroupInfo, ToneAdjustments } from '../types';
@@ -292,5 +292,83 @@ describe('底栏速查（issue #51）', () => {
     expect(entry).toHaveAttribute('title', '查看全部快捷键（F1）');
     fireEvent.click(entry);
     expect(onOpenShortcutHelp).toHaveBeenCalledTimes(1);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* issue #32：SH-15 基准鼠标入口 / SH-06 按住看原片 / SH-12 键位可达           */
+/* -------------------------------------------------------------------------- */
+
+describe('issue #32 —— 状态栏里的鼠标入口与键位可达性', () => {
+  it('SH-15：设为基准按钮可点，aria-pressed 跟随基准态', () => {
+    const onTogglePinCurrent = vi.fn();
+    renderBar({
+      panes: [makePane()],
+      isPinnedCurrent: false,
+      onTogglePinCurrent,
+    });
+
+    const button = screen.getByRole('button', { name: '将当前照片设为对比基准' });
+    expect(button).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(button);
+    expect(onTogglePinCurrent).toHaveBeenCalledTimes(1);
+
+    // 已钉住时文案与 aria 状态一起翻转；再点一次仍是同一个 toggle action。
+    cleanup();
+    renderBar({
+      panes: [makePane()],
+      isPinnedCurrent: true,
+      onTogglePinCurrent,
+    });
+    const pinned = screen.getByRole('button', { name: '取消将当前照片设为对比基准' });
+    expect(pinned).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(pinned);
+    expect(onTogglePinCurrent).toHaveBeenCalledTimes(2);
+  });
+
+  it('SH-15：未接线时（双图）不渲染基准按钮，避免「当前照片」语义歧义', () => {
+    renderBar({ panes: [makePane({ slot: 'L' }), makePane({ slot: 'R' })] });
+    expect(screen.queryByRole('button', { name: /当前照片设为对比基准/ })).toBeNull();
+  });
+
+  it('SH-06：按住「看原片」开始/结束，离开或取消也复位', () => {
+    const onHoldOriginalStart = vi.fn();
+    const onHoldOriginalEnd = vi.fn();
+    renderBar({ panes: [makePane()], onHoldOriginalStart, onHoldOriginalEnd });
+
+    const button = screen.getByRole('button', { name: '按住查看原片' });
+    fireEvent.pointerDown(button);
+    expect(onHoldOriginalStart).toHaveBeenCalledTimes(1);
+    fireEvent.pointerUp(button);
+    expect(onHoldOriginalEnd).toHaveBeenCalledTimes(1);
+
+    fireEvent.pointerDown(button);
+    fireEvent.pointerLeave(button);
+    expect(onHoldOriginalEnd).toHaveBeenCalledTimes(2);
+
+    fireEvent.pointerDown(button);
+    fireEvent.pointerCancel(button);
+    expect(onHoldOriginalEnd).toHaveBeenCalledTimes(3);
+  });
+
+  it('SH-12：撤销/重做按钮带 aria-keyshortcuts，读屏能取到键位', () => {
+    renderBar({
+      panes: [makePane()],
+      canUndo: true,
+      undoSummary: '淘汰 2 张',
+      onUndo: vi.fn(),
+      canRedo: true,
+      redoSummary: '淘汰 2 张',
+      onRedo: vi.fn(),
+    });
+
+    expect(screen.getByRole('button', { name: '撤销：淘汰 2 张' })).toHaveAttribute(
+      'aria-keyshortcuts',
+      'Control+z',
+    );
+    expect(screen.getByRole('button', { name: '重做：淘汰 2 张' })).toHaveAttribute(
+      'aria-keyshortcuts',
+      'Control+Shift+z',
+    );
   });
 });

@@ -130,3 +130,25 @@ describe('issue #61 —— 帮助弹窗锁住左手键文案', () => {
     }
   });
 });
+
+/**
+ * issue #32 / SH-10：帮助必须覆盖「已实现但此前没写进文档」的三类入口。
+ *
+ * 判定历史：Home/End/PgUp/PgDn 的实现已随 #61 删除，故不再属于缺口；
+ * 真正的缺口是宫格 `Ctrl+A`、`Esc` 与 `Ctrl/Shift+点击` 多选，以及
+ * 宫格内 `↑ / ↓` 跨行。缺一条就说明帮助又落后于实现了。
+ */
+describe('issue #32 / SH-10 —— 帮助补齐宫格与 Esc 键位', () => {
+  it('宫格全选 / Esc / 跨行 / 鼠标多选都能在帮助里查到', () => {
+    render(<ShortcutHelpModal isOpen onClose={() => {}} />);
+
+    for (const keys of [
+      'Ctrl/⌘ + A', // 宫格全选
+      'Esc', // 关弹窗 / 面板 / 清空宫格搜索
+      '↑ / ↓', // 宫格跨行
+      'Ctrl / Shift + 点击', // 宫格多选 / 范围选
+    ]) {
+      expect(screen.getByText(keys)).toBeTruthy();
+    }
+  });
+});
