@@ -230,7 +230,7 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
           <button
             onClick={onToggleTonalAdjuster}
             disabled={tonalDisabled}
-            className={`focus-ring flex items-center gap-1.5 px-3 py-1 rounded-md active:scale-[0.96] transition-colors font-medium whitespace-nowrap ${
+            className={`focus-ring flex items-center gap-1.5 px-3 py-1 rounded-md active:scale-[0.96] press font-medium whitespace-nowrap ${
               tonalDisabled
                 ? 'bg-background-surface-hover text-white/40 cursor-not-allowed'
                 : tonalVisible
