@@ -3,8 +3,10 @@ import { PhotoGroupInfo, ToneAdjustments, type ColorLabel } from '../types';
 import {
   Check,
   ExternalLink,
+  Eye,
   HardDrive,
   Keyboard,
+  Pin,
   Redo2,
   Search,
   Sliders,
@@ -94,6 +96,18 @@ interface BottomBarProps {
   canRedo?: boolean;
   /** 下一条将被重做的命令描述。 */
   redoSummary?: string;
+  /**
+   * 基准鼠标入口（issue #32 / SH-15）。宿主只在单图 / 前后对照传入：
+   * 双图里「当前照片」语义歧义，基准由左右窗格各自的按钮负责。
+   */
+  isPinnedCurrent?: boolean;
+  onTogglePinCurrent?: () => void;
+  /**
+   * 按住看原片的指针入口（issue #32 / SH-06），与左半区 `V` 共用同一对
+   * action。只传 `isHoldOriginal` 不够——鼠标用户没有任何触发路径。
+   */
+  onHoldOriginalStart?: () => void;
+  onHoldOriginalEnd?: () => void;
 }
 
 /**
@@ -125,6 +139,10 @@ export const BottomBar: React.FC<BottomBarProps> = ({
   onRedo,
   canRedo = false,
   redoSummary = '',
+  isPinnedCurrent = false,
+  onTogglePinCurrent,
+  onHoldOriginalStart,
+  onHoldOriginalEnd,
 }) => {
   const humanIndex = totalCount > 0 ? currentIndex + 1 : 0;
   const counterText = searchActive
@@ -241,12 +259,55 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           </button>
         )}
 
+        {/* issue #32 / SH-15：单图没有「设为基准」按钮时，钉基准只能靠空格。 */}
+        {onTogglePinCurrent && (
+          <button
+            onClick={onTogglePinCurrent}
+            className={`${STATUS_BUTTON} ${
+              isPinnedCurrent ? 'bg-amber-600/25 text-amber-300' : ''
+            } ${twoPane ? 'hidden 2xl:flex' : 'hidden lg:flex'}`}
+            title={isPinnedCurrent ? '取消基准（空格）' : '将当前照片设为对比基准（空格）'}
+            aria-label={
+              isPinnedCurrent ? '取消将当前照片设为对比基准' : '将当前照片设为对比基准'
+            }
+            aria-pressed={isPinnedCurrent}
+            aria-keyshortcuts="Space"
+          >
+            <Pin className="w-3 h-3 shrink-0" aria-hidden="true" />
+            <span className="pb-[1px] hidden 2xl:inline">
+              {isPinnedCurrent ? '基准参考' : '设为基准'}
+            </span>
+          </button>
+        )}
+
+        {/* issue #32 / SH-06：按住看原片的鼠标入口，与 `V` 共用同一对 action。 */}
+        {onHoldOriginalStart && onHoldOriginalEnd && (
+          <button
+            type="button"
+            onPointerDown={(event) => {
+              // 阻止按下后的文本选择/焦点抢走 pointerup。
+              event.preventDefault();
+              onHoldOriginalStart();
+            }}
+            onPointerUp={onHoldOriginalEnd}
+            onPointerLeave={onHoldOriginalEnd}
+            onPointerCancel={onHoldOriginalEnd}
+            className={`${STATUS_BUTTON} ${twoPane ? 'hidden 2xl:flex' : 'hidden lg:flex'}`}
+            title="按住查看原片（也可按住 V）"
+            aria-label="按住查看原片"
+          >
+            <Eye className="w-3 h-3 shrink-0" aria-hidden="true" />
+            <span className="pb-[1px] hidden 2xl:inline">看原片</span>
+          </button>
+        )}
+
         <button
           onClick={onUndo}
           disabled={!canUndo}
           className={`${STATUS_BUTTON} ${twoPane ? 'hidden 2xl:flex' : 'hidden xl:flex'}`}
           title={canUndo ? `撤销：${undoSummary} (Ctrl+Z)` : '没有可撤销的改动'}
           aria-label={canUndo ? `撤销：${undoSummary}` : '撤销（没有可撤销的改动）'}
+          aria-keyshortcuts="Control+z"
         >
           <Undo2 className="w-3 h-3 shrink-0" aria-hidden="true" />
           <span className="pb-[1px] shrink-0">撤销</span>
@@ -260,6 +321,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           className={`${STATUS_BUTTON} ${twoPane ? 'hidden 2xl:flex' : 'hidden xl:flex'}`}
           title={canRedo ? `重做：${redoSummary} (Ctrl+Shift+Z)` : '没有可重做的改动'}
           aria-label={canRedo ? `重做：${redoSummary}` : '重做（没有可重做的改动）'}
+          aria-keyshortcuts="Control+Shift+z"
         >
           <Redo2 className="w-3 h-3 shrink-0" aria-hidden="true" />
           <span className="pb-[1px] shrink-0">重做</span>

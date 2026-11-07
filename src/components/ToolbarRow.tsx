@@ -314,8 +314,9 @@ export const ToolbarRow: React.FC<ToolbarRowProps> = ({
         <button
           onClick={onOpenExportModal}
           className="focus-ring flex items-center gap-1.5 px-3 py-1 bg-background-surface-hover hover:bg-white/10 text-white rounded-md active:scale-[0.96] press font-medium whitespace-nowrap"
-          title="批量挑选导出"
+          title="批量挑选导出（Ctrl+E）"
           aria-label="批量挑选导出照片"
+          aria-keyshortcuts="Control+E"
         >
           <Download className="w-3.5 h-3.5" aria-hidden="true" />
           <span className="pb-[1px]">导出</span>

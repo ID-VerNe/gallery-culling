@@ -36,6 +36,8 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { id: 'prev', keys: 'A', label: '上一张' },
       { id: 'next', keys: 'D', label: '下一张' },
       { id: 'search', keys: 'Ctrl/⌘ + F', label: '搜索宫格列表' },
+      { id: 'select-all', keys: 'Ctrl/⌘ + A', label: '宫格内全选（多选路径）' },
+      { id: 'grid-rows', keys: '↑ / ↓', label: '宫格内跨行移动（±当前列数）' },
       { id: 'open-external', keys: 'W', label: '在 Photoshop / 默认程序中打开' },
     ],
   },
@@ -66,6 +68,7 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { id: 'zoom-1to1', keys: 'Z', label: '1:1 细节（RAW-only 首次需 6–8 秒，再按回适应）' },
       { id: 'hold-original', keys: 'V（按住）', label: '临时查看原片', barLabel: '看原片' },
       { id: 'help', keys: 'F1', label: '打开 / 关闭快捷键帮助' },
+      { id: 'escape', keys: 'Esc', label: '关闭弹窗 / 调色面板，或清空宫格搜索' },
     ],
   },
   {
@@ -105,6 +108,11 @@ export const MOUSE_SHORTCUTS: ShortcutItem[] = [
   { id: 'mouse-wheel', keys: '滚轮', label: '以指针为中心缩放' },
   { id: 'mouse-drag', keys: '左键拖拽', label: '平移画面（对比视图下双图联动）' },
   { id: 'mouse-dblclick', keys: '双击', label: '在适应窗口 / 250% 之间切换' },
+  {
+    id: 'mouse-multi-select',
+    keys: 'Ctrl / Shift + 点击',
+    label: '宫格多选（Ctrl / ⌘）与从锚点范围选择（Shift）',
+  },
 ];
 
 /**
