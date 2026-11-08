@@ -155,9 +155,10 @@ export function useKeyboardShortcuts({
      * 宫格只画 `pinnedId` 角标、不展示对比结果，此时改基准用户看不见效果，
      * 切回单图/对比才发现基准被静默钉住。因此三个基准键在宫格内让路。
      *
-     * 判定读**真实焦点**（`document.activeElement` 的 listbox 祖先 —— 项目
-     * 唯一的 listbox 就是宫格，`ThumbnailGrid.tsx` 的容器与 `role="option"`
-     * 都可聚焦），不用「宫格是否可见」这类间接信号；焦点离开即恢复。
+     * 判定读**真实焦点**：宫格的焦点由 listbox 容器持有（`tabIndex={0}`；单元格
+     * 本身不可聚焦，焦点模型是容器上的 `aria-activedescendant`），`closest` 用来
+     * 兼容宫内可能出现的可聚焦子孙节点。不用「宫格是否可见」这类间接信号；
+     * 焦点离开即恢复。
      */
     const isFocusInsideGrid = (): boolean => {
       const active = document.activeElement;

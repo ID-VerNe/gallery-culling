@@ -874,6 +874,10 @@ describe('useKeyboardShortcuts —— 基准键 repeat 守卫（issue #95）', (
  * 松手再切回单图/对比就发现基准被静默钉住了。判定读真实焦点
  * （`document.activeElement` 的 listbox 祖先），不是「宫格是否可见」。
  * 三键在宫格内不得 `preventDefault` —— 事件要原样留给宫格的键盘导航。
+ *
+ * 真实焦点路径是 listbox 容器（`ThumbnailGrid.tsx:451` 的 `tabIndex=0`；
+ * 单元格不可聚焦，焦点模型走 `aria-activedescendant`），所以「容器本身」
+ * 那条用例才是日常回归；子孙节点那条锁住 `closest` 判定本身。
  */
 describe('useKeyboardShortcuts —— 宫格焦点让路（issue #95 · PB-2）', () => {
   function setupGrid() {
@@ -914,7 +918,7 @@ describe('useKeyboardShortcuts —— 宫格焦点让路（issue #95 · PB-2）'
     while (mounted.length > 0) mounted.pop()?.remove();
   });
 
-  it('焦点在宫格 option 内：B / Q / Shift+Q 不响应，也不吞事件', () => {
+  it('焦点在 listbox 的子孙节点上：B / Q / Shift+Q 不响应，也不吞事件', () => {
     const { option, handlers } = mountGrid();
     option.focus();
     expect(document.activeElement).toBe(option);
