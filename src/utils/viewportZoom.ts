@@ -153,3 +153,185 @@ export function dragGrab(clientX: number, clientY: number, pos: Vec2): Vec2 {
 export function dragTarget(clientX: number, clientY: number, grab: Vec2): Vec2 {
   return { x: clientX - grab.x, y: clientY - grab.y };
 }
+
+// ---------------------------------------------------------------------------
+// 拖拽收尾（issue #22 · PB-6 速度继承 + PB-8 越界回弹）
+//
+// 手势结束不是「把位置定住」，而是「把手上的速度交出去，再收敛回允许区间」。
+// 这里的数学全部是纯函数 + 一个 rAF 驱动器：hooks 只负责采样与写 state，
+// 投影距离、阻尼、收敛曲线都只有这一处真值，双栏与单栏不可能算出两种手感。
+//
+// 收尾的三条硬约束（由视图层用例逐帧断言，不靠肉眼）：
+//  1. 落点先过 `clampToPane` / `clampToPanePair` —— 惯性再大也不会把画面甩出边界；
+//  2. 每帧写入前再过一次同样的夹紧 —— 收尾途中换图/改窗口也不会越界；
+//  3. 收尾只写 `pos`，`scale` 一个字节都不碰，量程约束不受影响。
+// ---------------------------------------------------------------------------
+
+/** 速度采样窗口（ms）：只认最近 100ms 的指针位移。 */
+export const VELOCITY_WINDOW_MS = 100;
+
+/**
+ * 松手速度 → 滑行距离的当量时间常数（ms）。
+ *
+ * 指数收敛下 `距离 = v · τ`，且抬手瞬间的速度正好接上手指速度（不加速、不减速）。
+ * issue 建议的 `d≈0.998` 折合 499ms 当量：尾巴要爬 3–4 秒才落到亚像素，
+ * 读作「飘」。250ms 当量 1–2 秒内收敛，观感更接近照片查看器而不是惯性滚动列表。
+ */
+export const FLING_TAU_MS = 250;
+
+/** 抬手速度上限（px/ms）。采样抖动会算出 100px/ms 这种手做不到的速度，一律按上限算。 */
+export const FLING_MAX_SPEED = 6;
+
+/** 低于这个速度（px/ms）不算甩动：投影不足 12.5px，肉眼不可见。 */
+export const FLING_MIN_SPEED = 0.05;
+
+/** 一次收尾的硬上界（ms）。指数收敛理论上无限长，这里兜住环境时钟异常。 */
+export const FLING_MAX_MS = 2000;
+
+/** 与落点相差不足这个距离（px）即视为落定，不再逐帧写。 */
+export const FLING_SETTLE_EPSILON = 0.5;
+
+/** 越界段的阻尼系数（PB-8 建议 0.3–0.5，取中值）。 */
+export const RUBBER_BAND = 0.4;
+
+/** 一次指针采样：时刻（ms）+ 客户端坐标。 */
+export interface PointerSample {
+  t: number;
+  x: number;
+  y: number;
+}
+
+/** 单调时钟。测试里由 `vi.useFakeTimers()` 接管 `performance.now`。 */
+export function nowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+/** 推入一次采样并裁掉窗口外的旧点。抬手前停顿超过窗口，速度自然归零。 */
+export function pushPointerSample(
+  samples: readonly PointerSample[],
+  sample: PointerSample,
+): PointerSample[] {
+  const kept = samples.filter((s) => sample.t - s.t <= VELOCITY_WINDOW_MS);
+  return [...kept, sample];
+}
+
+/** 用窗口首尾两点求指针速度（px/ms），并按上限截断（保方向）。 */
+export function pointerVelocity(samples: readonly PointerSample[]): Vec2 {
+  if (samples.length < 2) return { x: 0, y: 0 };
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  const dt = last.t - first.t;
+  if (dt <= 0) return { x: 0, y: 0 };
+  const vx = (last.x - first.x) / dt;
+  const vy = (last.y - first.y) / dt;
+  const speed = Math.hypot(vx, vy);
+  if (speed <= FLING_MAX_SPEED) return { x: vx, y: vy };
+  const k = FLING_MAX_SPEED / speed;
+  return { x: vx * k, y: vy * k };
+}
+
+/** 抬手速度是否够得上「甩」：低于门槛就当没动过。 */
+export function isFlingVelocity(velocity: Vec2): boolean {
+  return Math.hypot(velocity.x, velocity.y) >= FLING_MIN_SPEED;
+}
+
+/** 速度 → 投影位移（px）。 */
+export function projectFling(velocity: Vec2): Vec2 {
+  return { x: velocity.x * FLING_TAU_MS, y: velocity.y * FLING_TAU_MS };
+}
+
+/**
+ * PB-8：越界部分乘阻尼。界内原样返回 —— 越界只在拖动过程中出现，
+ * 抬手后由 `clampToPane` 收回去，所以这里不做上限截断（手指能推多远就多远）。
+ */
+export function dampOverscroll(pos: Vec2, max: Vec2): Vec2 {
+  const axis = (v: number, m: number) => {
+    if (v > m) return m + (v - m) * RUBBER_BAND;
+    if (v < -m) return -m + (v + m) * RUBBER_BAND;
+    return v;
+  };
+  return { x: axis(pos.x, max.x), y: axis(pos.y, max.y) };
+}
+
+/** 单栏：越界阻尼版的目标位置。 */
+export function dampToPane(
+  pane: HTMLElement | null,
+  img: HTMLElement | null,
+  pos: Vec2,
+  scale: number,
+): Vec2 {
+  const max = paneMaxPan(pane, img, scale);
+  return dampOverscroll(pos, max);
+}
+
+/** 联动双栏：越界阻尼版的目标位置（公共边界，口径同 `clampToPanePair`）。 */
+export function dampToPanePair(
+  paneA: HTMLElement | null,
+  imgA: HTMLElement | null,
+  scaleA: number,
+  paneB: HTMLElement | null,
+  imgB: HTMLElement | null,
+  scaleB: number,
+  pos: Vec2,
+): Vec2 {
+  const ma = paneMaxPan(paneA, imgA, scaleA);
+  const mb = paneMaxPan(paneB, imgB, scaleB);
+  return dampOverscroll(pos, { x: Math.min(ma.x, mb.x), y: Math.min(ma.y, mb.y) });
+}
+
+/**
+ * 收尾曲线：从 `from` 指数逼近 `to`。
+ *
+ * 初始速度 = `(to − from) / τ`，而 `to − from` 正是 `v · τ` 的投影 ——
+ * 抬手瞬间的速度与手指速度连续，不会出现「一松手画面突然加速/顿住」。
+ */
+export function inertiaAt(from: Vec2, to: Vec2, elapsedMs: number): Vec2 {
+  const remain = Math.exp(-Math.max(0, elapsedMs) / FLING_TAU_MS);
+  return { x: to.x + (from.x - to.x) * remain, y: to.y + (from.y - to.y) * remain };
+}
+
+/** 在飞的收尾句柄。`stop()` 之后不会再有任何一帧写入。 */
+export interface InertiaRun {
+  stop: () => void;
+}
+
+/**
+ * 用 rAF 驱动一次收尾：每帧 `onFrame(位置)`，落定调 `onDone()`。
+ *
+ * 为什么是 rAF 而不是 CSS `transition`：惯性要把「速度」逐步泄掉，落点还得
+ * 每帧重夹；CSS 补间只能从 A 到 B，途中改不了。通道用 `GESTURE`（不补间），
+ * 否则 CSS 会追着每一帧再补一次，变成双重缓动。
+ */
+export function runInertia(
+  from: Vec2,
+  to: Vec2,
+  onFrame: (pos: Vec2) => void,
+  onDone: () => void,
+): InertiaRun {
+  const distance = Math.hypot(to.x - from.x, to.y - from.y);
+  let frame = 0;
+  let start = Number.NaN;
+
+  const tick = (now: number) => {
+    if (Number.isNaN(start)) start = now;
+    const elapsed = now - start;
+    const remain = Math.exp(-Math.max(0, elapsed) / FLING_TAU_MS);
+    if (elapsed >= FLING_MAX_MS || distance * remain <= FLING_SETTLE_EPSILON) {
+      frame = 0;
+      onFrame(to);
+      onDone();
+      return;
+    }
+    onFrame(inertiaAt(from, to, elapsed));
+    frame = requestAnimationFrame(tick);
+  };
+
+  frame = requestAnimationFrame(tick);
+  return {
+    stop: () => {
+      if (!frame) return;
+      cancelAnimationFrame(frame);
+      frame = 0;
+    },
+  };
+}

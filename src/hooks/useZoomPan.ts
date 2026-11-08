@@ -8,10 +8,19 @@ import {
   DOUBLE_CLICK_SCALE,
   clampScale,
   clampToPane,
+  dampToPane,
   dragGrab,
   dragTarget,
   isFitScale,
+  isFlingVelocity,
+  nowMs,
   oneToOneScale,
+  pointerVelocity,
+  projectFling,
+  pushPointerSample,
+  runInertia,
+  type InertiaRun,
+  type PointerSample,
   type Vec2,
 } from '../utils/viewportZoom';
 import { GESTURE, SETTLE } from '../utils/viewportMotion';
@@ -93,6 +102,18 @@ export function useZoomPan(
   // 更新，也从结构上排除「读到旧 dragStart」的可能。
   const grabRef = useRef<Vec2>({ x: 0, y: 0 });
   const leaveListenerRef = useRef<(() => void) | null>(null);
+  // 收尾采样与在飞的收尾（issue #22）。采样存 ref：pointermove 的频率不该变成渲染次数。
+  const samplesRef = useRef<PointerSample[]>([]);
+  const inertiaRef = useRef<InertiaRun | null>(null);
+
+  /** 停掉在飞的收尾：任何「新意图」（按下 / 滚轮 / ± / 复位 / 换图）都优先。 */
+  const cancelInertia = useCallback(() => {
+    inertiaRef.current?.stop();
+    inertiaRef.current = null;
+  }, []);
+
+  // 卸载时不能留 rAF：否则收尾会在组件消失后继续 setState。
+  useEffect(() => cancelInertia, [cancelInertia]);
 
   const leaveOneToOne = useCallback(() => {
     leaveListenerRef.current?.();
@@ -106,6 +127,10 @@ export function useZoomPan(
   // 在 `resetKey` 变化时跑；首次挂载状态本来就是 1 / {0,0}，无需补一次。
   useEffect(() => {
     leaveOneToOne();
+    // 换图即取消在飞的收尾：惯性属于上一张照片的位移，带进新图就会把它推出画面。
+    inertiaRef.current?.stop();
+    inertiaRef.current = null;
+    samplesRef.current = [];
     setScale(1);
     setPos({ x: 0, y: 0 });
   }, [resetKey, leaveOneToOne]);
@@ -113,10 +138,11 @@ export function useZoomPan(
   const zoomBy = useCallback(
     (factor: number) => {
       leaveOneToOne();
+      cancelInertia();
       setTransition(SETTLE);
       setScale(clampScale(scale * factor));
     },
-    [scale, leaveOneToOne],
+    [scale, leaveOneToOne, cancelInertia],
   );
 
   /**
@@ -130,6 +156,9 @@ export function useZoomPan(
    */
   const reset = useCallback(() => {
     leaveListenerRef.current?.();
+    inertiaRef.current?.stop();
+    inertiaRef.current = null;
+    samplesRef.current = [];
     setTransition(SETTLE);
     setScale(1);
     setPos({ x: 0, y: 0 });
@@ -141,6 +170,9 @@ export function useZoomPan(
     const s = img ? oneToOneScale(img.naturalWidth, img.offsetWidth) : null;
     const landing = s ?? fallback;
     if (landing === undefined) return null;
+    inertiaRef.current?.stop();
+    inertiaRef.current = null;
+    samplesRef.current = [];
     setTransition(SETTLE);
     setScale(landing);
     setPos({ x: 0, y: 0 });
@@ -151,6 +183,7 @@ export function useZoomPan(
     (e: React.WheelEvent) => {
       e.preventDefault();
       leaveOneToOne();
+      cancelInertia();
       setTransition(GESTURE);
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
       const next = zoomAtPoint(e, rect, scale, pos, {
@@ -161,7 +194,7 @@ export function useZoomPan(
       setScale(next.scale);
       setPos(next.pos);
     },
-    [scale, pos, leaveOneToOne],
+    [scale, pos, leaveOneToOne, cancelInertia],
   );
 
   const handlePointerDown = useCallback(
@@ -171,19 +204,28 @@ export function useZoomPan(
       if (e.target !== e.currentTarget) return;
       // 只按下还什么都没离开 1:1：没有位移的单击（选片、进调色）不该把
       // 1:1 状态打掉。真正的离开判据是 handlePointerMove 里的「真的动了」。
+      cancelInertia();
+      samplesRef.current = [];
       setTransition(GESTURE);
       setIsDragging(true);
       grabRef.current = dragGrab(e.clientX, e.clientY, pos);
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     },
-    [pos],
+    [pos, cancelInertia],
   );
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
       if (!isDragging) return;
       const target = dragTarget(e.clientX, e.clientY, grabRef.current);
-      const next = clampToPane(containerRef.current, imgRef.current, target, scale);
+      // PB-8：越界段乘阻尼，手指贴着边推仍然有反馈；抬手后再由 clampToPane 收回。
+      const next = dampToPane(containerRef.current, imgRef.current, target, scale);
+      // 速度采样：只留最近 100ms，抬手前停一下速度自然归零（不会「一停手还在飞」）。
+      samplesRef.current = pushPointerSample(samplesRef.current, {
+        t: nowMs(),
+        x: e.clientX,
+        y: e.clientY,
+      });
       // 夹紧之后位置真变了才算离开 1:1：1:1 时平移本就封死在原点，按着不放
       // 不该让「再按 Z」变成「重新进 1:1」而不是「回适应」。
       if (next.x !== pos.x || next.y !== pos.y) leaveOneToOne();
@@ -195,12 +237,44 @@ export function useZoomPan(
   const handlePointerUp = useCallback(
     (e: React.PointerEvent) => {
       if (!isDragging) return;
-      setTransition(SETTLE);
       setIsDragging(false);
       const host = e.currentTarget as HTMLElement;
       if (host.hasPointerCapture(e.pointerId)) host.releasePointerCapture(e.pointerId);
+
+      // PB-6：把手上的速度交出去。落点先过 clampToPane —— 惯性再大也不会
+      // 把画面甩出「照片不露空」的范围；越界时这就是回弹的落点。
+      const velocity = pointerVelocity(samplesRef.current);
+      samplesRef.current = [];
+      const projection = projectFling(velocity);
+      const target = clampToPane(
+        containerRef.current,
+        imgRef.current,
+        { x: pos.x + projection.x, y: pos.y + projection.y },
+        scale,
+      );
+      const settled = clampToPane(containerRef.current, imgRef.current, pos, scale);
+      const outOfBounds = settled.x !== pos.x || settled.y !== pos.y;
+
+      if (!isFlingVelocity(velocity) && !outOfBounds) {
+        setTransition(SETTLE);
+        return;
+      }
+
+      // 收尾期间是手势通道：逐帧写 transform，不能再让 CSS 补一次间。
+      setTransition(GESTURE);
+      inertiaRef.current?.stop();
+      inertiaRef.current = runInertia(
+        pos,
+        target,
+        // 每帧仍过夹紧：收尾途中换图 / 改窗口也不会把画面留在界外。
+        (next) => setPos(clampToPane(containerRef.current, imgRef.current, next, scale)),
+        () => {
+          inertiaRef.current = null;
+          setTransition(SETTLE);
+        },
+      );
     },
-    [isDragging],
+    [isDragging, pos, scale],
   );
 
   /** 双击：一处判「是不是适应」，一处应用落点 —— 三视口共用。 */
@@ -208,10 +282,11 @@ export function useZoomPan(
 
   const handleDoubleClick = useCallback(() => {
     leaveOneToOne();
+    cancelInertia();
     setTransition(SETTLE);
     setScale(doubleClickScale());
     setPos({ x: 0, y: 0 });
-  }, [leaveOneToOne, doubleClickScale]);
+  }, [leaveOneToOne, doubleClickScale, cancelInertia]);
 
   const imageRef = useCallback(
     (el: HTMLImageElement | null) => {

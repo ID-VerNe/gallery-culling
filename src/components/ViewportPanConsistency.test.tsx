@@ -17,7 +17,7 @@
  *  2. 默认联动模式下两栏位移相同。
  *  3. 夹紧边界：位移不得超过 (imgScaled - pane) / 2。
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { PreviewViewport } from './PreviewViewport';
@@ -196,5 +196,83 @@ describe('BeforeAfterViewport 平移（绝对系）', () => {
     fireEvent.pointerMove(host, { clientX: 140, clientY: 130, pointerId: 1 });
 
     expect(readTranslate(imgs[0])).toEqual(readTranslate(imgs[1]));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// issue #22 · 收尾（惯性 / 回弹）在双栏视口里的口径
+//
+// 单栏的逐帧行为由 `ViewportZoomGestures.test.tsx` 的「拖拽收尾」组覆盖；
+// 这里只钉双栏独有的那半边：联动收尾必须两栏同步写（公共边界），独立模式
+// 只写被拖的那一栏 —— 否则一次甩动会让两栏错位，比对视图直接失效。
+// ---------------------------------------------------------------------------
+describe('issue #22 · 双栏视口的收尾口径', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** 按下 → 两帧 16ms 的移动 → 抬手，让抬手速度不为 0。 */
+  function flick(host: HTMLElement) {
+    fireEvent.pointerDown(host, { button: 0, clientX: 100, clientY: 400, pointerId: 1 });
+    vi.advanceTimersByTime(16);
+    fireEvent.pointerMove(host, { clientX: 200, clientY: 400, pointerId: 1 });
+    vi.advanceTimersByTime(16);
+    fireEvent.pointerMove(host, { clientX: 300, clientY: 400, pointerId: 1 });
+    fireEvent.pointerUp(host, { clientX: 300, clientY: 400, pointerId: 1 });
+  }
+
+  it('Split 联动甩动：两栏逐帧同步滑行', () => {
+    render(
+      <SplitCompareViewport
+        leftGroup={GROUP}
+        rightGroup={jpgGroup('b')}
+        isLeftPinned={false}
+        isRightPinned={false}
+        onTogglePinLeft={vi.fn()}
+        onTogglePinRight={vi.fn()}
+        onSwap={vi.fn()}
+      />,
+    );
+    const imgs = viewportImages();
+    flick(imgs[0].parentElement as HTMLElement);
+
+    act(() => {
+      vi.advanceTimersByTime(96);
+    });
+    const left = readTranslate(imgs[0]);
+    expect(left.x).toBeGreaterThan(200);
+    expect(readTranslate(imgs[1])).toEqual(left);
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(readTranslate(imgs[0]).x).toBe(600);
+    expect(readTranslate(imgs[1]).x).toBe(600);
+  });
+
+  it('Split 独立模式甩动：只动被拖的那一栏', () => {
+    render(
+      <SplitCompareViewport
+        leftGroup={GROUP}
+        rightGroup={jpgGroup('b')}
+        isLeftPinned={false}
+        isRightPinned={false}
+        onTogglePinLeft={vi.fn()}
+        onTogglePinRight={vi.fn()}
+        onSwap={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('切换双图联动同步缩放'));
+    const imgs = viewportImages();
+    flick(imgs[0].parentElement as HTMLElement);
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(readTranslate(imgs[0]).x).toBe(600); // 左栏甩到底
+    expect(readTranslate(imgs[1])).toEqual({ x: 0, y: 0 }); // 右栏不动
   });
 });
