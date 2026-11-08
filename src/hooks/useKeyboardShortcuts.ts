@@ -139,7 +139,8 @@ export function useKeyboardShortcuts({
      * TEXTAREA + contentEditable + SELECT。
      *
      * 唯一命名（勿改名为 isValueOrText）。**绝不加入 `[role="listbox"]`**：项目
-     * 唯一的 listbox 是缩略图宫格，其全局单键都依赖本 handler。
+     * 唯一的 listbox 是缩略图宫格，其全局单键（`A`/`D`、`F`/`X` 等）都依赖本
+     * handler；只有三个基准键例外 —— 见 `isFocusInsideGrid`（issue #95 · PB-2）。
      */
     const isFormControlOrEditing = (el: Element | null): boolean =>
       !!el &&
@@ -147,6 +148,21 @@ export function useKeyboardShortcuts({
         el.tagName === 'TEXTAREA' ||
         (el as HTMLElement).isContentEditable ||
         el.tagName === 'SELECT');
+
+    /**
+     * issue #95 · PB-2：焦点是否落在宫格 listbox 内。
+     *
+     * 宫格只画 `pinnedId` 角标、不展示对比结果，此时改基准用户看不见效果，
+     * 切回单图/对比才发现基准被静默钉住。因此三个基准键在宫格内让路。
+     *
+     * 判定读**真实焦点**（`document.activeElement` 的 listbox 祖先 —— 项目
+     * 唯一的 listbox 就是宫格，`ThumbnailGrid.tsx` 的容器与 `role="option"`
+     * 都可聚焦），不用「宫格是否可见」这类间接信号；焦点离开即恢复。
+     */
+    const isFocusInsideGrid = (): boolean => {
+      const active = document.activeElement;
+      return !!active && active.closest('[role="listbox"]') !== null;
+    };
 
     const handleKeyDown = (e: KeyboardEvent) => {
       // 1 模态对话框独占屏幕时，任何单键快捷键都失效（防止误改背后的照片）。
@@ -265,9 +281,12 @@ export function useKeyboardShortcuts({
       //     用物理键位 `e.code` 判定；Shift+Q 的 `e.key` 仍是 `Q`，靠 shiftKey 分流。
       //     issue #95：两个方向都是**切换**语义，长按的系统重复会按重复率反复
       //     「钉 → 取消」，松手时机决定最终状态 —— 只认首次 keydown。
-      //     翻页键 A / D 刻意不拦重复（连续翻页是正常用法）。
+      //     PB-2：焦点在宫格内时让路 —— 宫格不展示对比结果，改基准看不见效果；
+      //     不 preventDefault，事件留给宫格自己的键盘导航。
+      //     翻页键 A / D 刻意不拦重复（连续翻页是正常用法），也不受宫格焦点影响。
       if (e.code === 'KeyQ') {
         if (e.repeat) return;
+        if (isFocusInsideGrid()) return;
         if (e.shiftKey) {
           if (onPinRight) {
             e.preventDefault();
@@ -383,10 +402,12 @@ export function useKeyboardShortcuts({
           break;
 
         // Pin Reference (B - Benchmark/Base)
-        // issue #95：切换语义 + 长按重复 = 基准不确定，只认首次 keydown。
+        // issue #95：切换语义 + 长按重复 = 基准不确定，只认首次 keydown；
+        // PB-2：焦点在宫格内时让路（不 preventDefault，事件留给宫格导航）。
         case 'b':
         case 'B':
           if (e.repeat) break;
+          if (isFocusInsideGrid()) break;
           if (onTogglePinReference) {
             e.preventDefault();
             onTogglePinReference();

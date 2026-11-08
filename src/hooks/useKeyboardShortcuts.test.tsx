@@ -866,3 +866,107 @@ describe('useKeyboardShortcuts —— 基准键 repeat 守卫（issue #95）', (
     expect(h.onHoldOriginalEnd).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * issue #95 · PB-2：焦点落在宫格 listbox 内时，三个基准键让路。
+ *
+ * 宫格只画 `pinnedId` 角标，不展示对比结果；此时改基准用户看不见效果，
+ * 松手再切回单图/对比就发现基准被静默钉住了。判定读真实焦点
+ * （`document.activeElement` 的 listbox 祖先），不是「宫格是否可见」。
+ * 三键在宫格内不得 `preventDefault` —— 事件要原样留给宫格的键盘导航。
+ */
+describe('useKeyboardShortcuts —— 宫格焦点让路（issue #95 · PB-2）', () => {
+  function setupGrid() {
+    const listbox = document.createElement('div');
+    listbox.setAttribute('role', 'listbox');
+    listbox.tabIndex = 0;
+    const option = document.createElement('div');
+    option.setAttribute('role', 'option');
+    option.tabIndex = 0;
+    listbox.appendChild(option);
+    document.body.appendChild(listbox);
+
+    const handlers = {
+      onPrev: vi.fn(),
+      onNext: vi.fn(),
+      onRate: vi.fn(),
+      onFlag: vi.fn(),
+      onOpenExternal: vi.fn(),
+      onToggleCompare: vi.fn(),
+      onTogglePinReference: vi.fn(),
+      onPinLeft: vi.fn(),
+      onPinRight: vi.fn(),
+      onTogglePinCurrent: vi.fn(),
+    };
+    renderHook(() => useKeyboardShortcuts(handlers));
+    return { listbox, option, handlers };
+  }
+
+  /** 每个用例独立挂载再清理，避免上一个用例的 listbox 残留影响焦点判定。 */
+  const mounted: HTMLElement[] = [];
+  function mountGrid() {
+    const ctx = setupGrid();
+    mounted.push(ctx.listbox);
+    return ctx;
+  }
+
+  afterEach(() => {
+    while (mounted.length > 0) mounted.pop()?.remove();
+  });
+
+  it('焦点在宫格 option 内：B / Q / Shift+Q 不响应，也不吞事件', () => {
+    const { option, handlers } = mountGrid();
+    option.focus();
+    expect(document.activeElement).toBe(option);
+
+    // fireEvent 返回 false 表示 handler 调了 preventDefault；宫格内应为 true。
+    expect(fireEvent.keyDown(option, { key: 'b' })).toBe(true);
+    expect(fireEvent.keyDown(option, { key: 'q', code: 'KeyQ' })).toBe(true);
+    expect(fireEvent.keyDown(option, { key: 'Q', code: 'KeyQ', shiftKey: true })).toBe(true);
+
+    // `pinnedId` 的唯一写入口是 useComparePin 的切换函数，回调 0 次即角标不变。
+    expect(handlers.onTogglePinReference).not.toHaveBeenCalled();
+    expect(handlers.onPinLeft).not.toHaveBeenCalled();
+    expect(handlers.onPinRight).not.toHaveBeenCalled();
+  });
+
+  it('焦点停在 listbox 容器本身（初始落点）时同样让路', () => {
+    const { listbox, handlers } = mountGrid();
+    listbox.focus();
+    expect(document.activeElement).toBe(listbox);
+
+    fireEvent.keyDown(listbox, { key: 'b' });
+    fireEvent.keyDown(listbox, { key: 'q', code: 'KeyQ' });
+    fireEvent.keyDown(listbox, { key: 'Q', code: 'KeyQ', shiftKey: true });
+
+    expect(handlers.onTogglePinReference).not.toHaveBeenCalled();
+    expect(handlers.onPinLeft).not.toHaveBeenCalled();
+    expect(handlers.onPinRight).not.toHaveBeenCalled();
+  });
+
+  it('焦点在宫格内时 F / X 等非基准键行为不变', () => {
+    const { option, handlers } = mountGrid();
+    option.focus();
+
+    expect(fireEvent.keyDown(option, { key: 'f' })).toBe(false);
+    expect(fireEvent.keyDown(option, { key: 'x' })).toBe(false);
+
+    expect(handlers.onFlag).toHaveBeenNthCalledWith(1, 'pick');
+    expect(handlers.onFlag).toHaveBeenNthCalledWith(2, 'reject');
+  });
+
+  it('焦点离开宫格后，B / Q / Shift+Q 立即恢复', () => {
+    const { option, handlers } = mountGrid();
+    option.focus();
+    option.blur();
+    expect(document.activeElement).toBe(document.body);
+
+    fireEvent.keyDown(document.body, { key: 'b' });
+    fireEvent.keyDown(document.body, { key: 'q', code: 'KeyQ' });
+    fireEvent.keyDown(document.body, { key: 'Q', code: 'KeyQ', shiftKey: true });
+
+    expect(handlers.onTogglePinReference).toHaveBeenCalledTimes(1);
+    expect(handlers.onPinLeft).toHaveBeenCalledTimes(1);
+    expect(handlers.onPinRight).toHaveBeenCalledTimes(1);
+  });
+});
