@@ -8,6 +8,7 @@ import {
   DOUBLE_CLICK_SCALE,
   clampScale,
   clampToPane,
+  clampToTrail,
   dampToPane,
   dragGrab,
   dragTarget,
@@ -15,6 +16,7 @@ import {
   isFlingVelocity,
   nowMs,
   oneToOneScale,
+  paneMaxPan,
   pointerVelocity,
   projectFling,
   pushPointerSample,
@@ -262,6 +264,8 @@ export function useZoomPan(
         scale,
       );
       const settled = clampToPane(containerRef.current, imgRef.current, pos, scale);
+      // 抬手瞬间的越界量：收尾时按 remain 逐帧收敛到 0（回弹曲线），而不是被剪掉。
+      const overflow = { x: pos.x - settled.x, y: pos.y - settled.y };
       const outOfBounds = settled.x !== pos.x || settled.y !== pos.y;
 
       if (!isFlingVelocity(velocity) && !outOfBounds) {
@@ -275,8 +279,17 @@ export function useZoomPan(
       inertiaRef.current = runInertia(
         pos,
         target,
-        // 中间帧不做夹紧：越界量要跟着 remain 一起衰减，硬夹会把回弹压成瞬跳。
-        (next) => setPos(next),
+        // 每帧按「当前边界 + 尚未衰减的越界量」夹紧：回弹逐帧收敛，边界中途
+        // 收紧时新边界立刻生效（不能等落定才跳回去）。
+        (next, remain) =>
+          setPos(
+            clampToTrail(
+              next,
+              paneMaxPan(containerRef.current, imgRef.current, scale),
+              overflow,
+              remain,
+            ),
+          ),
         () => {
           inertiaRef.current = null;
           // 落定这一帧按当前几何再夹一次：收尾途中换图 / 改窗口也不会留在界外。

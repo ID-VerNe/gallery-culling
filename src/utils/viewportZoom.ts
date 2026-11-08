@@ -117,6 +117,20 @@ export function clampToPane(
   return clampTo(pos, max.x, max.y);
 }
 
+/** 联动双栏的公共边界：任一一栏都不许露空。 */
+export function paneMaxPanPair(
+  paneA: HTMLElement | null,
+  imgA: HTMLElement | null,
+  scaleA: number,
+  paneB: HTMLElement | null,
+  imgB: HTMLElement | null,
+  scaleB: number,
+): Vec2 {
+  const ma = paneMaxPan(paneA, imgA, scaleA);
+  const mb = paneMaxPan(paneB, imgB, scaleB);
+  return { x: Math.min(ma.x, mb.x), y: Math.min(ma.y, mb.y) };
+}
+
 /**
  * 联动拖拽（双栏视口）：夹到两栏的**公共边界** —— 任一一栏都不许露空。
  * 两栏各自夹紧一次等价于夹到交集，但显式取 min 更能说明意图。
@@ -130,9 +144,8 @@ export function clampToPanePair(
   scaleB: number,
   pos: Vec2,
 ): Vec2 {
-  const ma = paneMaxPan(paneA, imgA, scaleA);
-  const mb = paneMaxPan(paneB, imgB, scaleB);
-  return clampTo(pos, Math.min(ma.x, mb.x), Math.min(ma.y, mb.y));
+  const max = paneMaxPanPair(paneA, imgA, scaleA, paneB, imgB, scaleB);
+  return clampTo(pos, max.x, max.y);
 }
 
 /**
@@ -163,7 +176,9 @@ export function dragTarget(clientX: number, clientY: number, grab: Vec2): Vec2 {
 //
 // 收尾的三条硬约束（由视图层用例逐帧断言，不靠肉眼）：
 //  1. 落点先过 `clampToPane` / `clampToPanePair` —— 惯性再大也不会把画面甩出边界；
-//  2. 每帧写入前再过一次同样的夹紧 —— 收尾途中换图/改窗口也不会越界；
+//  2. 每帧按「当前边界 + 尚未衰减完的越界量」夹紧（`clampToTrail`）—— 越界量
+//     随 `remain` 逐帧收敛（回弹不是一帧瞬跳），而边界中途收紧时新边界立刻生效，
+//     不会出现「整段飞行都在界外、落定才跳回来」；
 //  3. 收尾只写 `pos`，`scale` 一个字节都不碰，量程约束不受影响。
 // ---------------------------------------------------------------------------
 
@@ -253,6 +268,19 @@ export function dampOverscroll(pos: Vec2, max: Vec2): Vec2 {
   return { x: axis(pos.x, max.x), y: axis(pos.y, max.y) };
 }
 
+/**
+ * 收尾帧的夹紧：在**当前**边界上给「还没衰减完的越界量」留余量。
+ *
+ * `overflow` 是抬手瞬间超出边界的量，`remain` 是收尾曲线当前的剩余比例；
+ * 余量随 `remain` 一起收敛到 0，所以回弹是逐帧衰减而不是一帧瞬跳。反过来，
+ * 边界中途收紧时新边界立刻生效（余量只在真的越界时存在，不会凭空放宽）。
+ */
+export function clampToTrail(pos: Vec2, max: Vec2, overflow: Vec2, remain: number): Vec2 {
+  const limitX = max.x + Math.abs(overflow.x) * remain;
+  const limitY = max.y + Math.abs(overflow.y) * remain;
+  return clampTo(pos, limitX, limitY);
+}
+
 /** 单栏：越界阻尼版的目标位置。 */
 export function dampToPane(
   pane: HTMLElement | null,
@@ -299,13 +327,13 @@ export interface InertiaRun {
  * 用 rAF 驱动一次收尾：每帧 `onFrame(位置)`，落定调 `onDone()`。
  *
  * 为什么是 rAF 而不是 CSS `transition`：惯性要把「速度」逐步泄掉，落点还得
- * 每帧重夹；CSS 补间只能从 A 到 B，途中改不了。通道用 `GESTURE`（不补间），
- * 否则 CSS 会追着每一帧再补一次，变成双重缓动。
+ * 按衰减余量逐帧重夹；CSS 补间只能从 A 到 B，途中改不了。通道用 `GESTURE`
+ * （不补间），否则 CSS 会追着每一帧再补一次，变成双重缓动。
  */
 export function runInertia(
   from: Vec2,
   to: Vec2,
-  onFrame: (pos: Vec2) => void,
+  onFrame: (pos: Vec2, remain: number) => void,
   onDone: () => void,
 ): InertiaRun {
   const distance = Math.hypot(to.x - from.x, to.y - from.y);
@@ -318,11 +346,11 @@ export function runInertia(
     const remain = Math.exp(-Math.max(0, elapsed) / FLING_TAU_MS);
     if (elapsed >= FLING_MAX_MS || distance * remain <= FLING_SETTLE_EPSILON) {
       frame = 0;
-      onFrame(to);
+      onFrame(to, 0);
       onDone();
       return;
     }
-    onFrame(inertiaAt(from, to, elapsed));
+    onFrame(inertiaAt(from, to, elapsed), remain);
     frame = requestAnimationFrame(tick);
   };
 

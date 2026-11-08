@@ -346,14 +346,20 @@ describe('issue #22 · 拖拽收尾（速度继承 + 回弹）', () => {
     act(() => {
       vi.advanceTimersByTime(96);
     });
+    expect(readTransform(img).x).toBeGreaterThan(300);
 
     // 收尾还在飞的时候照片被重新布局成 600 宽：最大平移从 ±600 收到 ±300。
     Object.defineProperty(img, 'offsetWidth', { configurable: true, get: () => 600 });
 
+    // 下一帧就要落进新边界，而不是「整段飞行都在界外、落定才跳回来」。
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+    expect(readTransform(img).x).toBe(300);
+
     act(() => {
       vi.advanceTimersByTime(2000);
     });
-    // 说明每帧写入都还过一遍夹紧，而不是只在抬手时算一次落点。
     expect(readTransform(img).x).toBe(300);
   });
 
