@@ -243,7 +243,16 @@ export function useZoomPan(
 
       // PB-6：把手上的速度交出去。落点先过 clampToPane —— 惯性再大也不会
       // 把画面甩出「照片不露空」的范围；越界时这就是回弹的落点。
-      const velocity = pointerVelocity(samplesRef.current);
+      //
+      // 松手点本身必须入样：停手 400ms 再松手时窗口里只剩它一个点，速度自然
+      // 归零；少了这一步，400ms 前的旧速度会被当成「手指当前速度」继续甩。
+      const velocity = pointerVelocity(
+        pushPointerSample(samplesRef.current, {
+          t: nowMs(),
+          x: e.clientX,
+          y: e.clientY,
+        }),
+      );
       samplesRef.current = [];
       const projection = projectFling(velocity);
       const target = clampToPane(
@@ -266,10 +275,12 @@ export function useZoomPan(
       inertiaRef.current = runInertia(
         pos,
         target,
-        // 每帧仍过夹紧：收尾途中换图 / 改窗口也不会把画面留在界外。
-        (next) => setPos(clampToPane(containerRef.current, imgRef.current, next, scale)),
+        // 中间帧不做夹紧：越界量要跟着 remain 一起衰减，硬夹会把回弹压成瞬跳。
+        (next) => setPos(next),
         () => {
           inertiaRef.current = null;
+          // 落定这一帧按当前几何再夹一次：收尾途中换图 / 改窗口也不会留在界外。
+          setPos(clampToPane(containerRef.current, imgRef.current, target, scale));
           setTransition(SETTLE);
         },
       );

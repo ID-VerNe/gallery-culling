@@ -292,18 +292,22 @@ describe('issue #22 · 拖拽收尾（速度继承 + 回弹）', () => {
     fireEvent.pointerDown(host, { button: 0, clientX: 100, clientY: 400, pointerId: 1 });
     vi.advanceTimersByTime(16);
     fireEvent.pointerMove(host, { clientX: 200, clientY: 400, pointerId: 1 });
-    // 停手 400ms：速度窗口里只剩一个采样点，抬手速度按 0 处理。
+    vi.advanceTimersByTime(16);
+    fireEvent.pointerMove(host, { clientX: 300, clientY: 400, pointerId: 1 });
+    // 停手 400ms：采样窗口（100ms）里只剩松手点自己，速度必须归零。
+    // 注意这里刻意留了两个移动采样：只留一个的话「窗口失效」也会因样本不足
+    // 而算出 0 速度，用例就成了假绿。
     vi.advanceTimersByTime(400);
-    fireEvent.pointerUp(host, { clientX: 200, clientY: 400, pointerId: 1 });
+    fireEvent.pointerUp(host, { clientX: 300, clientY: 400, pointerId: 1 });
 
     expect(img.style.transition).toBe(SETTLE);
     act(() => {
       vi.advanceTimersByTime(500);
     });
-    expect(readTransform(img).x).toBe(100);
+    expect(readTransform(img).x).toBe(200);
   });
 
-  it('越界拖拽走阻尼、松手回弹到边界（PB-8）', () => {
+  it('越界拖拽走阻尼、松手逐帧回弹到边界（PB-8）', () => {
     const { img, host } = renderPreview();
     fireEvent.doubleClick(host); // scale 2.5 → 最大平移 ±1500
 
@@ -315,6 +319,19 @@ describe('issue #22 · 拖拽收尾（速度继承 + 回弹）', () => {
 
     // 只动过一次 → 抬手速度 0，但位置越界，必须弹回边界内。
     fireEvent.pointerUp(host, { clientX: 3000, clientY: 400, pointerId: 1 });
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+    // 第一帧把起点写回去，此时还在越界位置 —— 不能一抬手就瞬跳到边界。
+    expect(readTransform(img).x).toBeCloseTo(2060, 5);
+
+    act(() => {
+      vi.advanceTimersByTime(96);
+    });
+    const mid = readTransform(img).x;
+    expect(mid).toBeGreaterThan(1500);
+    expect(mid).toBeLessThan(2060);
+
     act(() => {
       vi.advanceTimersByTime(2000);
     });

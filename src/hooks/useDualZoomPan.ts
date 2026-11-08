@@ -238,7 +238,10 @@ export function useDualZoomPan<P extends string>(
 
     // PB-6：把手上的速度交出去。写哪几栏由抬手这一刻的 sync 决定，落点先过
     // clampToPane / clampToPanePair —— 惯性再大也不会让任一栏露空。
-    const velocity = pointerVelocity(samplesRef.current);
+    // 松手点本身必须入样：停手再松手时窗口里只剩它一个点，速度归零。
+    const velocity = pointerVelocity(
+      pushPointerSample(samplesRef.current, { t: nowMs(), x: e.clientX, y: e.clientY }),
+    );
     samplesRef.current = [];
     const projection = projectFling(velocity);
     const current: Vec2 = sync ? first.pos : get(activePane).pos;
@@ -277,10 +280,12 @@ export function useDualZoomPan<P extends string>(
     inertiaRef.current = runInertia(
       current,
       target,
-      // 每帧仍过夹紧：收尾途中改窗口 / 换图也不会把画面留在界外。
-      (next) => writePos(clampPos(next)),
+      // 中间帧不做夹紧：越界量要跟着 remain 一起衰减，硬夹会把回弹压成瞬跳。
+      (next) => writePos(next),
       () => {
         inertiaRef.current = null;
+        // 落定这一帧按当前几何再夹一次：收尾途中改窗口 / 换图也不会留在界外。
+        writePos(clampPos(target));
         setTransition(SETTLE);
       },
     );
