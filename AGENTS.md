@@ -165,21 +165,30 @@ npm run parity                             # CI 等价复跑：在被推送 sha 
 1. 版本号改两处：`package.json` + `src-tauri/tauri.conf.json`（`Cargo.toml` 的 lib 版本恒为 1.0.0，**不跟随**）。版本约定 `vX.Y.Z`。
 2. bump 提交并 push。
 3. **发版前必跑真窗口 e2e**：`scripts/release.mjs` 会先跑 `npm run e2e:ui`（ui-contract），**红则中止**、不产出 `updater.json`；确需跳过只能用 `SKIP_E2E=1` 并在发布输出留痕。
-4. 签名构建（thin LTO 首编约 12 分钟）：
-   ```bash
-   RELEASE_NOTES="$(cat notes.txt)" node scripts/release.mjs
+4. 签名构建 + 发布后半段（thin LTO 首编约 12 分钟）。**推荐一条命令跑完**（`--publish`，issue #83）：
+   ```powershell
+   $env:RELEASE_NOTES = Get-Content notes.txt -Raw
+   node scripts/release.mjs --publish
    ```
-   `RELEASE_NOTES` 会写进 `updater.json` 的 `notes`（客户端更新弹窗文案），缺省为「🚀 应用有新版本发布啦！」。
-5. 提交 `updater.json`（仓库根，tracked）并 push——**老客户端读 master 的 raw 地址，推上去即触发更新弹窗**。签名私钥 `updater.key`（gitignored）。
-6. 打 annotated tag，**指向 updater.json 的提交**，message = 版本号：
-   ```bash
-   git tag -a v2.0.3 -m "v2.0.3" && git push origin v2.0.3
+   构建之后自动接续：提交 `updater.json`（仓库根，tracked）→ push master（**老客户端读 master 的 raw 地址，推上去即触发更新弹窗**）→ 打 annotated tag 指向该提交 → REST 建 draft Release（`gh release create` 在本项目的 GraphQL 会返回 EOF）→ **只传 NSIS setup.exe**（MSI 不传）→ 置为已发布 → 核对资产 digest 与 `releases/latest`。末尾打印结构化终态：
    ```
-7. 创建 Release，资产**只传 NSIS setup.exe**（MSI 不传）：
-   ```bash
-   gh release create v2.0.3 --verify-tag --notes-file release-notes.md \
-     "src-tauri/target/release/bundle/nsis/gallery-culling_2.0.3_x64-setup.exe"
+   version=vX.Y.Z / tag=vX.Y.Z -> <sha> / release=<url> / asset=<name> size=<bytes>
+   digest=sha256:<hex> match=yes|no / latest=vX.Y.Z match=yes|no / status=PUBLISHED|FAILED
    ```
+   **失败即非 0 退出**并打印 `stage=<步骤>`；幂等——重跑会跳过已提交 / 已打 tag / 已上传且 digest 一致的步骤，`tag` 已存在却指向别的提交时只中止、不挪 tag。
+   `RELEASE_NOTES` 会写进 `updater.json` 的 `notes`（客户端更新弹窗文案），缺省为「🚀 应用有新版本发布啦！」。不带 `--publish` 时行为与历史一致（只构建），收尾打印手工步骤。
+5. 手工退路（`--publish` 不可用时逐条执行；签名私钥 `updater.key` 为 gitignored）：
+   - 提交 `updater.json` 并 push。
+   - 打 annotated tag，**指向 updater.json 的提交**，message = 版本号：
+     ```powershell
+     git tag -a v2.0.3 -m "v2.0.3"; git push origin v2.0.3
+     ```
+   - 建 Release 并上传资产（**只传 NSIS setup.exe**，走 REST，别用 `gh release create`）：
+     ```powershell
+     gh api -X POST repos/ID-VerNe/gallery-culling/releases -f tag_name=v2.0.3 -f name=v2.0.3 -f body="$(Get-Content release-notes.md -Raw)"
+     gh release upload v2.0.3 "src-tauri/target/release/bundle/nsis/gallery-culling_2.0.3_x64-setup.exe"
+     ```
+   - 核对 `gh api repos/ID-VerNe/gallery-culling/releases/latest` 已指向本版本。
 
 ## 6. 文档索引
 
