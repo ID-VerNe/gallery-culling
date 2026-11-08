@@ -55,6 +55,9 @@ describe('键位目录（issue #51 / #61）', () => {
       undo: 'Ctrl/⌘ + Z',
       redo: 'Ctrl/⌘ + Shift + Z',
       'batch-export': 'Ctrl/⌘ + E',
+      // issue #79：宫格连选（一只手即可，无需鼠标）。
+      'grid-extend-rows': 'Shift + ↑ / ↓',
+      'grid-extend-steps': 'Shift + A / D',
       compare: 'C',
       'before-after': 'T',
       tone: 'E',
@@ -72,6 +75,15 @@ describe('键位目录（issue #51 / #61）', () => {
       expect(findShortcut(id), `缺少条目: ${id}`).toBeDefined();
       expect(findShortcut(id)!.keys, `${id} 的键位漂移`).toBe(keys);
     }
+  });
+
+  it('issue #79：宫格连选键位已登记，且不改 #61 定档的既有键', () => {
+    expect(findShortcut('grid-extend-rows')?.keys).toBe('Shift + ↑ / ↓');
+    expect(findShortcut('grid-extend-steps')?.keys).toBe('Shift + A / D');
+    // 既有键位原样保留，连选只加 Shift 分支。
+    expect(findShortcut('prev')?.keys).toBe('A');
+    expect(findShortcut('next')?.keys).toBe('D');
+    expect(findShortcut('grid-rows')?.keys).toBe('↑ / ↓');
   });
 
   it('右手旧色标条目已删除', () => {

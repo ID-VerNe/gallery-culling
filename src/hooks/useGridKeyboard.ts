@@ -115,11 +115,54 @@ export function useGridKeyboard(opts: {
         onSelectionChange
       ) {
         e.preventDefault();
+        // 全选后把锚点落到当前照片：下一次 Shift 扩展从当前照片起算，
+        // 不会从早前的点击锚点跨过整屏拉出一段意料之外的范围。
+        anchorIndexRef.current = selectedIndex >= 0 ? selectedIndex : 0;
         onSelectionChange(new Set(groups.map((g) => g.id)));
         return;
       }
 
       const last = groups.length - 1;
+
+      // issue #79：一只手也能连选。
+      //
+      // - `Shift + ↑/↓`：按行扩展（±columns），与视觉行列一致；
+      // - `Shift + A/D`：逐张扩展，补齐「不依赖 ↑/↓ 也能连选」的左手路径。
+      //
+      // 两者都从 `anchorIndexRef` 起算，并**整段替换**选区 —— 与既有的
+      // `Shift + 点击`（handleCellClick）保持同一套语义，不另造选区模型。
+      // 必须 `stopPropagation`：`A/D` 同时绑着全局上一张/下一张，宫格内按下
+      // `Shift+A/D` 时不能被全局 handler 再走一遍导航。
+      //
+      // 无 Shift 的 `↑/↓` 不走这里，仍是下面的单张 roving —— listbox 的
+      // WAI-ARIA 契约不因连选而改变。
+      if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && onSelectionChange) {
+        let step = 0;
+        if (e.key === 'ArrowDown') step = columns;
+        else if (e.key === 'ArrowUp') step = -columns;
+        else if (e.key === 'd' || e.key === 'D') step = 1;
+        else if (e.key === 'a' || e.key === 'A') step = -1;
+
+        if (step !== 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          const base = Math.max(0, Math.min(selectedIndex, last));
+          const target = Math.max(0, Math.min(base + step, last));
+          // 锚点可能因筛选收窄而越界：钳到当前集合内，避免读到 undefined。
+          const anchor =
+            anchorIndexRef.current >= 0
+              ? Math.min(anchorIndexRef.current, last)
+              : base;
+          const a = Math.min(anchor, target);
+          const b = Math.max(anchor, target);
+          const next = new Set<string>();
+          for (let i = a; i <= b; i++) next.add(groups[i].id);
+          onSelectionChange(next);
+          onSelect(target);
+          return;
+        }
+      }
+
       let next = selectedIndex;
 
       switch (e.key) {

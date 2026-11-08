@@ -161,6 +161,32 @@ function pressKey(key: string, code = '', shiftKey = false) {
   keyEvent('keyup', key, code, shiftKey);
 }
 
+/**
+ * 把按键派发到宫格 listbox，而不是 window。
+ *
+ * 宫格连选的 keydown 绑定在 listbox 的 React handler（`useGridKeyboard`）上；
+ * 往 window 派发时 target 是 window，handler 收不到，测出来的「没反应」是假阴性。
+ * issue #79 的 `Shift+↑/↓` 必须走这条通道。
+ */
+function gridKeyEvent(
+  type: 'keydown' | 'keyup',
+  key: string,
+  code = '',
+  shiftKey = false,
+): boolean {
+  const listbox = document.querySelector<HTMLElement>('[role="listbox"]');
+  if (!listbox) return false;
+  listbox.dispatchEvent(new KeyboardEvent(type, { key, code, shiftKey, bubbles: true }));
+  return true;
+}
+
+/** 读宫格格头 live region 里的「已选 N」；没有选区时返回 null。 */
+function readSelectedCount(): number | null {
+  const text = document.body.innerText.replace(/\s+/g, ' ');
+  const m = /已选\s*(\d+)/.exec(text);
+  return m ? Number(m[1]) : null;
+}
+
 /** 点宫格里 baseName 命中的单元格；返回是否点到。 */
 async function clickCell(baseName: string, el: () => string): Promise<boolean> {
   const cell = await waitFor(
@@ -631,6 +657,61 @@ async function scenarioUiContract(
   );
   raw(`[${el()}] >>> 断言U7 底栏可点按钮数量达标 = ${buttons.length >= 8}`);
   raw(`[${el()}] >>> 断言U8 每个按钮中心命中自身 = ${misses.length === 0}`);
+
+  // ── issue #79：宫格连选与格头入口（真窗口契约）────────────
+  // 前面 clickCell('IMG_006') 已建立单选与 Shift 锚点；这里只动左手键，
+  // 不碰鼠标，验证「一只手也能连选」。
+  const beforeCount = readSelectedCount();
+  const anchorCell = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find(
+    (o) => (o.textContent || '').includes('IMG_006'),
+  );
+  const anchorMatch = anchorCell ? /#\s*(\d+)/.exec(anchorCell.textContent || '') : null;
+  const anchorIndex = anchorMatch ? Number(anchorMatch[1]) - 1 : -1;
+  // 默认 3 列：Shift+↓ 落在下一行同行格；末尾行则钳到最后一张。
+  const shiftTarget = anchorIndex >= 0 ? Math.min(anchorIndex + 3, 11) : -1;
+  const expectedCount = anchorIndex >= 0 ? shiftTarget - anchorIndex + 1 : -1;
+
+  const shiftSent = gridKeyEvent('keydown', 'ArrowDown', 'ArrowDown', true);
+  gridKeyEvent('keyup', 'ArrowDown', 'ArrowDown', true);
+  await sleep(500);
+  const afterCount = readSelectedCount();
+  raw(
+    `[${el()}] 连选读数：锚点=${anchorIndex} 期望已选=${expectedCount} 实际=${afterCount} 派发=${shiftSent}`,
+  );
+  raw(
+    `[${el()}] >>> 断言U17 Shift+↓ 从锚点按行扩展选区 = ${
+      beforeCount === 1 && shiftSent && expectedCount > 1 && afterCount === expectedCount
+    }`,
+  );
+
+  const allBtn = document.querySelector<HTMLButtonElement>('button[aria-label="全选宫格照片"]');
+  const selectAllKeys = allBtn?.getAttribute('aria-keyshortcuts') || '';
+  allBtn?.click();
+  await sleep(500);
+  const allCount = readSelectedCount();
+  const allPressed = allBtn?.getAttribute('aria-pressed') === 'true';
+  raw(
+    `[${el()}] 格头全选：按钮=${!!allBtn} 快捷键=${selectAllKeys} 已选=${allCount} aria-pressed=${allPressed}`,
+  );
+  raw(
+    `[${el()}] >>> 断言U18 格头全选入口可读可点（12/12） = ${
+      !!allBtn && selectAllKeys === 'Control+A' && allCount === 12 && allPressed
+    }`,
+  );
+
+  const clearBtn = document.querySelector<HTMLButtonElement>('button[aria-label="清除宫格多选"]');
+  clearBtn?.click();
+  await sleep(500);
+  const clearCount = readSelectedCount();
+  const clearPressed = allBtn?.getAttribute('aria-pressed') === 'true';
+  raw(
+    `[${el()}] 格头清除：按钮=${!!clearBtn} 剩余已选=${clearCount} 全选态=${clearPressed}`,
+  );
+  raw(
+    `[${el()}] >>> 断言U19 格头清除入口清空选区并复位全选态 = ${
+      !!clearBtn && clearCount === null && !clearPressed
+    }`,
+  );
 
   // ── 左手键：按住 V 查看原片；反斜杠已删除（#61）────────────
   const bannerVisible = () => /正在查看原片/.test(document.body.innerText);

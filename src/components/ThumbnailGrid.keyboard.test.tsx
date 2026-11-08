@@ -11,6 +11,8 @@
  * - 边界钳制，不越界
  * - Ctrl/Cmd+A 全选
  * - 键盘移动把选区收拢为单张（roving），保持「当前照片」与高亮一致
+ * - issue #79：Shift+↑/↓ 按行、Shift+A/D 逐张从锚点扩展选区；无 Shift 的
+ *   ↑/↓ 仍保持 listbox 的单张 roving 契约
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
@@ -51,7 +53,17 @@ function renderGrid(props: Partial<React.ComponentProps<typeof ThumbnailGrid>> =
 
 /** 派一个 keydown 到 listbox 容器（键盘导航的宿主）。 */
 function key(k: string, init: Partial<KeyboardEventInit> = {}) {
-  fireEvent.keyDown(screen.getByRole('listbox'), { key: k, ...init });
+  return fireEvent.keyDown(screen.getByRole('listbox'), { key: k, ...init });
+}
+
+/** 点击第 index 个宫格格子（建立 Shift 锚点）。 */
+function clickCellAt(index: number) {
+  fireEvent.click(screen.getAllByRole('option')[index]);
+}
+
+/** 一组 id 的集合，按索引区间 [from, to] 取。 */
+function idsOfRange(from: number, to: number) {
+  return new Set(GROUPS.slice(from, to + 1).map((x) => x.id));
 }
 
 describe('宫格键盘导航', () => {
@@ -121,6 +133,130 @@ describe('宫格键盘导航', () => {
     const ev = new KeyboardEvent('keydown', { key: 'k', bubbles: true });
     const ok = fireEvent.keyDown(screen.getByRole('listbox'), ev);
     expect(ok).toBe(true); // 未 preventDefault
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * issue #79：一只手也能多选。
+ *
+ * 锚点复用 `Shift+点击` 的 `anchorIndexRef`，范围选集语义也保持一致
+ * （整段替换）。无 Shift 的 `↑/↓` 必须仍是单张 roving —— 那是 listbox 契约，
+ * 连选只加在 Shift 分支上。
+ */
+describe('issue #79：宫格连选（Shift 扩展）', () => {
+  it('Shift+↓ 从点击锚点按行扩展选区，当前照片随焦点移动', () => {
+    const { onSelect, onSelectionChange } = renderGrid({ selectedIndex: 0 });
+    // 点第 2 格建立锚点：锚点 = 1，而当前照片仍在 0 —— 用来证明扩展起点
+    // 取的是锚点而不是 selectedIndex。
+    clickCellAt(1);
+    onSelectionChange.mockClear();
+
+    key('ArrowDown', { shiftKey: true });
+
+    expect(onSelect).toHaveBeenCalledWith(3);
+    expect(onSelectionChange).toHaveBeenCalledWith(idsOfRange(1, 3));
+  });
+
+  it('Shift+↑ 反向扩展：锚点 6、目标 0 时选 0..6', () => {
+    const { onSelect, onSelectionChange } = renderGrid({ selectedIndex: 0 });
+    clickCellAt(6);
+    onSelectionChange.mockClear();
+
+    key('ArrowUp', { shiftKey: true });
+
+    expect(onSelect).toHaveBeenCalledWith(0);
+    expect(onSelectionChange).toHaveBeenCalledWith(idsOfRange(0, 6));
+  });
+
+  it('连续 Shift+↓ 以同一锚点持续增长（锚点不跟随焦点）', () => {
+    const { onSelect, onSelectionChange, rerender } = renderGrid({ selectedIndex: 0 });
+    clickCellAt(0);
+    onSelectionChange.mockClear();
+
+    key('ArrowDown', { shiftKey: true });
+    expect(onSelectionChange).toHaveBeenLastCalledWith(idsOfRange(0, 3));
+
+    // 受控宿主把 selectedIndex 推进到 3（组件重渲染，hook 内的锚点保持 0）。
+    rerender(
+      <ThumbnailGrid
+        groups={GROUPS}
+        selectedIndex={3}
+        onSelect={onSelect}
+        selectedIds={new Set()}
+        onSelectionChange={onSelectionChange}
+        lumenThumbnails={false}
+      />,
+    );
+    key('ArrowDown', { shiftKey: true });
+    expect(onSelectionChange).toHaveBeenLastCalledWith(idsOfRange(0, 6));
+  });
+
+  it('边界钳制：最后一行再 Shift+↓ 不越界', () => {
+    const { onSelect, onSelectionChange } = renderGrid({ selectedIndex: GROUPS.length - 1 });
+    key('ArrowDown', { shiftKey: true });
+    expect(onSelect).toHaveBeenCalledWith(GROUPS.length - 1);
+    expect(onSelectionChange).toHaveBeenCalledWith(
+      new Set([GROUPS[GROUPS.length - 1].id]),
+    );
+  });
+
+  it('Shift+D / Shift+A 逐张扩展，并阻断全局上一张/下一张', () => {
+    const { onSelect, onSelectionChange } = renderGrid({ selectedIndex: 2 });
+    const globalSpy = vi.fn();
+    window.addEventListener('keydown', globalSpy);
+
+    const notPrevented = key('D', { shiftKey: true });
+    expect(notPrevented).toBe(false); // preventDefault 生效
+    expect(onSelect).toHaveBeenCalledWith(3);
+    expect(onSelectionChange).toHaveBeenCalledWith(idsOfRange(2, 3));
+    // stopPropagation 必须拦住冒泡到 window 的全局 A/D。
+    expect(globalSpy).not.toHaveBeenCalled();
+
+    onSelectionChange.mockClear();
+    key('A', { shiftKey: true });
+    expect(onSelect).toHaveBeenLastCalledWith(1);
+    expect(onSelectionChange).toHaveBeenCalledWith(idsOfRange(1, 2));
+    expect(globalSpy).not.toHaveBeenCalled();
+
+    window.removeEventListener('keydown', globalSpy);
+  });
+
+  it('Ctrl+A 把锚点落到当前照片，后续 Shift 扩展从当前照片起算', () => {
+    const { onSelect, onSelectionChange, rerender } = renderGrid({ selectedIndex: 0 });
+    clickCellAt(0); // 旧锚点 0
+    rerender(
+      <ThumbnailGrid
+        groups={GROUPS}
+        selectedIndex={4}
+        onSelect={onSelect}
+        selectedIds={new Set()}
+        onSelectionChange={onSelectionChange}
+        lumenThumbnails={false}
+      />,
+    );
+
+    key('a', { ctrlKey: true });
+    onSelectionChange.mockClear();
+    key('D', { shiftKey: true });
+
+    expect(onSelect).toHaveBeenLastCalledWith(5);
+    expect(onSelectionChange).toHaveBeenCalledWith(idsOfRange(4, 5));
+  });
+
+  it('未启用多选时 Shift+A/D 不拦截，保持全局导航语义', () => {
+    const onSelect = vi.fn();
+    render(
+      <ThumbnailGrid
+        groups={GROUPS}
+        selectedIndex={2}
+        onSelect={onSelect}
+        lumenThumbnails={false}
+      />,
+    );
+
+    const notPrevented = key('D', { shiftKey: true });
+    expect(notPrevented).toBe(true); // 不吞键，留给全局上一张/下一张
     expect(onSelect).not.toHaveBeenCalled();
   });
 });
