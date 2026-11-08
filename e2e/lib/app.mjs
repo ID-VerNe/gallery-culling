@@ -18,6 +18,32 @@ export const CDP_PORT = Number(process.env.E2E_CDP_PORT || 9222);
 export const CDP_URL = `http://127.0.0.1:${CDP_PORT}`;
 
 /**
+ * 数据目录覆盖变量（与 `src-tauri/src/db.rs` 的 `DATA_DIR_ENV` 同名契约，
+ * issue #81）。设了它，库就落在 `<dir>/gallery_culling.db`。
+ */
+export const DATA_DIR_ENV = 'GALLERY_DATA_DIR';
+
+/** e2e 专用数据目录：库、设置、上次目录、会话全在这里，绝不碰用户库。 */
+export const E2E_DATA_DIR = path.join(PROJECT_ROOT, 'e2e', '.tmp', 'data');
+
+/** e2e 绝不读写的真实开发库（`tauri dev` 的 cwd 是 `src-tauri`）。 */
+export const REAL_DEV_DB = path.join(PROJECT_ROOT, 'src-tauri', 'gallery_culling.db');
+
+/**
+ * 每次 e2e 运行前清空重建数据目录。
+ *
+ * 为什么空库就够了：`useAppSettings` 的回填有真值守卫（`if (s.defaultJpgFolder)`），
+ * 空串不会覆盖场景刚填的夹具路径；反过来，测试也不会把夹具路径写回用户库。
+ * 必须在 spawn 之前调用一次；`restartApp` 等重启路径复用同一目录，中途不能清，
+ * 否则会话恢复场景会被自己抹掉。
+ */
+export function resetE2eDataDir() {
+  fs.rmSync(E2E_DATA_DIR, { recursive: true, force: true });
+  fs.mkdirSync(E2E_DATA_DIR, { recursive: true });
+  return E2E_DATA_DIR;
+}
+
+/**
  * 给 WebView2 追加浏览器参数时的**唯一正确写法**。
  *
  * `src-tauri/src/main.rs` 只在 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` **未设置**
@@ -187,7 +213,9 @@ function spawnDevProcess({ logFile, extraEnv = {} }) {
     IS_WIN ? ['/c', 'npm run tauri dev'] : ['-c', 'npm run tauri dev'],
     {
       cwd: PROJECT_ROOT,
-      env: { ...process.env, ...extraEnv },
+      // issue #81：无论哪个编排器起 dev 进程，库都必须落在 e2e 自己的目录里。
+      // 放在这里而不是各调用点，是为了让 `restartApp` / 未来新增入口一并生效。
+      env: { ...process.env, [DATA_DIR_ENV]: E2E_DATA_DIR, ...extraEnv },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     },

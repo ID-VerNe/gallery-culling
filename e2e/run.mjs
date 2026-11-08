@@ -17,7 +17,7 @@
  *   npm run e2e:app -- --attach        # 附着到已在跑的实例
  *   npm run e2e:app -- --skip-session  # 跳过要重启应用的那套
  */
-import { launchApp, closeAppGracefully, cdpReady } from './lib/app.mjs';
+import { launchApp, closeAppGracefully, cdpReady, resetE2eDataDir } from './lib/app.mjs';
 import { connect, clearModals } from './lib/harness.mjs';
 import { generateFixtures } from './fixtures/generate.mjs';
 
@@ -68,6 +68,8 @@ try {
     }
     console.log('附着到已在运行的实例');
   } else {
+    // issue #81：自己起进程时用独立空库；--attach 不动（附着的是别人的数据目录）。
+    resetE2eDataDir();
     console.log('--- 启动应用（首次可能要编译，耐心等）---');
     const app = await launchApp();
     owned = true;

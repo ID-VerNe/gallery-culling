@@ -23,11 +23,15 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import {
   spawnDevTree,
   killApp,
   closeAppGracefully,
   waitForLog,
+  resetE2eDataDir,
+  E2E_DATA_DIR,
+  REAL_DEV_DB,
   PROJECT_ROOT,
 } from './lib/app.mjs';
 import { generateFixtures, JPG, RAW, OUT } from './fixtures/generate.mjs';
@@ -68,6 +72,23 @@ function tailOf(file, n = 2000) {
     return fs.readFileSync(file, 'utf8').slice(-n);
   } catch {
     return '';
+  }
+}
+
+/**
+ * 真实开发库的指纹：`size + mtimeMs + sha256`（issue #81）。
+ *
+ * 三者都要：只看 mtime 会把「checkpoint 改了时间但内容没变」误判成写入，
+ * 只看内容又会漏掉「打开顺手写了一下又改回来」——而这条断言要证明的是
+ * **一个字节都没碰**。库本来就不存在时返回 `absent`，e2e 也不该把它建出来。
+ */
+function dbFingerprint(file) {
+  try {
+    const st = fs.statSync(file);
+    const hash = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    return `${st.size}:${st.mtimeMs}:${hash}`;
+  } catch {
+    return 'absent';
   }
 }
 
@@ -275,6 +296,12 @@ async function main() {
   // 上一轮的 `=== e2e done` 会让 waitForLog 立刻假命中。
   killApp();
 
+  // issue #81：数据隔离。先给真实开发库拍指纹（必须在上面的 killApp 之后 ——
+  // 关闭旧实例时的 WAL checkpoint 会改 mtime），再重建 e2e 自己的空库目录。
+  const realDbBefore = dbFingerprint(REAL_DEV_DB);
+  const dataDir = resetE2eDataDir();
+  console.log(`--- e2e 数据目录（隔离）：${dataDir} ---`);
+
   // 细节缓存必须清空：留着上一轮产物，「首次 ≤10s」就变成在测缓存命中，
   // D2「此时还是预览」也会直接红 —— 这条用例的全部意义就是**真渲染**那一次。
   if (scenario === 'detail-1to1') {
@@ -389,6 +416,23 @@ async function main() {
       '出现了未校验的最终目录',
     );
   }
+
+  // ── C. 数据隔离（issue #81）──────────────────────────────
+  // 这一节不依赖任何场景：它证明「e2e 真的换了库」且「没有顺手写用户库」。
+  // 没有它的话，隔离失效会表现为某些场景偶尔绿、偶发红，很难指回根因。
+  console.log('\n[C] 数据隔离断言');
+  const isolatedDb = path.join(dataDir, 'gallery_culling.db');
+  R.check(
+    'e2e 使用独立数据目录且已建库',
+    fs.existsSync(isolatedDb),
+    `未生成 ${isolatedDb}（GALLERY_DATA_DIR 覆盖没生效？）`,
+  );
+  const realDbAfter = dbFingerprint(REAL_DEV_DB);
+  R.check(
+    '真实开发库未被 e2e 改写',
+    realDbAfter === realDbBefore,
+    `前=${realDbBefore.slice(0, 24)} 后=${realDbAfter.slice(0, 24)}`,
+  );
 
   const sum = R.summary();
   console.log('\n' + '='.repeat(56));

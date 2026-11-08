@@ -35,7 +35,7 @@ export function evaluateE2eUiGate({ exitCode = 0 } = {}) {
       message: [
         '❌ e2e:ui 断言失败（真回归）：ui-contract 里有 UI 断言为 false。',
         '下一步：往上翻 FAIL 行，按断言号定位——底栏命中是 U8，静息收起是 U1/U2b，左手别名是 U13/U14；',
-        '修好后重跑 `npm run e2e:ui` 直到 6/6 通过。不要改断言换绿。',
+        '修好后重跑 `npm run e2e:ui` 直到全部通过（PASS 数 = 总数）。不要改断言换绿。',
       ].join('\n'),
     };
   }
