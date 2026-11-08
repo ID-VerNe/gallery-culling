@@ -96,6 +96,8 @@ describe('自动消失', () => {
   });
 
   it('dismiss 手动移除指定条目', () => {
+    // issue #41：退场 presence 在渲染层（ToastViewport），队列口径保持不变 ——
+    // dismiss 必须**同 tick** 把条目移出队列，否则去重/截断/上限全部要跟着改。
     const { result } = mount();
     act(() => result.current.api.info('一条'));
     const id = result.current.toasts[0].id;
