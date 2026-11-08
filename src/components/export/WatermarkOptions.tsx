@@ -67,7 +67,7 @@ export const WatermarkOptions: React.FC<WatermarkOptionsProps> = ({
         */}
         {enabled && (
           <>
-            <p id={hintId} className="text-[11px] text-white/50 leading-relaxed">
+            <p id={hintId} className="text-[11px] text-white/50 leading-snug">
               文案取拍摄参数（快门 · ISO · 机型），读配对 JPG 的 EXIF；没有参数的
               原片不会加水印，清单里逐项注明。贴字要重编码一次 JPEG，质量沿用左侧
               设置，不额外提质量。

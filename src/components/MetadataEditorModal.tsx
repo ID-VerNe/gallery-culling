@@ -291,7 +291,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
         </div>
 
         {presets.length === 0 ? (
-          <p className="text-[11px] text-white/50 leading-relaxed">
+          <p className="text-[11px] text-white/50 leading-snug">
             还没有预设。点「编辑预设」把你手上的镜头存进来，下次一键填好型号、焦段和光圈。
           </p>
         ) : (
@@ -323,7 +323,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
             aria-label="预设编辑"
             className="mt-2 rounded-xl border border-white/10 bg-background-header p-3"
           >
-            <p className="text-[10px] text-white/50 leading-relaxed mb-2">
+            <p className="text-[10px] text-white/50 leading-[1.5] mb-2">
               预设只存在本机的 <span className="font-mono">gallery_culling.db</span> 里，不写进照片。
             </p>
 
@@ -425,7 +425,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
               </div>
 
               {presetError && (
-                <p role="alert" className="text-[11px] text-rose-300 leading-relaxed">
+                <p role="alert" className="text-[11px] text-rose-300 leading-snug">
                   {presetError}
                 </p>
               )}
@@ -463,7 +463,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
               </div>
 
               {isRestorePending && (
-                <p className="text-[10px] text-amber-300/90 leading-relaxed">
+                <p className="text-[10px] text-amber-300/90 leading-[1.5]">
                   恢复会把你现在的 {presets.length} 条预设整个换成出厂 6 条，不可撤销。
                 </p>
               )}
@@ -592,7 +592,7 @@ export const MetadataEditorModal: React.FC<MetadataEditorModalProps> = ({
       </fieldset>
 
       {/* Info note */}
-      <div className="p-3 bg-blue-950/30 border border-blue-800/40 rounded-xl text-blue-100 text-[11px] leading-relaxed">
+      <div className="p-3 bg-blue-950/30 border border-blue-800/40 rounded-xl text-blue-100 text-[11px] leading-snug">
         保存后将自动为所选照片写入符合 Adobe 标准的 aux:Lens 和 exif:FocalLength
         侧边栏，保留现有星标与标记，导入 Lightroom Classic 或 Photoshop ACR
         即刻识别。

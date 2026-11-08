@@ -148,12 +148,12 @@ export const RenderOptions: React.FC<RenderOptionsProps> = ({
         {(warning || notice) && (
           <div className="flex flex-col gap-1">
             {warning && (
-              <p id={warningId} className="text-[11px] text-amber-200/80 leading-relaxed">
+              <p id={warningId} className="text-[11px] text-amber-200/80 leading-snug">
                 {warning}
               </p>
             )}
             {notice && (
-              <p id={noticeId} className="text-[11px] text-amber-200/80 leading-relaxed">
+              <p id={noticeId} className="text-[11px] text-amber-200/80 leading-snug">
                 {notice}
               </p>
             )}

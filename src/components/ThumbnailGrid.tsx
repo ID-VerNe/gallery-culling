@@ -554,7 +554,7 @@ const EmptyGridState: React.FC<{
       <p className="text-xs font-medium text-white mb-1">
         {isSearchFiltering ? '没有匹配的照片' : '当前筛选下没有照片'}
       </p>
-      <p className="text-[11px] leading-relaxed text-white/60 max-w-[15rem]">
+      <p className="text-[11px] leading-snug text-white/60 max-w-[15rem]">
         {isSearchFiltering
           ? '换一个文件名片段试试，或清空搜索。'
           : '调整顶部筛选条件，或先给照片打星 / 标记保留。'}

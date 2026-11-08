@@ -96,7 +96,7 @@ export const ShortcutHelpModal: React.FC<ShortcutHelpModalProps> = ({
                       {item.keys}
                     </kbd>
                   </dt>
-                  <dd className="text-[11px] leading-relaxed text-white/80 text-right">
+                  <dd className="text-[11px] leading-snug text-white/80 text-right">
                     {item.label}
                   </dd>
                 </div>

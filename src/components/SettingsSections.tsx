@@ -47,7 +47,7 @@ export const EditorPathSection: React.FC<{
               <FolderOpen className="w-3.5 h-3.5" aria-hidden="true" />
             </button>
           </div>
-          <p className="text-[10px] leading-relaxed text-white/60">
+          <p className="text-[10px] leading-[1.5] text-white/60">
             用于快捷键 W 或点击“外部打开”时直接通过 Photoshop 打开对应相机 RAW
             文件。留空则使用系统默认程序。
           </p>
@@ -101,11 +101,11 @@ export const ThumbnailSection: React.FC<{
             <span className="text-[11px] text-white/60">100 – 600 px</span>
           </div>
           {hint && (
-            <p className="text-[10px] leading-relaxed text-amber-200/80" role="status">
+            <p className="text-[10px] leading-[1.5] text-amber-200/80" role="status">
               {hint}
             </p>
           )}
-          <p className="text-[10px] leading-relaxed text-white/60">
+          <p className="text-[10px] leading-[1.5] text-white/60">
             数值越大越清晰，首次扫描时生成越慢。
           </p>
         </div>
@@ -127,7 +127,7 @@ export const ToneAutoSaveSection: React.FC<{
       />
       <span className="flex flex-col gap-1">
         <span className="text-white/80 font-medium">调色自动保存</span>
-        <span className="text-[10px] leading-relaxed text-white/60">
+        <span className="text-[10px] leading-[1.5] text-white/60">
           拖动调色滑杆后自动写入同名 .xmp（引擎可用时同时写 .lumen 工程），
           停止拖动约 0.4 秒落盘。关闭后需手动点「保存调色」。
         </span>
@@ -254,7 +254,7 @@ export const LumenSettingsSection: React.FC<{
             </button>
           </div>
           <p
-            className="text-[10px] leading-relaxed text-white/60"
+            className="text-[10px] leading-[1.5] text-white/60"
             title="RAW 预览会通过 LUMEN RAW 解码并应用显影曲线；引擎不可用时自动回退到相机内嵌预览，不影响选片。"
           >
             开启后 RAW 预览走 LUMEN 解码；不可用时自动回退相机内嵌预览。
@@ -277,7 +277,7 @@ export const LumenSettingsSection: React.FC<{
             <p
               role="status"
               aria-live="polite"
-              className={`text-[10px] leading-relaxed rounded-md border px-2 py-1.5 ${
+              className={`text-[10px] leading-[1.5] rounded-md border px-2 py-1.5 ${
                 probe.ok
                   ? 'text-emerald-200/90 border-emerald-200/25'
                   : 'text-rose-200/90 border-rose-200/25'
@@ -292,7 +292,7 @@ export const LumenSettingsSection: React.FC<{
               「保存后生效」而不是显示已保存配置的死文案。 */}
           {showLumenStatusRow && (
             <p
-              className="text-[10px] leading-relaxed text-white/60"
+              className="text-[10px] leading-[1.5] text-white/60"
               role="status"
               aria-live="polite"
             >
@@ -318,7 +318,7 @@ export const LumenSettingsSection: React.FC<{
               宫格缩略图也用 LUMEN RAW 渲染
             </label>
             <p
-              className="text-[10px] leading-relaxed text-white/60"
+              className="text-[10px] leading-[1.5] text-white/60"
               title="关闭时宫格用相机内嵌缩略图（近乎零成本）；开启后每张约 0.3 秒，好处是宫格与大图显影一致。"
             >
               关闭用内嵌缩略图（快）；开启与大图显影一致（每张约 0.3 秒）。
@@ -344,7 +344,7 @@ export const LumenSettingsSection: React.FC<{
               我指向的是 GPU / AI 版（启用 AI 蒙版）
             </label>
             <p
-              className="text-[10px] leading-relaxed text-white/60"
+              className="text-[10px] leading-[1.5] text-white/60"
               title="勾选后若当前路径是 CPU 版，这里会直接提示，不会让你在保存调色时才发现。"
             >
               AI 蒙版需要带 onnxruntime 与模型的构建（体积约 487MB）。
@@ -355,7 +355,7 @@ export const LumenSettingsSection: React.FC<{
               !capabilities.aiMasks && (
               <p
                 role="status"
-                className="text-[10px] leading-relaxed text-amber-200/80 rounded-md border border-amber-200/25 px-2 py-1.5"
+                className="text-[10px] leading-[1.5] text-amber-200/80 rounded-md border border-amber-200/25 px-2 py-1.5"
               >
                 你勾选了 GPU 版，但当前路径探测不到 AI 模型与 onnxruntime —— AI 蒙版
                 在这张照片上不可用。请把 lumen-cli 路径改到 GPU 版，或取消勾选。
@@ -374,7 +374,7 @@ export const LumenSettingsSection: React.FC<{
                 {isSyncing ? '同步中…' : '从 LUMEN RAW 同步评级'}
               </button>
               <p
-                className="text-[10px] leading-relaxed text-white/60"
+                className="text-[10px] leading-[1.5] text-white/60"
                 title="你在 LUMEN RAW 里改过的星级/旗标会写回侧边栏；本机改动不会被静默覆盖（两侧都改过时会跳过并提示）。"
               >
                 两侧都改过时会跳过并提示，不会被静默覆盖。
@@ -418,25 +418,25 @@ export const AboutSection: React.FC<{
 
   switch (checkState.status) {
     case 'checking':
-      statusLine = <p className="text-[10px] leading-relaxed text-white/60">正在检查更新…</p>;
+      statusLine = <p className="text-[10px] leading-[1.5] text-white/60">正在检查更新…</p>;
       break;
     case 'latest':
       statusLine = (
-        <p className="text-[10px] leading-relaxed text-white/60">
+        <p className="text-[10px] leading-[1.5] text-white/60">
           {`已是最新版本 v${checkState.version}`}
         </p>
       );
       break;
     case 'found':
       statusLine = (
-        <p className="text-[10px] leading-relaxed text-emerald-200/80">
+        <p className="text-[10px] leading-[1.5] text-emerald-200/80">
           {`发现 v${checkState.version}，点「下载并安装」开始更新。`}
         </p>
       );
       break;
     case 'skipped':
       statusLine = (
-        <p className="text-[10px] leading-relaxed text-amber-200/80">
+        <p className="text-[10px] leading-[1.5] text-amber-200/80">
           {`已跳过 v${checkState.version}；恢复提示后会再次弹出更新窗口。`}
         </p>
       );
@@ -445,7 +445,7 @@ export const AboutSection: React.FC<{
       statusLine = (
         <p
           role="alert"
-          className="text-[10px] leading-relaxed text-rose-200/90 rounded-md border border-rose-800/50 bg-rose-950/30 px-2 py-1.5"
+          className="text-[10px] leading-[1.5] text-rose-200/90 rounded-md border border-rose-800/50 bg-rose-950/30 px-2 py-1.5"
         >
           {`检查更新失败：${checkState.error}。请检查网络后重试。`}
         </p>
@@ -453,7 +453,7 @@ export const AboutSection: React.FC<{
       break;
     default:
       statusLine = skippedVersion ? (
-        <p className="text-[10px] leading-relaxed text-white/60">
+        <p className="text-[10px] leading-[1.5] text-white/60">
           {`已跳过 v${skippedVersion}，有新版本发布时会再次提醒。`}
         </p>
       ) : null;
@@ -462,7 +462,7 @@ export const AboutSection: React.FC<{
   return (
     <div className="flex flex-col gap-1.5">
       <span className="text-white/80 font-medium">关于</span>
-      <p className="text-[11px] leading-relaxed text-white/60">
+      <p className="text-[11px] leading-snug text-white/60">
         {`当前版本 v${currentVersion ?? '未知'}`}
       </p>
       <div className="flex items-center gap-2 flex-wrap">
