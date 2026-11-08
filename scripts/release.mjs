@@ -156,6 +156,39 @@ export function decideTag({ existingTagSha, updaterSha }) {
 }
 
 /**
+ * 分支决策：`--publish` 只允许在 master 上跑。
+ *
+ * 为什么要拦：脚本 push 的是 `origin master`，而 tag 打在 HEAD 上。若在别的分支发版，
+ * 清单根本没进 master（老客户端读不到），但 tag 与 Release 都已经建好——
+ * 正好复刻 issue #83 要消灭的「看起来发了、其实没发」。
+ */
+export function decidePublishBranch({ currentBranch, allowedBranch = 'master' }) {
+  if (currentBranch === allowedBranch) return { action: 'ok' };
+  throw new Error(
+    `❌ --publish 只允许在 ${allowedBranch} 分支执行（当前 ${currentBranch || '（游离 HEAD）'}）：` +
+      'tag 会打在 HEAD 上，而 updater.json 必须进 master，否则发布等于没发。\n' +
+      `下一步：切到 ${allowedBranch} 后重跑。`,
+  );
+}
+
+/**
+ * 让重跑真的幂等：`pub_date` 是生成时间，不该每次重跑都变。
+ *
+ * 若新清单除 `pub_date` 外与已提交版本完全一致，就沿用旧 `pub_date`——
+ * 否则每次重跑都会产生一个新提交，tag 永远对不上 HEAD，重跑必然卡在 `stage=tag`。
+ */
+export function stabilizePubDate({ previous, next }) {
+  if (!previous || !next) return next;
+  const sameSemantics =
+    previous.version === next.version &&
+    previous.notes === next.notes &&
+    JSON.stringify(previous.platforms) === JSON.stringify(next.platforms);
+  if (!sameSemantics || !previous.pub_date) return next;
+  return { ...next, pub_date: previous.pub_date };
+}
+
+
+/**
  * 资产决策：同名资产按 digest 判定。
  *
  * GitHub 不允许同名资产覆盖，所以「已存在但 digest 不同」只能是「同名文件被重新构建」——
@@ -197,7 +230,9 @@ export function evaluateLatest({ latestTag, tag }) {
 export function summarizePublish(facts = {}) {
   const digestMatch = normalizeDigest(facts.localDigest) === normalizeDigest(facts.remoteDigest);
   const latestMatch = facts.latestTag === facts.tag;
-  const failed = facts.status === 'FAILED' || !digestMatch || !latestMatch;
+  // 空对象也要判红：`undefined === undefined` 会让「什么都没发生过」打印成 PUBLISHED。
+  const known = Boolean(facts.tag);
+  const failed = facts.status === 'FAILED' || !known || !digestMatch || !latestMatch;
   const shortSha = String(facts.commitSha || '').slice(0, 7);
   return [
     '=== 发布终态 ===',
@@ -241,7 +276,7 @@ export function publishRelease({
     latestTag: null,
     status: null,
   };
-  let stage = 'manifest';
+  let stage = 'branch';
   const run = (cmd) => String(exec(cmd, { cwd: rootDir, encoding: 'utf8' }) ?? '').trim();
   const runJson = (cmd) => {
     const out = run(cmd);
@@ -253,7 +288,11 @@ export function publishRelease({
   };
 
   try {
+    // 0. 分支闸门：`--publish` 只在 master 上跑（tag 打在 HEAD，清单要进 master）。
+    decidePublishBranch({ currentBranch: run('git rev-parse --abbrev-ref HEAD') });
+
     // 1. 清单版本自检：宁可中止，也不把旧 updater.json 提交进新 Release。
+    stage = 'manifest';
     const updater = JSON.parse(fs.readFileSync(path.join(rootDir, 'updater.json'), 'utf8'));
     decideUpdaterVersion({ confVersion: version, updaterVersion: updater.version });
 
@@ -261,13 +300,22 @@ export function publishRelease({
     stage = 'commit';
     if (run('git status --porcelain updater.json')) {
       run('git add updater.json');
-      run(`git commit -m "chore(release): update updater.json for ${tag}"`);
+      // 带 pathspec：只提交清单，不把别人暂存区里的东西卷进发布提交。
+      run(`git commit -m "chore(release): 更新 updater.json 至 ${tag}" -- updater.json`);
       console.log('📝 已提交 updater.json。');
     } else {
       console.log('ℹ️ updater.json 无变更，跳过提交。');
     }
     run('git push origin master');
     facts.commitSha = run('git rev-parse HEAD');
+    // push 之后必须确认远端 master 就是本提交：push 被拒或被别的分支截胡时，
+    // 后面的 tag / Release 会全部「成功」，但老客户端永远读不到这份清单。
+    if (run('git rev-parse origin/master') !== facts.commitSha) {
+      throw new Error(
+        '❌ push 之后 origin/master 不等于本次提交：清单没能进 master，发布中止。\n' +
+          '下一步：`git status` 确认分支与远端是否分叉，处理完再重跑（已完成步骤会跳过）。',
+      );
+    }
 
     // 3. annotated tag 指向本次提交；已存在则必须指向同一提交。
     stage = 'tag';
@@ -446,19 +494,32 @@ export async function main({
   // 更新提示文案：默认简短一句；发布时可传 RELEASE_NOTES 覆盖，
   // 例如 RELEASE_NOTES="$(cat release-notes.md)" node scripts/release.mjs
   const notes = (env.RELEASE_NOTES || '').trim() || '🚀 应用有新版本发布啦！';
-  const updaterObj = {
-    version: `v${version}`,
-    notes,
-    pub_date: new Date().toISOString(),
-    platforms: {
-      'windows-x86_64': {
-        signature,
-        url: `https://github.com/ID-VerNe/gallery-culling/releases/download/v${version}/${setupExeName}`,
+  const updaterPath = path.join(rootDir, 'updater.json');
+  // `--publish` 下先读已提交的清单：只换签名 / 版本时 pub_date 才应该更新，
+  // 否则同一版本重跑会造出新提交，tag 与 HEAD 永远对不上，重跑必然卡在 stage=tag。
+  let previousUpdater = null;
+  if (publish) {
+    try {
+      previousUpdater = JSON.parse(fs.readFileSync(updaterPath, 'utf8'));
+    } catch {
+      previousUpdater = null;
+    }
+  }
+  const updaterObj = stabilizePubDate({
+    previous: previousUpdater,
+    next: {
+      version: `v${version}`,
+      notes,
+      pub_date: new Date().toISOString(),
+      platforms: {
+        'windows-x86_64': {
+          signature,
+          url: `https://github.com/ID-VerNe/gallery-culling/releases/download/v${version}/${setupExeName}`,
+        },
       },
     },
-  };
+  });
 
-  const updaterPath = path.join(rootDir, 'updater.json');
   fs.writeFileSync(updaterPath, JSON.stringify(updaterObj, null, 2));
   console.log(`\n✅ 成功生成 Tauri 更新配置: updater.json\n`);
 

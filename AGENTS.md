@@ -175,7 +175,7 @@ npm run parity                             # CI 等价复跑：在被推送 sha 
    version=vX.Y.Z / tag=vX.Y.Z -> <sha> / release=<url> / asset=<name> size=<bytes>
    digest=sha256:<hex> match=yes|no / latest=vX.Y.Z match=yes|no / status=PUBLISHED|FAILED
    ```
-   **失败即非 0 退出**并打印 `stage=<步骤>`；幂等——重跑会跳过已提交 / 已打 tag / 已上传且 digest 一致的步骤，`tag` 已存在却指向别的提交时只中止、不挪 tag。
+   **失败即非 0 退出**并打印 `stage=<步骤>`；**只允许在 `master` 分支执行**（tag 打在 HEAD、清单必须进 master，其它分支直接中止）。幂等——重跑会跳过已提交 / 已打 tag / 已上传且 digest 一致的步骤（清单除 `pub_date` 外没变化时沿用旧 `pub_date`，避免重跑造出新提交），`tag` 已存在却指向别的提交时只中止、不挪 tag。
    `RELEASE_NOTES` 会写进 `updater.json` 的 `notes`（客户端更新弹窗文案），缺省为「🚀 应用有新版本发布啦！」。不带 `--publish` 时行为与历史一致（只构建），收尾打印手工步骤。
 5. 手工退路（`--publish` 不可用时逐条执行；签名私钥 `updater.key` 为 gitignored）：
    - 提交 `updater.json` 并 push。
