@@ -192,7 +192,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
 
         {/* Top title, Reference status & Pin button */}
         <div className="absolute top-3 left-3 flex items-center gap-2 select-none pointer-events-auto flex-wrap max-w-[calc(100%-1.5rem)]">
-          <div className="bg-background-base/85 backdrop-blur px-3 py-1.5 rounded-lg text-xs text-white flex items-center gap-2 border border-border-default select-text">
+          <div className="bg-background-base/85 backdrop-blur px-3 py-1.5 rounded-md text-xs text-white flex items-center gap-2 border border-border-default select-text">
             <span className="font-mono font-medium">{group.baseName}</span>
             {group.exif && (
               <span className="text-[11px] text-white/70 font-mono tabular-nums">
@@ -214,7 +214,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
               e.stopPropagation();
               onTogglePin();
             }}
-            className={`focus-ring flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            className={`focus-ring flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
               isPinned
                 ? 'bg-amber-500 text-black font-semibold ring-1 ring-amber-400'
                 : 'bg-background-base/85 hover:bg-white/15 text-white/80 hover:text-white border border-white/15'

@@ -282,7 +282,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
           <ExifCapsule exif={group.exif} />
 
           {/* Before Badge */}
-          <div className="absolute top-3 left-3 bg-background-base/85 backdrop-blur-xl px-3 py-1.5 rounded-lg text-xs text-white/80 flex items-center gap-2 border border-white/15 select-text">
+          <div className="absolute top-3 left-3 bg-background-base/85 backdrop-blur-xl px-3 py-1.5 rounded-md text-xs text-white/80 flex items-center gap-2 border border-white/15 select-text">
             <span className="font-semibold text-white">原片 (Before)</span>
             <span className="text-white/40">|</span>
             <span className="font-mono text-[11px] text-white/70">
@@ -340,7 +340,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
           )}
 
           {/* After Badge */}
-          <div className="absolute top-3 right-3 bg-background-base/85 backdrop-blur-xl px-3 py-1.5 rounded-lg text-xs text-white/80 flex items-center gap-2 border border-white/15 select-text">
+          <div className="absolute top-3 right-3 bg-background-base/85 backdrop-blur-xl px-3 py-1.5 rounded-md text-xs text-white/80 flex items-center gap-2 border border-white/15 select-text">
             {hasLuminarEdit ? (
               <span className="font-semibold flex items-center gap-1 text-white">
                 <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />

@@ -16,6 +16,7 @@
  * 的假用例，只如实说明。
  */
 import { describe, it, expect } from 'vitest';
+import viewportSource from './BeforeAfterViewport.tsx?raw';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { BeforeAfterViewport } from './BeforeAfterViewport';
@@ -150,5 +151,35 @@ describe('BeforeAfterViewport —— 不再有悬浮底栏（issue #62）', () =
 
     expect(container.querySelectorAll('img')).toHaveLength(2);
     expect(screen.getByLabelText('放大')).toBeInTheDocument();
+  });
+});
+
+/**
+ * 浮层胶囊圆角定档（issue #40 · PA-7）。
+ *
+ * 同屏 `top-3` 区域里，两个左右徽章胶囊曾是 `rounded-lg`（8px），而同一组件的
+ * loading / 未调色提示已是 `rounded-md`（6px）——一条视口里两种圆角并存。
+ * 定档结论：浮层胶囊统一 `rounded-md`，面板（`Modal.tsx` 的 `rounded-xl` / 12px）
+ * 保持另一层级，两者刻意不拍平。
+ *
+ * jsdom 目视不了 8px 与 6px，这里钉**档位**：取值瞄的是源文件里徽章胶囊
+ * className 的圆角子串，有人写回 `rounded-lg` 即红（本 issue 的墓碑）。
+ */
+describe('BeforeAfterViewport —— 浮层胶囊圆角定档（issue #40）', () => {
+  it('「原片 (Before)」徽章胶囊圆角是 rounded-md，不是 rounded-lg', () => {
+    // 以「定位 + 底色 + 虚化 + 内边距」锁定该徽章那一行，再取其圆角类。
+    const badge = viewportSource.match(
+      /absolute top-3 left-3 bg-background-base\/85 backdrop-blur-xl px-3 py-1\.5 (rounded-\S+)/,
+    );
+    expect(badge).not.toBeNull();
+    expect(badge?.[1]).toBe('rounded-md');
+  });
+
+  it('「精修 / 调色 (After)」徽章胶囊圆角是 rounded-md，不是 rounded-lg', () => {
+    const badge = viewportSource.match(
+      /absolute top-3 right-3 bg-background-base\/85 backdrop-blur-xl px-3 py-1\.5 (rounded-\S+)/,
+    );
+    expect(badge).not.toBeNull();
+    expect(badge?.[1]).toBe('rounded-md');
   });
 });
