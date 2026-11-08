@@ -414,7 +414,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
         <p
           role="status"
           aria-live="polite"
-          className="text-[10px] leading-relaxed text-amber-200/80 rounded-md border border-amber-200/25 px-2 py-1.5"
+          className="text-[10px] leading-[1.5] text-amber-200/80 rounded-md border border-amber-200/25 px-2 py-1.5"
         >
           XMP 与 LUMEN RAW 的调色不一致（可能在本应用之外改过）。保存会以当前滑杆为准
           同时覆盖两边。
@@ -451,11 +451,11 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
               ))}
             </select>
           </div>
-          <p className="text-[10px] leading-relaxed text-white/60">
+          <p className="text-[10px] leading-[1.5] text-white/60">
             预设直接改 LUMEN RAW 的编辑状态，套用后滑杆会读回真实数值。
           </p>
           {!aiAvailable && (
-            <p className="text-[10px] leading-relaxed text-amber-200/70">
+            <p className="text-[10px] leading-[1.5] text-amber-200/70">
               AI 蒙版与降噪/超分需要带 GPU 推理的 LUMEN RAW 版本（当前 CPU 版不含），
               暂不可用。
             </p>
@@ -519,7 +519,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
               aria-valuetext={`${maskDehaze}%`}
             />
           </div>
-          <p className="text-[10px] leading-relaxed text-white/60">
+          <p className="text-[10px] leading-[1.5] text-white/60">
             {isMasking
               ? 'AI 正在检测区域并应用（实测约 4 秒）。'
               : 'AI 本地检测区域，只对天空/主体等局部生效；不影响其它区域。'}
@@ -571,7 +571,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
             />
             <span>同时写入 LUMEN 工程（慢）</span>
           </label>
-          <p className="mt-1 text-[10px] leading-relaxed text-white/45">
+          <p className="mt-1 text-[10px] leading-[1.5] text-white/45">
             只复制曝光/高光/阴影/色温/色调/对比度 6 个参数，不动星级、旗标与色标。
             关闭时只写 XMP，LUMEN 预览可能仍显示旧调色。
           </p>
@@ -634,7 +634,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
       {autoSaveEnabled && autoSaveError && (
         <p
           role="alert"
-          className="text-[10px] leading-relaxed text-red-300/90 rounded-md border border-red-400/25 px-2 py-1.5"
+          className="text-[10px] leading-[1.5] text-red-300/90 rounded-md border border-red-400/25 px-2 py-1.5"
         >
           自动保存失败：{autoSaveError}。改动仍在内存中，可点「保存调色」重试。
         </p>
@@ -644,7 +644,7 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
       {saveError && (
         <p
           role="alert"
-          className="text-[10px] leading-relaxed text-red-300/90 rounded-md border border-red-400/25 px-2 py-1.5"
+          className="text-[10px] leading-[1.5] text-red-300/90 rounded-md border border-red-400/25 px-2 py-1.5"
         >
           保存调色失败：{saveError}
         </p>

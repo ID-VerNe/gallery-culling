@@ -314,7 +314,7 @@ export const Modal: React.FC<ModalProps> = ({
         </div>
 
         {subtitle && (
-          <p className="px-4 pt-3 text-[11px] leading-relaxed text-white/60">
+          <p className="px-4 pt-3 text-[11px] leading-snug text-white/60">
             {subtitle}
           </p>
         )}
