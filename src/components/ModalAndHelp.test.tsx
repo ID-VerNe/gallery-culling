@@ -109,8 +109,9 @@ describe('issue #61 —— 帮助弹窗锁住左手键文案', () => {
       'V（按住）', // 按住看原片
       'W', // 外部打开
       'G', // 镜头元数据
-      'Q / B', // 钉左图
+      'Q', // 钉左图（issue #89：与 B 拆条）
       'Shift + Q', // 钉右图
+      'B', // 切换基准（有基准则取消，否则钉左）
       'F1', // 帮助
     ]) {
       expect(screen.getByText(keys)).toBeTruthy();
@@ -125,6 +126,7 @@ describe('issue #61 —— 帮助弹窗锁住左手键文案', () => {
       'Shift + 6',
       '[ 或 B',
       '] 或 空格',
+      'Q / B', // issue #89：钉左与切换基准不得再并成一条
     ]) {
       expect(screen.queryByText(legacy)).toBeNull();
     }
