@@ -97,8 +97,12 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
   {
     title: '对比',
     items: [
-      { id: 'base-left', keys: 'Q / B', label: '将左图设为基准' },
+      // issue #89：`Q`（钉左 / 再按取消）与 `B`（切换基准：有基准则取消，
+      // 否则钉左）在「右侧已钉」时行为不同（useComparePin.ts:46-53 / :98-106），
+      // 不能并成「Q / B」。帮助弹窗与底栏都按 id 从本表派生。
+      { id: 'base-left', keys: 'Q', label: '将左图设为基准（再按取消）' },
       { id: 'base-right', keys: 'Shift + Q', label: '将右图设为新基准' },
+      { id: 'base-toggle', keys: 'B', label: '切换基准（有基准则取消，否则钉左）' },
       { id: 'base-current', keys: '空格', label: '将当前照片设为基准（再按取消）' },
       { id: 'swap', keys: 'S', label: '左右互换' },
       { id: 'lens-meta', keys: 'G', label: '手动镜头元数据编辑' },

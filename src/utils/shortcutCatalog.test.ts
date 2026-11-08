@@ -63,8 +63,9 @@ describe('键位目录（issue #51 / #61）', () => {
       tone: 'E',
       'zoom-1to1': 'Z',
       'hold-original': 'V（按住）',
-      'base-left': 'Q / B',
+      'base-left': 'Q',
       'base-right': 'Shift + Q',
+      'base-toggle': 'B',
       'base-current': '空格',
       swap: 'S',
       'lens-meta': 'G',
@@ -84,6 +85,20 @@ describe('键位目录（issue #51 / #61）', () => {
     expect(findShortcut('prev')?.keys).toBe('A');
     expect(findShortcut('next')?.keys).toBe('D');
     expect(findShortcut('grid-rows')?.keys).toBe('↑ / ↓');
+  });
+
+  /**
+   * issue #89：`Q`（钉左 / 再按取消）与 `B`（切换基准：有基准则取消，否则
+   * 钉左）在「右侧已钉」时行为不同，合并成「Q / B」会让用户以为两键等价。
+   * 断言瞄准 `base-left` 的 `Q` 子串与全表 `Q / B` 反例，合并写法回潮即红。
+   */
+  it('issue #89：基准条目按真实绑定拆分，全表不再出现「Q / B」合并串', () => {
+    expect(findShortcut('base-left')!.keys).toBe('Q');
+    expect(findShortcut('base-right')!.keys).toBe('Shift + Q');
+    expect(findShortcut('base-toggle')!.keys).toBe('B');
+    for (const item of allItems) {
+      expect(item.keys, `${item.id} 又并回了合并写法`).not.toContain('Q / B');
+    }
   });
 
   it('右手旧色标条目已删除', () => {
