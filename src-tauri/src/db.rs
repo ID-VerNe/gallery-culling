@@ -595,20 +595,51 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Re
     Ok(())
 }
 
+/// 数据目录覆盖口子（issue #81）。
+///
+/// 只给 dev / e2e 用：真窗口 e2e 默认会落在 `tauri dev` 的 cwd（`src-tauri`），
+/// 于是测试直接读写开发库 —— 用户的「上次目录 / 上次会话 / 旧评级旗标」会污染
+/// 场景，场景跑完又会把夹具路径写回用户库。设置这个变量后，库改到指定目录的
+/// `gallery_culling.db`，e2e 每次起一份空库即可。**未设置时行为逐字不变**。
+pub const DATA_DIR_ENV: &str = "GALLERY_DATA_DIR";
+
+const DB_FILE_NAME: &str = "gallery_culling.db";
+
 fn get_db_path() -> PathBuf {
-    let local = PathBuf::from("gallery_culling.db");
-    // create(true) 配 write(true) 但**没有** truncate(true)：刻意如此 ——
-    // 这里只是探测「当前目录可写」，绝不能把已存在的数据库清空。
-    if std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(&local)
-        .is_ok()
-    {
-        local
+    let data_dir = std::env::var_os(DATA_DIR_ENV).map(PathBuf::from);
+    let local_writable = if data_dir.as_ref().is_some_and(|d| !d.as_os_str().is_empty()) {
+        // 有覆盖目录时**不能**再探测 cwd：探测本身带 create(true)，会在
+        // `src-tauri` 里留下一个 0 字节的 gallery_culling.db —— 隔离等于没做
+        // （issue #81 真窗口 e2e 已实证：真实库指纹从 absent 变成 0 字节）。
+        false
     } else {
-        std::env::temp_dir().join("gallery_culling.db")
+        // create(true) 配 write(true) 但**没有** truncate(true)：刻意如此 ——
+        // 这里只是探测「当前目录可写」，绝不能把已存在的数据库清空。
+        std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(DB_FILE_NAME)
+            .is_ok()
+    };
+    resolve_db_path(data_dir, local_writable)
+}
+
+/// 纯路径决策：`data_dir` 非空时优先，其次 cwd 相对库，最后临时目录兜底。
+///
+/// 覆盖目录建不出来时**不回落**用户库 —— 隔离失败必须响亮，否则 e2e 又会
+/// 静默写真实数据；`Connection::open` 会在那个不存在的路径上直接报错。
+fn resolve_db_path(data_dir: Option<PathBuf>, local_writable: bool) -> PathBuf {
+    if let Some(dir) = data_dir.filter(|d| !d.as_os_str().is_empty()) {
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            eprintln!("创建数据目录失败（{}）：{}", dir.display(), e);
+        }
+        return dir.join(DB_FILE_NAME);
+    }
+    if local_writable {
+        PathBuf::from(DB_FILE_NAME)
+    } else {
+        std::env::temp_dir().join(DB_FILE_NAME)
     }
 }
 
@@ -650,6 +681,37 @@ mod tests {
         let path = std::env::temp_dir().join(format!("gc_db_{}_{}.db", tag, std::process::id()));
         let _ = std::fs::remove_file(&path);
         (Database::open(&path).expect("建临时库"), path)
+    }
+
+    /// issue #81：`GALLERY_DATA_DIR` 是 e2e 的数据隔离口子。
+    ///
+    /// 核心契约是「覆盖目录 > cwd 相对库」——cwd 即使可写也必须让位，否则
+    /// e2e 仍会读写 `src-tauri/gallery_culling.db`，隔离形同虚设。
+    #[test]
+    fn data_dir_override_wins_and_creates_directory() {
+        let dir = std::env::temp_dir().join(format!("gc_data_dir_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = resolve_db_path(Some(dir.clone()), true);
+        assert_eq!(path, dir.join("gallery_culling.db"));
+        assert!(
+            dir.is_dir(),
+            "覆盖目录应被创建，否则 Connection::open 建不了库"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 未设置 / 空串时保持原行为：cwd 可写用相对库，否则临时目录兜底。
+    ///
+    /// 空串也要按「未设置」处理：`$env:GALLERY_DATA_DIR=""` 是 Windows 上很
+    /// 常见的残留，若当成路径会把库丢到磁盘根。
+    #[test]
+    fn empty_or_missing_data_dir_keeps_default_resolution() {
+        let local = PathBuf::from("gallery_culling.db");
+        let temp = std::env::temp_dir().join("gallery_culling.db");
+        assert_eq!(resolve_db_path(Some(PathBuf::new()), true), local);
+        assert_eq!(resolve_db_path(Some(PathBuf::new()), false), temp);
+        assert_eq!(resolve_db_path(None, true), local);
+        assert_eq!(resolve_db_path(None, false), temp);
     }
 
     #[test]
