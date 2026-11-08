@@ -12,7 +12,7 @@
  *
  * 方法论沿用 FE-08：先写测试 → 变异验证网有效 → 还原 → 才准动实现。
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { PreviewViewport } from './PreviewViewport';
@@ -177,6 +177,65 @@ describe('PB-1 · 手势通道与跳变通道必须分开', () => {
     expect(readScale(imgs[0])).toBe(1.25);
     expect(readScale(imgs[1])).toBe(1);
     expect(imgs[0].style.transition).toBe(GESTURE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// issue #22 · 收尾动效的通道归属
+//
+// 惯性是 rAF 逐帧写 `transform`：走 `GESTURE`（无 CSS 补间），否则 CSS 的
+// 0.12s 补间会追着每一帧跑，读作双重缓动。落定之后必须回 `SETTLE`，让下一次
+// 双击 / 复位仍是跳变通道 —— 通道不能因为「刚甩过」而滞留在手势态。
+// ---------------------------------------------------------------------------
+describe('issue #22 · 收尾期间保持手势通道，落定回跳变通道', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('PreviewViewport：甩动收尾全程 GESTURE，落定后 SETTLE', () => {
+    const { img, host } = renderPreview();
+
+    fireEvent.pointerDown(host, { button: 0, clientX: 100, clientY: 400, pointerId: 1 });
+    vi.advanceTimersByTime(16);
+    fireEvent.pointerMove(host, { clientX: 200, clientY: 400, pointerId: 1 });
+    vi.advanceTimersByTime(16);
+    fireEvent.pointerMove(host, { clientX: 300, clientY: 400, pointerId: 1 });
+    fireEvent.pointerUp(host, { clientX: 300, clientY: 400, pointerId: 1 });
+
+    expect(img.style.transition).toBe(GESTURE);
+
+    act(() => {
+      vi.advanceTimersByTime(96);
+    });
+    expect(img.style.transition).toBe(GESTURE);
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(img.style.transition).toBe(SETTLE);
+  });
+
+  it('BeforeAfterViewport：联动收尾两栏同一条通道', () => {
+    const { imgs, beforeHost } = renderBeforeAfter();
+
+    fireEvent.pointerDown(beforeHost, { button: 0, clientX: 100, clientY: 400, pointerId: 1 });
+    vi.advanceTimersByTime(16);
+    fireEvent.pointerMove(beforeHost, { clientX: 200, clientY: 400, pointerId: 1 });
+    vi.advanceTimersByTime(16);
+    fireEvent.pointerMove(beforeHost, { clientX: 300, clientY: 400, pointerId: 1 });
+    fireEvent.pointerUp(beforeHost, { clientX: 300, clientY: 400, pointerId: 1 });
+
+    expect(imgs[0].style.transition).toBe(GESTURE);
+    expect(imgs[1].style.transition).toBe(GESTURE);
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(imgs[0].style.transition).toBe(SETTLE);
+    expect(imgs[1].style.transition).toBe(SETTLE);
   });
 });
 

@@ -14,12 +14,13 @@
  * 方法论沿用 FE-08：先写测试 → **故意改坏验证网有效** → 还原 → 才准动代码。
  * 本文件的「改坏验证」记录见 git history（test commit 的 message）。
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { PreviewViewport } from './PreviewViewport';
 import { SplitCompareViewport } from './SplitCompareViewport';
 import { BeforeAfterViewport } from './BeforeAfterViewport';
+import { GESTURE, SETTLE } from '../utils/viewportMotion';
 import type { PhotoGroupInfo } from '../types';
 
 /** jsdom 不实现 Pointer Capture，拖拽相关用例依赖它。 */
@@ -210,5 +211,168 @@ describe('BeforeAfterViewport —— 双击缩放、滚轮与复位', () => {
 
     expect(readTransform(imgs[0]).scale).toBe(1.25); // before 被悬停
     expect(readTransform(imgs[1]).scale).toBe(1); // after 不动
+  });
+});
+
+// ---------------------------------------------------------------------------
+// issue #22 · 拖拽收尾：速度继承（PB-6）+ 越界阻尼（PB-8）
+//
+// 背景：`handlePointerUp` 原先只把 `isDragging` 置假，快速甩动后画面立刻停住；
+// 越界拖拽又被 `clampTo` 硬夹在边界上，手指贴着边推、画面纹丝不动。
+//
+// 为什么必须用假定时器：惯性是 rAF 逐帧写 `transform`，jsdom 的 rAF 由
+// `vi.useFakeTimers()` 接管后可以精确推进（实测 `advanceTimersByTime(32)` 会
+// 触发一帧），因此这里断言的是**逐帧位移**，不是「设了什么属性」。
+// 真窗口的手感（跟手程度 / 长甩是否发飘）无法在 jsdom 里判定，属人工验收项。
+//
+// 边界口径（setup 的桩）：pane clientWidth/Height = 0，img offset = 1200×800，
+// 所以 scale=1 时最大平移 ±600 / ±400，scale=2.5 时 ±1500 / ±1000。
+// ---------------------------------------------------------------------------
+describe('issue #22 · 拖拽收尾（速度继承 + 回弹）', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function renderPreview() {
+    render(<PreviewViewport group={GROUP} onPrev={vi.fn()} onNext={vi.fn()} />);
+    const img = screen.getByAltText(GROUP.baseName) as HTMLImageElement;
+    return { img, host: img.parentElement as HTMLElement };
+  }
+
+  /**
+   * 一次甩动：按下 → 每个采样点间隔 16ms 的移动（两次移动 = 速度可观）→ 抬手。
+   * 返回抬手时（还没跑惯性）的 transform。
+   */
+  function flick(host: HTMLElement, startX: number, xs: number[], gap = 16) {
+    fireEvent.pointerDown(host, { button: 0, clientX: startX, clientY: 400, pointerId: 1 });
+    for (const x of xs) {
+      vi.advanceTimersByTime(gap);
+      fireEvent.pointerMove(host, { clientX: x, clientY: 400, pointerId: 1 });
+    }
+    const last = xs[xs.length - 1];
+    fireEvent.pointerUp(host, { clientX: last, clientY: 400, pointerId: 1 });
+  }
+
+  it('甩动松手后继续滑行，落点被夹在边界上（PB-6）', () => {
+    const { img, host } = renderPreview();
+    // +200px / 32ms = 6.25px/ms，被速度上限夹到 6 —— 投影 1500px，越界后夹到 600。
+    flick(host, 100, [200, 300]);
+
+    expect(readTransform(img)).toMatchObject({ x: 200, y: 0 });
+    expect(img.style.transition).toBe(GESTURE);
+
+    // 第一帧只是把起点写回去（elapsed=0），不能一抬手就跳到落点。
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+    expect(readTransform(img).x).toBeCloseTo(200, 5);
+
+    // 96ms 后已滑出一段，但仍在边界内 —— 惯性是渐进位移，不是瞬移。
+    act(() => {
+      vi.advanceTimersByTime(96);
+    });
+    const mid = readTransform(img).x;
+    expect(mid).toBeGreaterThan(200);
+    expect(mid).toBeLessThan(600);
+
+    // 收尾有明确上界：投影再远也只落在 clamp 边界上，2s 内落定。
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(readTransform(img).x).toBe(600);
+    expect(img.style.transition).toBe(SETTLE);
+  });
+
+  it('停下来再松手不启动惯性：速度只认最近 100ms（PB-6）', () => {
+    const { img, host } = renderPreview();
+
+    fireEvent.pointerDown(host, { button: 0, clientX: 100, clientY: 400, pointerId: 1 });
+    vi.advanceTimersByTime(16);
+    fireEvent.pointerMove(host, { clientX: 200, clientY: 400, pointerId: 1 });
+    vi.advanceTimersByTime(16);
+    fireEvent.pointerMove(host, { clientX: 300, clientY: 400, pointerId: 1 });
+    // 停手 400ms：采样窗口（100ms）里只剩松手点自己，速度必须归零。
+    // 注意这里刻意留了两个移动采样：只留一个的话「窗口失效」也会因样本不足
+    // 而算出 0 速度，用例就成了假绿。
+    vi.advanceTimersByTime(400);
+    fireEvent.pointerUp(host, { clientX: 300, clientY: 400, pointerId: 1 });
+
+    expect(img.style.transition).toBe(SETTLE);
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(readTransform(img).x).toBe(200);
+  });
+
+  it('越界拖拽走阻尼、松手逐帧回弹到边界（PB-8）', () => {
+    const { img, host } = renderPreview();
+    fireEvent.doubleClick(host); // scale 2.5 → 最大平移 ±1500
+
+    fireEvent.pointerDown(host, { button: 0, clientX: 100, clientY: 400, pointerId: 1 });
+    vi.advanceTimersByTime(16);
+    // 目标 +2900，越界 1400，阻尼系数 0.4 → 1500 + 560。
+    fireEvent.pointerMove(host, { clientX: 3000, clientY: 400, pointerId: 1 });
+    expect(readTransform(img).x).toBeCloseTo(1500 + 1400 * 0.4, 5);
+
+    // 只动过一次 → 抬手速度 0，但位置越界，必须弹回边界内。
+    fireEvent.pointerUp(host, { clientX: 3000, clientY: 400, pointerId: 1 });
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+    // 第一帧把起点写回去，此时还在越界位置 —— 不能一抬手就瞬跳到边界。
+    expect(readTransform(img).x).toBeCloseTo(2060, 5);
+
+    act(() => {
+      vi.advanceTimersByTime(96);
+    });
+    const mid = readTransform(img).x;
+    expect(mid).toBeGreaterThan(1500);
+    expect(mid).toBeLessThan(2060);
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(readTransform(img).x).toBe(1500);
+    // 收尾只动平移：倍率仍停在双击落点。
+    expect(readTransform(img).scale).toBe(2.5);
+  });
+
+  it('收尾途中边界收紧（窗口变窄）也不留在界外', () => {
+    const { img, host } = renderPreview();
+    flick(host, 100, [200, 300]); // 投影落点会被夹到 ±600
+    act(() => {
+      vi.advanceTimersByTime(96);
+    });
+    expect(readTransform(img).x).toBeGreaterThan(300);
+
+    // 收尾还在飞的时候照片被重新布局成 600 宽：最大平移从 ±600 收到 ±300。
+    Object.defineProperty(img, 'offsetWidth', { configurable: true, get: () => 600 });
+
+    // 下一帧就要落进新边界，而不是「整段飞行都在界外、落定才跳回来」。
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+    expect(readTransform(img).x).toBe(300);
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(readTransform(img).x).toBe(300);
+  });
+
+  it('滚轮打断在飞的收尾（新输入优先，PB-6）', () => {
+    const { img, host } = renderPreview();
+    flick(host, 100, [200, 300]);
+
+    fireEvent.wheel(host, { clientX: 600, clientY: 400, deltaY: -100 });
+    const afterWheel = readTransform(img);
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(readTransform(img)).toEqual(afterWheel);
+    expect(img.style.transition).toBe(GESTURE);
   });
 });

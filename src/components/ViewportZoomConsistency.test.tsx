@@ -6,8 +6,8 @@
  *   - aria-label 不得出现 `250%%` / `适应%` 这类拼接事故
  *   - 重置按钮的 aria-label 必须带上当前缩放（tooltip 有，SR 不能没有）
  */
-import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { SplitCompareViewport } from './SplitCompareViewport';
 import { BeforeAfterViewport } from './BeforeAfterViewport';
 import { ExifCapsule } from './ExifCapsule';
@@ -90,6 +90,55 @@ describe('视口缩放读数一致性', () => {
     renderSplit();
     const reset = screen.getAllByLabelText(/^重置缩放与平放|^重置缩放与平移/)[0];
     expect(reset.getAttribute('aria-label')).toMatch(/当前/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// issue #22 · 收尾只动平移，读数与倍率都不许变
+//
+// 惯性 / 回弹是平移通道的收尾，若顺手改了 `scale`，读数、± 按钮的禁用态、
+// 1:1 判定会跟着漂。这里钉住「甩一趟回来，读数还是原来那句」。
+// ---------------------------------------------------------------------------
+describe('issue #22：收尾不改变缩放读数', () => {
+  beforeEach(() => {
+    // 本文件的其他用例不拖拽，没有统一的指针捕获桩；拖拽链路要自己补上。
+    const proto = Element.prototype as unknown as Record<string, unknown>;
+    proto.setPointerCapture = vi.fn();
+    proto.releasePointerCapture = vi.fn();
+    proto.hasPointerCapture = vi.fn(() => true);
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function readScale(el: HTMLElement): number {
+    const m = /scale\(([\d.]+)\)/.exec(el.style.transform || '');
+    return m ? parseFloat(m[1]) : 1;
+  }
+
+  it('Split：250% 甩动收尾后仍是「当前缩放 250%」', () => {
+    const { container } = renderSplit();
+    const imgs = Array.from(container.querySelectorAll('img[style*="translate"]')) as HTMLImageElement[];
+    const host = imgs[0].parentElement as HTMLElement;
+
+    fireEvent.doubleClick(host);
+    expect(screen.getAllByLabelText('当前缩放 250%').length).toBeGreaterThan(0);
+
+    fireEvent.pointerDown(host, { button: 0, clientX: 100, clientY: 400, pointerId: 1 });
+    vi.advanceTimersByTime(16);
+    fireEvent.pointerMove(host, { clientX: 200, clientY: 400, pointerId: 1 });
+    vi.advanceTimersByTime(16);
+    fireEvent.pointerMove(host, { clientX: 300, clientY: 400, pointerId: 1 });
+    fireEvent.pointerUp(host, { clientX: 300, clientY: 400, pointerId: 1 });
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+
+    expect(readScale(imgs[0])).toBe(2.5);
+    expect(readScale(imgs[1])).toBe(2.5);
+    expect(screen.getAllByLabelText('当前缩放 250%').length).toBeGreaterThan(0);
   });
 });
 
