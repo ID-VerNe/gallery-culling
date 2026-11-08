@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 
 interface ModalProps {
@@ -22,6 +22,27 @@ interface ModalProps {
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * 退场窗口（ms，issue #41 · PB-12）。与 CSS `duration-150` 配对。
+ *
+ * 为什么用有界 `setTimeout` 而不是 `onTransitionEnd`：`transitionend` 在
+ * reduced-motion（0.01ms）或元素被立刻隐藏时会丢事件，面板就会永远留在 DOM 上
+ * ——「出场必须不可阻塞」是硬约束。定时器口径与 `useSidebarCrossFade.ts` 一致。
+ *
+ * 关窗语义不变：`isOpen` 一变 false，弹窗栈 / 滚动锁 / 焦点还原 / Esc 监听
+ * 全部**立刻**撤销（下面几个 effect 都以 `isOpen` 为开关），退场只是把面板
+ * 多留 150ms 做淡出，不阻塞任何一次 Esc 或连续点击。
+ */
+export const MODAL_EXIT_MS = 150;
+
+/** 进场从「挂载帧」切到「在场帧」的延迟：0ms 只为让浏览器先画一帧 opacity-0。 */
+const ENTER_TICK_MS = 0;
+
+const prefersReducedMotion = () =>
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /**
  * D1：模块级弹窗栈 —— 按挂载顺序记录当前打开的 Modal 实例。
@@ -66,6 +87,67 @@ export const Modal: React.FC<ModalProps> = ({
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   /** 本实例在弹窗栈中的标识。 */
   const instanceRef = useRef<symbol | null>(null);
+
+  // issue #41 · PB-12 presence：`isOpen` 变 false 后，面板先淡出 MODAL_EXIT_MS 再卸载。
+  const [mounted, setMounted] = useState(isOpen);
+  /** 「在场帧」开关：进场先画一帧 opacity-0 / scale-95，再切到 100，CSS 过渡才有起点。 */
+  const [shown, setShown] = useState(false);
+  const [exiting, setExiting] = useState(false);
+  const enterTimer = useRef<number | null>(null);
+  const exitTimer = useRef<number | null>(null);
+  /** 只有打开过的实例才可能进入退场；`isOpen` 初始为 false 时挂载不该「退场」。 */
+  const everOpened = useRef(isOpen);
+
+  useEffect(() => {
+    if (isOpen) {
+      everOpened.current = true;
+      // 退场中快速重开：取消退场计时，面板不出 DOM（否则会闪一下再出现）
+      if (exitTimer.current !== null) {
+        window.clearTimeout(exitTimer.current);
+        exitTimer.current = null;
+      }
+      setMounted(true);
+      setExiting(false);
+
+      if (prefersReducedMotion()) {
+        setShown(true);
+        return;
+      }
+      enterTimer.current = window.setTimeout(() => {
+        setShown(true);
+        enterTimer.current = null;
+      }, ENTER_TICK_MS);
+      return () => {
+        if (enterTimer.current !== null) {
+          window.clearTimeout(enterTimer.current);
+          enterTimer.current = null;
+        }
+      };
+    }
+
+    if (!everOpened.current) return;
+
+    setShown(false);
+    setExiting(true);
+
+    if (prefersReducedMotion()) {
+      // 降级：跳过退场窗口，直接卸载（不挂 150ms 空等）
+      setMounted(false);
+      setExiting(false);
+      return;
+    }
+    exitTimer.current = window.setTimeout(() => {
+      setMounted(false);
+      setExiting(false);
+      exitTimer.current = null;
+    }, MODAL_EXIT_MS);
+    return () => {
+      if (exitTimer.current !== null) {
+        window.clearTimeout(exitTimer.current);
+        exitTimer.current = null;
+      }
+    };
+  }, [isOpen]);
 
   // UX-17：弹窗打开时锁掉页面滚动。
   // 此前完全依赖 App 根节点的 overflow-hidden 兜底 —— 那是 flex 布局约束，
@@ -175,10 +257,12 @@ export const Modal: React.FC<ModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [isOpen, onClose, disableClose]);
 
-  if (!isOpen) return null;
+  if (!mounted) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 transition-opacity duration-200 ease-out ${shown ? 'opacity-100' : 'opacity-0'}`}
+    >
       {/* Scrim. Non-interactive: dismissal is Escape / Cancel / X only, so a
           stray click never discards a half-filled form. */}
       <div
@@ -188,12 +272,24 @@ export const Modal: React.FC<ModalProps> = ({
 
       <div
         ref={panelRef}
-        role="dialog"
-        aria-modal="true"
+        /* issue #41 · PB-12：退场窗口内仍挂载（淡出 + 缩小），但**不再是模态**
+           —— 摘掉 `role` / `aria-modal` 有两个原因：
+           1) 全局快捷键守卫（`useKeyboardShortcuts.ts:135`、
+              `useToneEditing.ts:596`）都以 `[role="dialog"][aria-modal="true"]`
+              判定「模态开着」。留着它 = 关窗后 150ms 内单键快捷键失灵，
+              那是实打实的「卡手感」，不能为了动画牺牲「关完立刻能用」。
+           2) 焦点在关闭瞬间已还回调用方，退场中的面板只是一张残影，
+              不该再进无障碍树（`aria-hidden` 兜住读屏）。
+           顺序上 `data-modal-panel` 是给用例的稳定锚点（退场时 role 已摘掉）。*/
+        data-modal-panel="true"
+        role={exiting ? undefined : 'dialog'}
+        aria-modal={exiting ? undefined : 'true'}
         aria-labelledby={titleId}
         tabIndex={-1}
+        data-exiting={exiting ? 'true' : undefined}
+        aria-hidden={exiting ? 'true' : undefined}
         // D4：限制面板高度，使 body 内部滚动生效、footer 主按钮始终可达。
-        className={`relative bg-background-panel border border-border-default rounded-xl w-full ${maxWidth} max-h-[calc(100vh-2rem)] shadow-2xl flex flex-col overflow-hidden text-white text-xs outline-none`}
+        className={`relative bg-background-panel border border-border-default rounded-xl w-full ${maxWidth} max-h-[calc(100vh-2rem)] shadow-2xl flex flex-col overflow-hidden text-white text-xs outline-none transition-transform duration-200 ease-out ${shown ? 'scale-100' : 'scale-95'}`}
       >
         {/* Header */}
         <div className="h-12 border-b border-border-default px-4 flex items-center justify-between bg-background-header shrink-0">
@@ -204,7 +300,10 @@ export const Modal: React.FC<ModalProps> = ({
             </h2>
           </div>
           <button
-            onClick={onClose}
+            onClick={() => {
+              // issue #41 · PB-12：退场窗口内按钮还在淡出，手快的第二下不能再触发 onClose
+              if (!exiting) onClose();
+            }}
             disabled={disableClose}
             data-modal-close="true"
             className="focus-ring text-white/60 hover:text-white p-1 rounded hover:bg-background-surface-hover active:scale-[0.96] transition-transform shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-white/60"

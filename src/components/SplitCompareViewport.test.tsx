@@ -5,6 +5,7 @@
  *  - 有 JPG 的照片零 lumen 请求（防止「顺手把解码成本翻倍」）。
  */
 import { describe, it, expect, vi } from 'vitest';
+import viewportSource from './SplitCompareViewport.tsx?raw';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { SplitCompareViewport } from './SplitCompareViewport';
@@ -194,5 +195,37 @@ describe('SplitCompareViewport —— 底栏迁到窗口底部（issue #62）', 
     });
 
     expect(container.querySelectorAll('[data-viewport-photo]')).toHaveLength(2);
+  });
+});
+
+/**
+ * 浮层胶囊圆角定档（issue #40 · PA-7）。
+ *
+ * 左上 `top-3` 那一行里，标题（文件名 + 焦距/快门/ISO）胶囊与基准徽章按钮相邻
+ * 排列，两者曾是 `rounded-lg`（8px），而同视口的 loading（`:174`）与含成品徽章
+ * （`:185`）已是 `rounded-md`（6px）——同一行 / 同一视口两种圆角并存。
+ * 定档结论：浮层胶囊统一 `rounded-md`；面板（`Modal.tsx` 的 `rounded-xl` / 12px）
+ * 保持另一层级，两者刻意不拍平。
+ *
+ * jsdom 目视不了 8px 与 6px，这里钉**档位**：取值瞄的是源文件里胶囊 className
+ * 的圆角子串，有人写回 `rounded-lg` 即红（本 issue 的墓碑）。
+ */
+describe('SplitCompareViewport —— 浮层胶囊圆角定档（issue #40）', () => {
+  it('左上标题胶囊圆角是 rounded-md，不是 rounded-lg', () => {
+    // 以「底色 + 虚化 + 内边距」锁定标题胶囊，再取其圆角类。
+    const capsule = viewportSource.match(
+      /bg-background-base\/85 backdrop-blur px-3 py-1\.5 (rounded-\S+)/,
+    );
+    expect(capsule).not.toBeNull();
+    expect(capsule?.[1]).toBe('rounded-md');
+  });
+
+  it('基准 / 候选徽章按钮圆角是 rounded-md，与同排标题胶囊同档', () => {
+    // 该按钮的圆角在模板串头部：「内边距 + 圆角 + 字号 + 字重 + 过渡」。
+    const badge = viewportSource.match(
+      /px-2\.5 py-1\.5 (rounded-\S+) text-xs font-medium transition-colors/,
+    );
+    expect(badge).not.toBeNull();
+    expect(badge?.[1]).toBe('rounded-md');
   });
 });

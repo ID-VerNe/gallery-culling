@@ -6,6 +6,9 @@
  * 时有时无，无法横向比较同一张照片在不同视口下的元数据。
  *
  * 纯展示，不含业务逻辑；文本可选中（`select-text`），方便直接复制参数。
+ *
+ * 圆角 `rounded-md`（6px）是浮层胶囊的统一档位（issue #40）：叠在照片上的小信息
+ * 条与对话框面板（`Modal.tsx` 的 `rounded-xl` / 12px）刻意分属两个层级，不拍平。
  */
 import React from 'react';
 import type { ExifData } from '../types';
@@ -14,7 +17,7 @@ export const ExifCapsule: React.FC<{ exif: ExifData | undefined }> = ({ exif }) 
   if (!exif) return null;
 
   return (
-    <div className="absolute top-3 right-3 bg-background-base/85 backdrop-blur-lg px-3.5 py-2.5 rounded-lg text-xs text-white/85 flex flex-col gap-1 border border-border-default pointer-events-auto select-text max-w-[16rem]">
+    <div className="absolute top-3 right-3 bg-background-base/85 backdrop-blur-lg px-3.5 py-2.5 rounded-md text-xs text-white/85 flex flex-col gap-1 border border-border-default pointer-events-auto select-text max-w-[16rem]">
       <div className="font-semibold text-white truncate">
         {exif.cameraModel || exif.cameraMake || '未知相机'}
       </div>
