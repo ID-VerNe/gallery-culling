@@ -263,7 +263,11 @@ export function useKeyboardShortcuts({
 
       // 6.7 钉左 / 钉右基准：Q / Shift+Q（issue #61，替代右手 `[` / `]`）。
       //     用物理键位 `e.code` 判定；Shift+Q 的 `e.key` 仍是 `Q`，靠 shiftKey 分流。
+      //     issue #95：两个方向都是**切换**语义，长按的系统重复会按重复率反复
+      //     「钉 → 取消」，松手时机决定最终状态 —— 只认首次 keydown。
+      //     翻页键 A / D 刻意不拦重复（连续翻页是正常用法）。
       if (e.code === 'KeyQ') {
+        if (e.repeat) return;
         if (e.shiftKey) {
           if (onPinRight) {
             e.preventDefault();
@@ -379,8 +383,10 @@ export function useKeyboardShortcuts({
           break;
 
         // Pin Reference (B - Benchmark/Base)
+        // issue #95：切换语义 + 长按重复 = 基准不确定，只认首次 keydown。
         case 'b':
         case 'B':
+          if (e.repeat) break;
           if (onTogglePinReference) {
             e.preventDefault();
             onTogglePinReference();

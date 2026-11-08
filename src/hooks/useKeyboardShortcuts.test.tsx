@@ -789,3 +789,80 @@ describe('useKeyboardShortcuts —— 左手单键（issue #61）', () => {
     expect(h.onOpenShortcutHelp).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * issue #95 · PA：基准键缺 `e.repeat` 守卫。
+ *
+ * 三个基准键（`B` / `Q` / `Shift+Q`）都是**切换语义**（`useComparePin.ts`），
+ * 系统键盘重复会按重复率反复「钉 → 取消」，松手时机决定最终状态。这里锁住
+ * 「长按只响应首次 keydown」；同时把 `A` / `D` 的连按能力一起锁住 ——
+ * issue 明确要求**不连带**给翻页键加守卫，否则会删掉一个正常用法。
+ */
+describe('useKeyboardShortcuts —— 基准键 repeat 守卫（issue #95）', () => {
+  function setupRepeat() {
+    const handlers = {
+      onPrev: vi.fn(),
+      onNext: vi.fn(),
+      onRate: vi.fn(),
+      onFlag: vi.fn(),
+      onOpenExternal: vi.fn(),
+      onToggleCompare: vi.fn(),
+      onTogglePinReference: vi.fn(),
+      onPinLeft: vi.fn(),
+      onPinRight: vi.fn(),
+      onTogglePinCurrent: vi.fn(),
+      onHoldOriginalStart: vi.fn(),
+      onHoldOriginalEnd: vi.fn(),
+    };
+    renderHook(() => useKeyboardShortcuts(handlers));
+    return handlers;
+  }
+
+  it('长按 B 只切换一次（重复事件不得反复钉/取消）', () => {
+    const h = setupRepeat();
+
+    expect(fireEvent.keyDown(document.body, { key: 'b' })).toBe(false);
+    // 系统重复率派发的事件：必须整段忽略，也不该再 preventDefault。
+    for (let i = 0; i < 3; i += 1) {
+      expect(fireEvent.keyDown(document.body, { key: 'b', repeat: true })).toBe(true);
+    }
+
+    expect(h.onTogglePinReference).toHaveBeenCalledTimes(1);
+  });
+
+  it('长按 Q / Shift+Q 各只钉一次', () => {
+    const h = setupRepeat();
+
+    fireEvent.keyDown(document.body, { key: 'q', code: 'KeyQ' });
+    fireEvent.keyDown(document.body, { key: 'q', code: 'KeyQ', repeat: true });
+
+    fireEvent.keyDown(document.body, { key: 'Q', code: 'KeyQ', shiftKey: true });
+    fireEvent.keyDown(document.body, { key: 'Q', code: 'KeyQ', shiftKey: true, repeat: true });
+
+    expect(h.onPinLeft).toHaveBeenCalledTimes(1);
+    expect(h.onPinRight).toHaveBeenCalledTimes(1);
+  });
+
+  it('A / D 的 repeat 仍连续翻页（issue 明确不连带）', () => {
+    const h = setupRepeat();
+
+    fireEvent.keyDown(document.body, { key: 'a' });
+    fireEvent.keyDown(document.body, { key: 'a', repeat: true });
+    fireEvent.keyDown(document.body, { key: 'd' });
+    fireEvent.keyDown(document.body, { key: 'd', repeat: true });
+
+    expect(h.onPrev).toHaveBeenCalledTimes(2);
+    expect(h.onNext).toHaveBeenCalledTimes(2);
+  });
+
+  it('按住 V 看原片未被改坏：repeat 不重复 start，keyup 只 end 一次', () => {
+    const h = setupRepeat();
+
+    fireEvent.keyDown(document.body, { key: 'v' });
+    fireEvent.keyDown(document.body, { key: 'v', repeat: true });
+    fireEvent.keyUp(document.body, { key: 'v' });
+
+    expect(h.onHoldOriginalStart).toHaveBeenCalledTimes(1);
+    expect(h.onHoldOriginalEnd).toHaveBeenCalledTimes(1);
+  });
+});
