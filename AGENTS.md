@@ -57,6 +57,9 @@ npm run parity                             # CI 等价复跑：在被推送 sha 
 - **完成声明以磁盘为准**：任何「已完成」都要独立用 `git status`、文件存在性、门禁原始输出复核，不采信转述。
 - **门禁安静窗口 solo 执行**：测试按序单独跑，不在并发写窗口内跑。红了先判断是代码问题还是环境问题——用 pristine HEAD 的 worktree 对照跑一遍；同族失败即既有抖动，记录在案，不要盲目「修复」。
 - 已知抖动：满负荷跑全量时 `App.scanProgress` / `App.taskMutex` / `App.toneSave` 曾因默认 5s 超时假红（master 基线同条件复跑同样失败，单独复跑全绿）。2026-11-01 起 `vitest.config.ts` 的 `testTimeout` 放宽到 15s，只影响「卡住多久算挂」，不放松断言。
+- 已知抖动（异步 DOM 断言等不到，非用例超时）：`MetadataEditorModal.presets.test.tsx` 的「显示的是库里的预设，不是写死的常量」在**满负荷整跑** `npm run gates` 的 unit 分片时偶发红——`findByRole('button', { name: /套用预设 Voigtlander VM 21mm F3.5/ })`（`src/components/MetadataEditorModal.presets.test.tsx:92`）撞 Testing Library 默认 1000ms 等待窗口，而弹窗已经打开（失败快照的 `<body>` 里已有 `fixed inset-0 z-50` 遮罩）。已观测 **1 次 / 2 次满负荷全量**（2026-11-05，issue #60）；隔离复跑 `node node_modules/vitest/vitest.mjs run src/components/MetadataEditorModal.presets.test.tsx --pool=vmForks` 与整分片复跑均 12/12 绿。
+  - **判定方式**：同 SHA 单独复跑该文件通过，或用 pristine HEAD 的 worktree 同条件对照跑一遍；两者都绿即按抖动记录，不动实现。
+  - **取舍**：不改全局 `testTimeout`（这次红的不是用例超时，调它无效，还会连带放宽全部前端用例的「卡住多久算挂」）；也不给这一条加显式等待窗口（只有 1 次观测、隔离复现不出来，等于在没复现的情况下改测试时序，会把真回归一起放走，违反红线 6「先让用例能红，再改实现」）。后续拿到「同 SHA、同机器、多次满负荷全量」样本再判断是否与 `useLensPresets` 的 IO 路径有关。
 - **变异验证**：见红线 6。
 
 ---
