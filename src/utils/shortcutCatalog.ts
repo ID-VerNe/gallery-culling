@@ -54,9 +54,24 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
         label: '色标：红 / 黄 / 绿 / 蓝 / 紫（依次对应，再按一次取消）',
         barLabel: '色标',
       },
-      { id: 'undo', keys: 'Ctrl/⌘ + Z', label: '撤销上一步（最多 50 步，批量算一步）' },
-      { id: 'redo', keys: 'Ctrl/⌘ + Shift + Z', label: '重做' },
-      { id: 'batch-export', keys: 'Ctrl/⌘ + E', label: '打开批量导出' },
+      {
+        id: 'undo',
+        keys: 'Ctrl/⌘ + Z',
+        // issue #80（SH-08）：裸 `Z` 是 1:1 细节，不是撤销；帮助里必须互指。
+        label: '撤销上一步（最多 50 步，批量算一步；裸 Z 是 1:1 细节）',
+      },
+      {
+        id: 'redo',
+        keys: 'Ctrl/⌘ + Shift + Z',
+        // issue #80（SH-07）：三键 chord 不够好按，状态栏按钮是鼠标兜底。
+        label: '重做（三键同按；也可点状态栏「重做」按钮）',
+      },
+      {
+        id: 'batch-export',
+        keys: 'Ctrl/⌘ + E',
+        // issue #80（SH-08）：裸 `E` 是调色面板，必须显式区分。
+        label: '打开批量导出（裸 E 是调色面板）',
+      },
     ],
   },
   {
@@ -64,8 +79,13 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
     items: [
       { id: 'compare', keys: 'C', label: '切换单图 / 双图对比' },
       { id: 'before-after', keys: 'T', label: '切换前后对照', barLabel: '前后' },
-      { id: 'tone', keys: 'E', label: '打开 / 关闭调色面板' },
-      { id: 'zoom-1to1', keys: 'Z', label: '1:1 细节（RAW-only 首次需 6–8 秒，再按回适应）' },
+      // issue #80（SH-08）：`E` / `Z` 与 `Ctrl+E` / `Ctrl+Z` 同字母，文案互指。
+      { id: 'tone', keys: 'E', label: '打开 / 关闭调色面板（裸 E；批量导出要按 Ctrl/⌘ + E）' },
+      {
+        id: 'zoom-1to1',
+        keys: 'Z',
+        label: '1:1 细节（裸 Z，不是撤销；RAW-only 首次需 6–8 秒，再按回适应）',
+      },
       { id: 'hold-original', keys: 'V（按住）', label: '临时查看原片', barLabel: '看原片' },
       { id: 'help', keys: 'F1', label: '打开 / 关闭快捷键帮助' },
       { id: 'escape', keys: 'Esc', label: '关闭弹窗 / 调色面板，或清空宫格搜索' },

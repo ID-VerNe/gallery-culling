@@ -307,7 +307,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           className={`${STATUS_BUTTON} ${twoPane ? 'hidden 2xl:flex' : 'hidden xl:flex'}`}
           title={canUndo ? `撤销：${undoSummary} (Ctrl+Z)` : '没有可撤销的改动'}
           aria-label={canUndo ? `撤销：${undoSummary}` : '撤销（没有可撤销的改动）'}
-          aria-keyshortcuts="Control+z"
+          aria-keyshortcuts="Control+Z"
         >
           <Undo2 className="w-3 h-3 shrink-0" aria-hidden="true" />
           <span className="pb-[1px] shrink-0">撤销</span>
@@ -321,7 +321,7 @@ export const BottomBar: React.FC<BottomBarProps> = ({
           className={`${STATUS_BUTTON} ${twoPane ? 'hidden 2xl:flex' : 'hidden xl:flex'}`}
           title={canRedo ? `重做：${redoSummary} (Ctrl+Shift+Z)` : '没有可重做的改动'}
           aria-label={canRedo ? `重做：${redoSummary}` : '重做（没有可重做的改动）'}
-          aria-keyshortcuts="Control+Shift+z"
+          aria-keyshortcuts="Control+Shift+Z"
         >
           <Redo2 className="w-3 h-3 shrink-0" aria-hidden="true" />
           <span className="pb-[1px] shrink-0">重做</span>

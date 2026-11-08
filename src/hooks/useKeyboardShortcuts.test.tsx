@@ -365,6 +365,84 @@ describe('useKeyboardShortcuts —— Z 键 1:1', () => {
 });
 
 /**
+ * issue #80（SH-08）：`E` / `Ctrl+E` 同字母双语义。
+ *
+ * 裸 `E` 只开调色面板，`Ctrl/Cmd + E` 只开批量导出，两者都不写盘。过去
+ * 这一对**没有任何用例**：只要有人把 `case 'e'` 提到 `Ctrl+E` 分支之前，
+ * `Ctrl+E` 就会静默退化成「开调色面板」，而全量门禁仍是绿的。
+ *
+ * 与 `Z` / `Ctrl+Z` 的用例对称：锁住「修饰键分流」与「表单/模态让位」。
+ */
+describe('useKeyboardShortcuts —— E 与 Ctrl+E 双语义（issue #80）', () => {
+  function setupTonalAndExport() {
+    const handlers = {
+      onPrev: vi.fn(),
+      onNext: vi.fn(),
+      onRate: vi.fn(),
+      onFlag: vi.fn(),
+      onOpenExternal: vi.fn(),
+      onToggleCompare: vi.fn(),
+      onOpenExport: vi.fn(),
+      onToggleTonalPanel: vi.fn(),
+    };
+    renderHook(() => useKeyboardShortcuts(handlers));
+    return handlers;
+  }
+
+  it('裸 E 只开调色面板，不打开导出，并阻止默认', () => {
+    const h = setupTonalAndExport();
+    const notPrevented = fireEvent.keyDown(document.body, { key: 'e' });
+
+    expect(h.onToggleTonalPanel).toHaveBeenCalledTimes(1);
+    expect(h.onOpenExport).not.toHaveBeenCalled();
+    expect(notPrevented).toBe(false); // fireEvent 返回 false = preventDefault 已调用
+  });
+
+  it('大写 E 同样只开调色面板', () => {
+    const h = setupTonalAndExport();
+    fireEvent.keyDown(document.body, { key: 'E' });
+
+    expect(h.onToggleTonalPanel).toHaveBeenCalledTimes(1);
+    expect(h.onOpenExport).not.toHaveBeenCalled();
+  });
+
+  it('Ctrl+E 只开导出，不触发调色面板', () => {
+    const h = setupTonalAndExport();
+    const notPrevented = fireEvent.keyDown(document.body, { key: 'e', ctrlKey: true });
+
+    expect(h.onOpenExport).toHaveBeenCalledTimes(1);
+    expect(h.onToggleTonalPanel).not.toHaveBeenCalled();
+    expect(notPrevented).toBe(false);
+  });
+
+  it('文本输入框里 E / Ctrl+E 都让位（不吞表单输入）', () => {
+    const h = setupTonalAndExport();
+    const input = document.createElement('input');
+    input.type = 'text';
+    mount(input);
+
+    fireEvent.keyDown(input, { key: 'e', ctrlKey: true });
+    fireEvent.keyDown(input, { key: 'e' });
+
+    expect(h.onOpenExport).not.toHaveBeenCalled();
+    expect(h.onToggleTonalPanel).not.toHaveBeenCalled();
+  });
+
+  it('模态打开时 E 不触发调色面板', () => {
+    const h = setupTonalAndExport();
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    document.body.appendChild(dialog);
+    mounted.push(dialog);
+
+    fireEvent.keyDown(document.body, { key: 'e' });
+
+    expect(h.onToggleTonalPanel).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * issue #61：右手键全部删除，每个动作只留左手单键/左半区入口。
  *
  * 判据是「左手放 A 键锚点、手掌不横移就能按到」。这里锁四件事：

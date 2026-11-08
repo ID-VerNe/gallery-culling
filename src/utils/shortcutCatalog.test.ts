@@ -86,4 +86,21 @@ describe('键位目录（issue #51 / #61）', () => {
       expect(item.barLabel!.length).toBeLessThanOrEqual(item.label.length);
     }
   });
+
+  /**
+   * issue #80（SH-07 + SH-08）：同字母双语义必须**显式互指**。
+   *
+   * 评估结论是不重排键位（改动成本高于收益），所以帮助弹窗是唯一能把
+   * 「裸 `Z` 不是撤销」「裸 `E` 不是导出」讲清楚的地方。四条互指文案
+   * 少一条，用户就又回到「按 `Z` 以为撤销、按 `Ctrl+E` 不知道是导出」的状态。
+   * 文案改动只在这里，键位字符串不变。
+   */
+  it('同字母双语义在 catalog 里显式互指（issue #80）', () => {
+    expect(findShortcut('undo')!.label).toContain('裸 Z');
+    expect(findShortcut('zoom-1to1')!.label).toContain('不是撤销');
+    expect(findShortcut('tone')!.label).toContain('批量导出');
+    expect(findShortcut('batch-export')!.label).toContain('裸 E');
+    // SH-07：三键 chord 的鼠标兜底要写在协助文案里，否则窄窗用户没有出路。
+    expect(findShortcut('redo')!.label).toContain('状态栏');
+  });
 });
