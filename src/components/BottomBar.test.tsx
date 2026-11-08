@@ -351,6 +351,12 @@ describe('issue #32 —— 状态栏里的鼠标入口与键位可达性', () =>
     expect(onHoldOriginalEnd).toHaveBeenCalledTimes(3);
   });
 
+  /**
+   * SH-12 + issue #80：撤销/重做按钮带 aria-keyshortcuts，读屏能取到键位。
+   *
+   * 键名按 `aria-keyshortcuts` 的通行写法统一为大写字母（与工具条导出按钮的
+   * `Control+E` 同族），不再一半大写一半小写。
+   */
   it('SH-12：撤销/重做按钮带 aria-keyshortcuts，读屏能取到键位', () => {
     renderBar({
       panes: [makePane()],
@@ -364,11 +370,11 @@ describe('issue #32 —— 状态栏里的鼠标入口与键位可达性', () =>
 
     expect(screen.getByRole('button', { name: '撤销：淘汰 2 张' })).toHaveAttribute(
       'aria-keyshortcuts',
-      'Control+z',
+      'Control+Z',
     );
     expect(screen.getByRole('button', { name: '重做：淘汰 2 张' })).toHaveAttribute(
       'aria-keyshortcuts',
-      'Control+Shift+z',
+      'Control+Shift+Z',
     );
   });
 });

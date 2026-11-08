@@ -154,6 +154,27 @@ describe('issue #32 / SH-10 —— 帮助补齐宫格与 Esc 键位', () => {
 });
 
 /**
+ * issue #80 / SH-07 + SH-08：同字母双语义必须在帮助里并列可查。
+ *
+ * 不重排键位的代价是文案必须自己把边界讲清楚：裸 `Z` 不是撤销、裸 `E`
+ * 不是导出、重做的三键 chord 有状态栏按钮兜底。少一条指向，用户就只能
+ * 靠试错来分辨同字母的两种语义。
+ */
+describe('issue #80 —— 帮助里显式并列 Z / E 的修饰键边界', () => {
+  it('裸 Z / 裸 E / 重做兜底都能在帮助里查到', () => {
+    render(<ShortcutHelpModal isOpen onClose={() => {}} />);
+
+    // `undo` 与 `zoom-1to1` 两条都要点到「裸 Z」，保证是互指而不是单向解释。
+    expect(screen.getAllByText(/裸 Z/).length).toBeGreaterThanOrEqual(2);
+    // `tone` 与 `batch-export` 两条都要点到「批量导出」，同样互指。
+    expect(screen.getAllByText(/批量导出/).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText(/裸 E 是调色面板/)).toBeTruthy();
+    // SH-07：重做三键 chord 的鼠标兜底写进帮助。
+    expect(screen.getByText(/状态栏「重做」/)).toBeTruthy();
+  });
+});
+
+/**
  * issue #18 · PB-12（本 issue #41 落地）：模态进场 / 退场 presence。
  *
  * 三态时序：`关 → 面板标 data-exiting 仍挂载 → 推进 MODAL_EXIT_MS 后卸载`。
