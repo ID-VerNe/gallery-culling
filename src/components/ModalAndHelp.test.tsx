@@ -146,6 +146,8 @@ describe('issue #32 / SH-10 —— 帮助补齐宫格与 Esc 键位', () => {
       'Ctrl/⌘ + A', // 宫格全选
       'Esc', // 关弹窗 / 面板 / 清空宫格搜索
       '↑ / ↓', // 宫格跨行
+      'Shift + ↑ / ↓', // issue #79：宫格按行连选
+      'Shift + A / D', // issue #79：宫格逐张连选
       'Ctrl / Shift + 点击', // 宫格多选 / 范围选
     ]) {
       expect(screen.getByText(keys)).toBeTruthy();

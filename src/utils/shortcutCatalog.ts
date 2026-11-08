@@ -38,6 +38,9 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { id: 'search', keys: 'Ctrl/⌘ + F', label: '搜索宫格列表' },
       { id: 'select-all', keys: 'Ctrl/⌘ + A', label: '宫格内全选（多选路径）' },
       { id: 'grid-rows', keys: '↑ / ↓', label: '宫格内跨行移动（±当前列数）' },
+      // issue #79：宫格连选。只加 Shift 分支，既有 A/D、↑/↓ 单张语义不变。
+      { id: 'grid-extend-rows', keys: 'Shift + ↑ / ↓', label: '宫格内从锚点按行扩展选区' },
+      { id: 'grid-extend-steps', keys: 'Shift + A / D', label: '宫格内从锚点逐张扩展选区' },
       { id: 'open-external', keys: 'W', label: '在 Photoshop / 默认程序中打开' },
     ],
   },

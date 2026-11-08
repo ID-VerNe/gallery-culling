@@ -60,6 +60,61 @@ describe('G-02：多选规模必须可见', () => {
   });
 });
 
+/**
+ * issue #79：宫格多选不能只靠「左手修饰键 + 右手鼠标」。
+ *
+ * 格头必须有常驻的全选/清除入口，且入口对读屏可读：可读名称 + 全选态的
+ * `aria-pressed` + `aria-keyshortcuts`，不能只挂 `title`。
+ */
+describe('issue #79：格头全选 / 清除入口', () => {
+  it('启用多选时两个按钮都有可读名称，全选带 aria-pressed 与快捷键', () => {
+    renderGrid({ selectedIds: new Set(['a']), onSelectionChange: () => {} });
+
+    const selectAll = screen.getByRole('button', { name: '全选宫格照片' });
+    expect(selectAll.getAttribute('aria-pressed')).toBe('false');
+    expect(selectAll.getAttribute('aria-keyshortcuts')).toBe('Control+A');
+    expect(screen.getByRole('button', { name: '清除宫格多选' })).toBeTruthy();
+  });
+
+  it('全选后 aria-pressed=true，再点全选仍提交全集', async () => {
+    const onSelectionChange = vi.fn();
+    renderGrid({
+      selectedIds: new Set(['a', 'b', 'c']),
+      onSelectionChange,
+    });
+
+    const selectAll = screen.getByRole('button', { name: '全选宫格照片' });
+    expect(selectAll.getAttribute('aria-pressed')).toBe('true');
+
+    await userEvent.click(selectAll);
+    expect(onSelectionChange).toHaveBeenCalledWith(new Set(['a', 'b', 'c']));
+  });
+
+  it('无选区时清除按钮禁用，有选区时点击写空集', async () => {
+    const onSelectionChange = vi.fn();
+    const { unmount } = renderGrid({ selectedIds: new Set<string>(), onSelectionChange });
+    expect(
+      screen.getByRole('button', { name: '清除宫格多选' }).hasAttribute('disabled'),
+    ).toBe(true);
+    unmount();
+
+    renderGrid({ selectedIds: new Set(['b']), onSelectionChange });
+    await userEvent.click(screen.getByRole('button', { name: '清除宫格多选' }));
+    expect(onSelectionChange).toHaveBeenCalledWith(new Set());
+  });
+
+  it('未启用多选时不渲染全选/清除入口（不留死按钮）', () => {
+    renderGrid();
+    expect(screen.queryByRole('button', { name: '全选宫格照片' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '清除宫格多选' })).toBeNull();
+  });
+
+  it('空集合时不渲染全选入口（没有可选对象）', () => {
+    renderGrid({ groups: [], selectedIds: new Set<string>(), onSelectionChange: () => {} });
+    expect(screen.queryByRole('button', { name: '全选宫格照片' })).toBeNull();
+  });
+});
+
 describe('G-07：空状态必须被播报', () => {
   it('空宫格根节点带 role=status + aria-live', () => {
     renderGrid({ groups: [] });

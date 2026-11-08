@@ -207,6 +207,8 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   // selection, Left/Right stay bound to the global prev/next photo.
   const isSearchFiltering = searchQuery.trim().length > 0;
   const isEmpty = groups.length === 0;
+  // 全选态按「当前筛选后的集合」判定，避免旧筛选残留的 id 让计数虚高。
+  const allSelected = !isEmpty && groups.every((g) => activeIds.has(g.id));
 
   // FR-06：查询状态。`queryParse` 缺省（独立使用本组件的测试）时全部为空。
   const queryErrors = queryParse?.errors ?? EMPTY_STRINGS;
@@ -246,6 +248,39 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
         </span>
 
         <div className="flex items-center gap-1.5">
+          {/* issue #79：多选的可见入口。此前只能靠 Ctrl+A 或鼠标框选，
+              左手用户在界面上找不到「全选 / 清除」；入口常驻在格头，
+              并用可读名称 + aria-pressed/aria-keyshortcuts 暴露给读屏，
+              不只依赖 title。 */}
+          {multiSelectEnabled && !isEmpty && (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => onSelectionChange?.(new Set(groups.map((g) => g.id)))}
+                className={`focus-ring flex items-center gap-1 px-1.5 min-h-7 rounded text-[10px] transition-colors ${
+                  allSelected
+                    ? 'bg-white text-black font-medium'
+                    : 'text-white/60 hover:text-white hover:bg-white/10'
+                }`}
+                title="全选当前宫格（Ctrl+A）"
+                aria-label="全选宫格照片"
+                aria-pressed={allSelected}
+                aria-keyshortcuts="Control+A"
+              >
+                <Check className="w-3 h-3" aria-hidden="true" />
+                <span>全选</span>
+              </button>
+              <button
+                onClick={() => onSelectionChange?.(new Set())}
+                disabled={activeIds.size === 0}
+                className="focus-ring flex items-center gap-1 px-1.5 min-h-7 rounded text-[10px] text-white/60 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                aria-label="清除宫格多选"
+              >
+                <X className="w-3 h-3" aria-hidden="true" />
+                <span>清除</span>
+              </button>
+            </div>
+          )}
+
           {/* Search toggle (progressive disclosure) */}
           {onSearchOpenChange && (
             <button
