@@ -229,3 +229,27 @@ describe('SplitCompareViewport —— 浮层胶囊圆角定档（issue #40）', 
     expect(badge?.[1]).toBe('rounded-md');
   });
 });
+
+/**
+ * 基准键位提示必须与真实绑定一致（issue #89）。
+ *
+ * 左栏 `Q` = 钉左 / 再按取消（`useComparePin.ts:46-53`）；`B` 是「切换基准」
+ * （有基准则取消，否则钉左，`:98-106`），两者在「右侧已钉时」行为不同，
+ * 不能并成「Q 或 B」。右栏保持 `Shift + Q`（钉右）。
+ * 帮助弹窗的条目拆分归 `shortcutCatalog.ts` 的负责人；本用例钉住视口里
+ * 两份硬编码拷贝不再回潮。
+ */
+describe('SplitCompareViewport —— 基准键位提示（issue #89）', () => {
+  it('左栏只写 Q，右栏写 Shift + Q，不再把 B 并入左栏提示', () => {
+    renderSplit({ leftGroup: withJpg('left'), rightGroup: withJpg('right') });
+
+    expect(
+      screen.getByRole('button', { name: '将 left 锁定为对比基准（Q）' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: '将 right 锁定为对比基准（Shift + Q）' }),
+    ).toBeInTheDocument();
+    // 合并文案一旦回潮，上面两条精确断言即红；这条兜住「换别处再写 B」。
+    expect(screen.queryByRole('button', { name: /（Q 或 B）/ })).toBeNull();
+  });
+});

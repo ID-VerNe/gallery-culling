@@ -122,7 +122,9 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
 
     const isPinned = isLeft ? isLeftPinned : isRightPinned;
     const onTogglePin = isLeft ? onTogglePinLeft : onTogglePinRight;
-    const shortcutHint = isLeft ? 'Q 或 B' : 'Shift + Q';
+    // issue #89：`Q` = 钉左 / 再按取消；`B` 是「切换基准」（有基准则取消，否则钉左），
+    // 语义不同，不能并成「Q 或 B」。右栏的钉右键仍是 `Shift + Q`。
+    const shortcutHint = isLeft ? 'Q' : 'Shift + Q';
     const pane = isLeft ? 'left' : 'right';
     const bind = zoom.bindPane(pane);
     const isFocused = !zoom.sync && zoom.activePane === pane;
