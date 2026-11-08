@@ -296,30 +296,59 @@ export function publishRelease({
     const updater = JSON.parse(fs.readFileSync(path.join(rootDir, 'updater.json'), 'utf8'));
     decideUpdaterVersion({ confVersion: version, updaterVersion: updater.version });
 
-    // 2. 提交 updater.json 并 push：老客户端读 master 的 raw 地址，推上去才触发更新弹窗。
-    stage = 'commit';
-    if (run('git status --porcelain updater.json')) {
-      run('git add updater.json');
-      // 带 pathspec：只提交清单，不把别人暂存区里的东西卷进发布提交。
-      run(`git commit -m "chore(release): 更新 updater.json 至 ${tag}" -- updater.json`);
-      console.log('📝 已提交 updater.json。');
-    } else {
-      console.log('ℹ️ updater.json 无变更，跳过提交。');
-    }
-    run('git push origin master');
-    facts.commitSha = run('git rev-parse HEAD');
-    // push 之后必须确认远端 master 就是本提交：push 被拒或被别的分支截胡时，
-    // 后面的 tag / Release 会全部「成功」，但老客户端永远读不到这份清单。
-    if (run('git rev-parse origin/master') !== facts.commitSha) {
-      throw new Error(
-        '❌ push 之后 origin/master 不等于本次提交：清单没能进 master，发布中止。\n' +
-          '下一步：`git status` 确认分支与远端是否分叉，处理完再重跑（已完成步骤会跳过）。',
-      );
-    }
-
-    // 3. annotated tag 指向本次提交；已存在则必须指向同一提交。
+    // 2. tag 探测（**必须早于提交**）：同一版本重复发版时，先判断能不能安全续跑。
+    //
+    //    构建产物不可逐字节复现（NSIS / PE 时间戳都会变），重建必然换签名。所以「tag 已存在」
+    //    只有一种合法续跑：本次构建的签名与已提交清单里的签名一致。否则先 commit + push
+    //    等于把「新签名 + 旧资产」的清单推给老客户端，更新校验必失败——比直接中止更糟。
     stage = 'tag';
     const existingTagSha = run(`git tag --list ${tag}`) ? run(`git rev-list -n1 ${tag}`) : null;
+    if (existingTagSha) {
+      const committedSig =
+        runJson(`git show ${tag}:updater.json`)?.platforms?.['windows-x86_64']?.signature ?? '';
+      const freshSig = updater?.platforms?.['windows-x86_64']?.signature ?? '';
+      if (committedSig !== freshSig) {
+        throw new Error(
+          `❌ tag ${tag} 已存在，但本次重建的签名与已提交清单不一致：不能把新清单推到 master。\n` +
+            '原因：重建产物不可逐字节复现，签名会变；已发出的 tag / Release 资产必须保持同一份签名。\n' +
+            '下一步：为本次构建 bump 版本号后重发（本次没有 push 任何东西）。',
+        );
+      }
+      try {
+        run(`git merge-base --is-ancestor ${existingTagSha} origin/master`);
+      } catch {
+        throw new Error(
+          '❌ tag 已在，但 origin/master 不含该提交：清单没进 master，发布中止。\n' +
+            '下一步：确认远端 master 是否被回滚 / 分叉，修复后重跑。',
+        );
+      }
+      // 签名一致 → 同一份产物，安全续跑：不再提交、不再 push，直接用已提交的那个 commit。
+      facts.commitSha = existingTagSha;
+      console.log('ℹ️ tag 已存在且签名一致，跳过提交与 push（续跑同一份产物）。');
+    } else {
+      // 3. 提交 updater.json 并 push：老客户端读 master 的 raw 地址，推上去才触发更新弹窗。
+      stage = 'commit';
+      if (run('git status --porcelain updater.json')) {
+        run('git add updater.json');
+        // 带 pathspec：只提交清单，不把别人暂存区里的东西卷进发布提交。
+        run(`git commit -m "chore(release): 更新 updater.json 至 ${tag}" -- updater.json`);
+        console.log('📝 已提交 updater.json。');
+      } else {
+        console.log('ℹ️ updater.json 无变更，跳过提交。');
+      }
+      run('git push origin master');
+      facts.commitSha = run('git rev-parse HEAD');
+      // push 之后必须确认远端 master 就是本提交：push 被拒或被别的分支截胡时，
+      // 后面的 tag / Release 会全部「成功」，但老客户端永远读不到这份清单。
+      if (run('git rev-parse origin/master') !== facts.commitSha) {
+        throw new Error(
+          '❌ push 之后 origin/master 不等于本次提交：清单没能进 master，发布中止。\n' +
+            '下一步：`git status` 确认分支与远端是否分叉，处理完再重跑。',
+        );
+      }
+    }
+
+    // 4. annotated tag：已存在则必须指向同一提交（续跑路径下天然成立）。
     const tagDecision = decideTag({ existingTagSha, updaterSha: facts.commitSha });
     if (tagDecision.action === 'create') {
       run(`git tag -a ${tag} -m "${tag}" ${facts.commitSha}`);
@@ -329,7 +358,7 @@ export function publishRelease({
       console.log(`ℹ️ tag ${tag} 已存在且指向本次提交，跳过。`);
     }
 
-    // 4. Release：先 REST 建 draft，资产传完再发布。
+    // 5. Release：先 REST 建 draft，资产传完再发布。
     stage = 'release';
     const repo = run('gh repo view --json nameWithOwner --jq .nameWithOwner');
     let release = null;
@@ -370,7 +399,7 @@ export function publishRelease({
       console.log(`📦 已通过 REST 创建 draft Release ${tag}（id=${releaseId}）。`);
     }
 
-    // 5. 资产：只传 NSIS setup.exe（MSI 不传，AGENTS.md §5）。
+    // 6. 资产：只传 NSIS setup.exe（MSI 不传，AGENTS.md §5）。
     stage = 'asset';
     const setupExe = path.join(
       rootDir,
@@ -399,14 +428,14 @@ export function publishRelease({
       console.log('ℹ️ Release 上已有同名资产且 digest 一致，跳过上传。');
     }
 
-    // 6. 发布：draft → false，`releases/latest` 才会指向本版本。
+    // 7. 发布：draft → false，`releases/latest` 才会指向本版本。
     stage = 'publish';
     if (releaseDraft) {
       run(`gh api -X PATCH repos/${repo}/releases/${releaseId} -F draft=false`);
       console.log(`🚀 已将 Release ${tag} 置为已发布。`);
     }
 
-    // 7. 复核：digest 与 latest 都是「用户真的能装到这个版本」的必要条件。
+    // 8. 复核：digest 与 latest 都是「用户真的能装到这个版本」的必要条件。
     stage = 'verify';
     const finalRelease = runJson(`gh api repos/${repo}/releases/tags/${tag}`);
     facts.releaseUrl = finalRelease.html_url || facts.releaseUrl;

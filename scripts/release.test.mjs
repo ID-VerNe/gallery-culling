@@ -148,7 +148,7 @@ describe('main —— e2e 失败即中止，updater.json 不落盘', () => {
  */
 
 /** 造一次发版的最小磁盘现场：tauri.conf.json + 假 setup.exe + 假 .sig + 假私钥。 */
-function makeReleaseFixture({ version = '9.9.9', productName = 'gallery-culling' } = {}) {
+function makeReleaseFixture({ version = '9.9.9', productName = 'gallery-culling', existingUpdater = null } = {}) {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-publish-'));
   fs.mkdirSync(path.join(rootDir, 'src-tauri'), { recursive: true });
   fs.writeFileSync(
@@ -157,6 +157,9 @@ function makeReleaseFixture({ version = '9.9.9', productName = 'gallery-culling'
     'utf8',
   );
   fs.writeFileSync(path.join(rootDir, 'updater.key'), 'FAKE-KEY', 'utf8');
+  if (existingUpdater) {
+    fs.writeFileSync(path.join(rootDir, 'updater.json'), JSON.stringify(existingUpdater, null, 2), 'utf8');
+  }
   const nsisDir = path.join(rootDir, 'src-tauri', 'target', 'release', 'bundle', 'nsis');
   fs.mkdirSync(nsisDir, { recursive: true });
   const setupExe = path.join(nsisDir, `${productName}_${version}_x64-setup.exe`);
@@ -176,6 +179,8 @@ function stubPublishExec({
   assetPresent = false,
   finalDigest = null,
   ghProbeError = null,
+  committedUpdater = null,
+  ancestorFails = false,
 }) {
   const calls = [];
   const digest = sha256File(setupExe);
@@ -192,6 +197,25 @@ function stubPublishExec({
     if (cmd === 'git rev-parse origin/master') return 'abc1234567';
     if (cmd.startsWith('git tag --list ')) return tagExists ? 'v9.9.9' : '';
     if (cmd.startsWith('git rev-list -n1 ')) return tagSha;
+    if (cmd === 'git show v9.9.9:updater.json') {
+      return (
+        committedUpdater ||
+        JSON.stringify({
+          version: 'v9.9.9',
+          notes: 'n',
+          pub_date: '2026-01-01T00:00:00.000Z',
+          platforms: { 'windows-x86_64': { signature: 'FAKE-SIG', url: 'https://x/y.exe' } },
+        })
+      );
+    }
+    if (cmd.startsWith('git merge-base --is-ancestor ')) {
+      if (ancestorFails) {
+        const err = new Error('Command failed: git merge-base --is-ancestor');
+        err.status = 1;
+        throw err;
+      }
+      return '';
+    }
     if (cmd.startsWith('git tag -a ') || cmd.startsWith('git push origin v')) return '';
     if (cmd === 'gh repo view --json nameWithOwner --jq .nameWithOwner') {
       return 'ID-VerNe/gallery-culling';
@@ -456,17 +480,78 @@ describe('main —— --publish 全链', () => {
     }
   });
 
-  it('tag 已存在却指向别的提交 → 中止，打印 status=FAILED stage=tag，且一个 gh 命令都不发', async () => {
+  it('tag 已存在但 origin/master 不含该提交 → 中止，打印 status=FAILED stage=tag，且一个 gh 命令都不发', async () => {
     const { rootDir, setupExe } = makeReleaseFixture();
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
-      const { exec, calls } = stubPublishExec({ setupExe, tagExists: true, tagSha: 'deadbeef00' });
-      await expect(main({ rootDir, exec, env: {}, argv: ['--publish'] })).rejects.toThrow(/tag 已存在/);
+      const { exec, calls } = stubPublishExec({
+        setupExe,
+        tagExists: true,
+        tagSha: 'abc1234567',
+        ancestorFails: true,
+      });
+      await expect(main({ rootDir, exec, env: {}, argv: ['--publish'] })).rejects.toThrow(
+        /origin\/master 不含该提交/,
+      );
 
       const text = log.mock.calls.map((args) => args.join(' ')).join('\n');
       expect(text).toContain('status=FAILED');
       expect(text).toContain('stage=tag');
       expect(calls.some((cmd) => cmd.startsWith('gh '))).toBe(false);
+      expect(calls).not.toContain('git push origin master');
+    } finally {
+      log.mockRestore();
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it('tag 已存在但重建签名与已提交清单不一致 → 先于提交中止，不 commit 也不 push', async () => {
+    // 重建必然换签名；若照旧先 commit+push，就会把「新签名 + 旧资产」的清单推给老客户端。
+    const existingUpdater = {
+      version: 'v9.9.9',
+      notes: 'n',
+      pub_date: '2026-01-01T00:00:00.000Z',
+      platforms: { 'windows-x86_64': { signature: 'OLD-SIG', url: 'https://x/y.exe' } },
+    };
+    const { rootDir, setupExe } = makeReleaseFixture({ existingUpdater });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const { exec, calls } = stubPublishExec({
+        setupExe,
+        tagExists: true,
+        tagSha: 'abc1234567',
+        dirty: true,
+        committedUpdater: JSON.stringify(existingUpdater),
+      });
+      await expect(main({ rootDir, exec, env: {}, argv: ['--publish'] })).rejects.toThrow(
+        /签名与已提交清单不一致/,
+      );
+
+      expect(calls).not.toContain('git add updater.json');
+      expect(calls).not.toContain('git push origin master');
+      expect(calls.some((cmd) => cmd.startsWith('gh '))).toBe(false);
+
+      const text = log.mock.calls.map((args) => args.join(' ')).join('\n');
+      expect(text).toContain('stage=tag');
+      expect(text).toContain('status=FAILED');
+      expect(text).not.toContain('status=PUBLISHED');
+    } finally {
+      log.mockRestore();
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it('同一 fixture 连跑两次（--publish）：updater.json 逐字节相同（pub_date 不被刷新）', async () => {
+    // 这条用例盯的是 main 里 stabilizePubDate 的接线；漂了就会「每次重跑都造出新提交」。
+    const { rootDir, setupExe } = makeReleaseFixture();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const { exec } = stubPublishExec({ setupExe });
+      await main({ rootDir, exec, env: {}, argv: ['--publish'] });
+      const first = fs.readFileSync(path.join(rootDir, 'updater.json'), 'utf8');
+      await main({ rootDir, exec, env: {}, argv: ['--publish'] });
+      const second = fs.readFileSync(path.join(rootDir, 'updater.json'), 'utf8');
+      expect(second).toBe(first);
     } finally {
       log.mockRestore();
       fs.rmSync(rootDir, { recursive: true, force: true });
