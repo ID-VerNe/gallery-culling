@@ -1,11 +1,11 @@
 {
-  "version": "v2.0.8",
-  "notes": "v2.0.8\n\n- 星级数字键改为同键再按清零：1→1 归零，1→2 变两星；R 仍同时清星级与旗标。\n- 扫描只需填一个目录，JPG、RAW 或混合会自动识别；空目录或只选了子文件夹时不会改写已填路径，并给出提示。\n- 调色自动保存（默认开启，停止操作约 400 毫秒后写入，失败会明确提示）；设置里可关闭，关闭后仍能手动保存。\n- LUMEN 引擎改为按需下载：首次使用时自动拉取并校验，失败可重试、也可手动指定路径。安装包体积从 55.6 MB 降到约 6.3 MB。",
-  "pub_date": "2026-11-05T16:47:31.420Z",
+  "version": "v2.0.9",
+  "notes": "v2.0.9\n\n- 单图与前后对照模式下，状态栏新增「设为基准」按钮，鼠标点一下就能钉住当前照片为对比基准；双图模式不显示该按钮。\n- 状态栏新增「按住看原片」按钮，按住即可查看原片、松开恢复，和按住 V 键是同一个功能，不再只有键盘才能用。\n- 快捷键帮助补齐此前漏写的入口：Ctrl/⌘+A 全选、Esc 取消、宫格模式上下键翻动、Ctrl/Shift+点击的框选用法；撤销、重做、导出按钮现在会直接在提示里显示自己的快捷键。\n- 工具条上一处按钮按下时的动画与其余按钮不一致，已统一，按下反馈更整齐。",
+  "pub_date": "2026-11-07T23:43:25.687Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNHBLcWN5NU1nekRPS3EyNlJiM3VvZ1BOcDQ1UUpMQnFVWThQaklPcldRTDhWY2NXamkxV09OaHlmcnN4UkxsRitKWGlWWjNqb2gzcWhNWkNYaW1aNHdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzODk3MjUwCWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC44X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjAuOAovc2FPNXZBdXRYL3pIaXJpMHJmOXJHTVNnTWNBdmZOVnZJdXpmSGZPY0NmMjdML1BMZmhTbnIzYVpUanhQeU5OKzlnaUNYRGd1dHdWZm1WQWFYcEpCQT09Cg==",
-      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.8/gallery-culling_2.0.8_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNGtvZlI3OWo2em5rUTMvMWwrRk9aSG5zVjlHdWdrdmx2ZWx1YzF1dzlyNFBPeWlUaHQvYXR3a0xKaHM5ZFVaVjZ6MklNek5BMjVWZldpOU00UzVtSkFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MDk1MDA0CWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC45X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjAuOQptOXBQME5XbHZKd0pqZ3dheWRHNzg2L1JVWjFOaGVROUlFQ21tNTVDZXRCc01rakl4S1lHeWswaXR4Qk80L2pMS1d0SFJKd05JYlRZMWZheFRPMWpEZz09Cg==",
+      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.9/gallery-culling_2.0.9_x64-setup.exe"
     }
   }
 }
