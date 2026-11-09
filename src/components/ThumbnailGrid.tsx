@@ -228,12 +228,12 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   return (
     <div className="h-full w-full flex flex-col bg-background-base border-l border-border-default select-none">
       {/* Top Header & Column Switcher */}
-      <div className="px-2.5 py-1 bg-background-base border-b border-border-default flex items-center justify-between text-xs text-white/80 shrink-0 gap-3 min-h-9">
+      <div className="px-2.5 py-1 bg-background-base border-b border-border-default flex items-center justify-between text-xs text-white/80 shrink-0 gap-3 min-h-9 min-w-0">
         {/* B8：命中数是"状态"，加 role=status/aria-live 让读屏在搜索收窄时播报。 */}
         <span
           role="status"
           aria-live="polite"
-          className="font-medium text-[11px] text-white/80 font-mono whitespace-nowrap"
+          className="font-medium text-[11px] text-white/80 font-mono truncate min-w-0"
         >
           宫格列表{' '}
           <span className="tabular-nums">
@@ -247,16 +247,16 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
           )}
         </span>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 shrink-0">
           {/* issue #79：多选的可见入口。此前只能靠 Ctrl+A 或鼠标框选，
               左手用户在界面上找不到「全选 / 清除」；入口常驻在格头，
               并用可读名称 + aria-pressed/aria-keyshortcuts 暴露给读屏，
               不只依赖 title。 */}
           {multiSelectEnabled && !isEmpty && (
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 shrink-0">
               <button
                 onClick={() => onSelectionChange?.(new Set(groups.map((g) => g.id)))}
-                className={`focus-ring flex items-center gap-1 px-1.5 min-h-7 rounded text-[10px] transition-colors ${
+                className={`focus-ring flex items-center gap-1 px-1.5 min-h-7 rounded text-[10px] transition-colors shrink-0 whitespace-nowrap ${
                   allSelected
                     ? 'bg-white text-black font-medium'
                     : 'text-white/60 hover:text-white hover:bg-white/10'
@@ -267,16 +267,16 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
                 aria-keyshortcuts="Control+A"
               >
                 <Check className="w-3 h-3" aria-hidden="true" />
-                <span>全选</span>
+                <span className="whitespace-nowrap">全选</span>
               </button>
               <button
                 onClick={() => onSelectionChange?.(new Set())}
                 disabled={activeIds.size === 0}
-                className="focus-ring flex items-center gap-1 px-1.5 min-h-7 rounded text-[10px] text-white/60 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                className="focus-ring flex items-center gap-1 px-1.5 min-h-7 rounded text-[10px] text-white/60 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent shrink-0 whitespace-nowrap"
                 aria-label="清除宫格多选"
               >
                 <X className="w-3 h-3" aria-hidden="true" />
-                <span>清除</span>
+                <span className="whitespace-nowrap">清除</span>
               </button>
             </div>
           )}
@@ -285,7 +285,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
           {onSearchOpenChange && (
             <button
               onClick={() => onSearchOpenChange(!searchOpen)}
-              className={`focus-ring flex items-center gap-1 px-1.5 min-h-7 rounded text-[10px] transition-colors ${
+              className={`focus-ring flex items-center gap-1 px-1.5 min-h-7 rounded text-[10px] transition-colors shrink-0 whitespace-nowrap ${
                 searchOpen
                   ? 'bg-white text-black font-medium'
                   : 'text-white/60 hover:text-white hover:bg-white/10'
@@ -295,14 +295,13 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
               aria-pressed={searchOpen}
             >
               <Search className="w-3 h-3" aria-hidden="true" />
-              <span>搜索</span>
             </button>
           )}
 
-          <div className="flex items-center bg-background-base p-0.5 rounded-md border border-border-default">
+          <div className="flex items-center bg-background-base p-0.5 rounded-md border border-border-default shrink-0">
             <button
               onClick={() => setColumns(3)}
-              className={`focus-ring flex items-center gap-1 px-2 min-h-7 rounded text-[10px] transition-colors ${
+              className={`focus-ring flex items-center gap-1 px-2 min-h-7 rounded text-[10px] transition-colors shrink-0 whitespace-nowrap ${
                 columns === 3
                   ? 'bg-white text-black font-medium shadow-sm'
                   : 'text-white/60 hover:text-white'
@@ -312,11 +311,10 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
               aria-pressed={columns === 3}
             >
               <Columns3 className="w-3 h-3" aria-hidden="true" />
-              <span>3列</span>
             </button>
             <button
               onClick={() => setColumns(4)}
-              className={`focus-ring flex items-center gap-1 px-2 min-h-7 rounded text-[10px] transition-colors ${
+              className={`focus-ring flex items-center gap-1 px-2 min-h-7 rounded text-[10px] transition-colors shrink-0 whitespace-nowrap ${
                 columns === 4
                   ? 'bg-white text-black font-medium shadow-sm'
                   : 'text-white/60 hover:text-white'
@@ -326,7 +324,6 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
               aria-pressed={columns === 4}
             >
               <Columns4 className="w-3 h-3" aria-hidden="true" />
-              <span>4列</span>
             </button>
           </div>
         </div>
