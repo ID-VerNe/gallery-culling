@@ -898,6 +898,146 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// issue #103 PA：`get_db_path` 门控用例共享的串行锁（沿用
+    /// `thumbnail.rs:630` 的 `ENV_LOCK` 范式）。测试并行跑，改 env 与 cwd 的
+    /// 用例必须互斥。
+    static GATE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// 改 env 与 cwd 的用例的还原守卫：`Drop` 时恢复三件套与 cwd（panic 也恢复）。
+    struct EnvCwdGuard {
+        data: Option<std::ffi::OsString>,
+        profile: Option<std::ffi::OsString>,
+        home: Option<std::ffi::OsString>,
+        cwd: PathBuf,
+    }
+
+    impl Drop for EnvCwdGuard {
+        fn drop(&mut self) {
+            match &self.data {
+                Some(v) => std::env::set_var(DATA_DIR_ENV, v),
+                None => std::env::remove_var(DATA_DIR_ENV),
+            }
+            match &self.profile {
+                Some(v) => std::env::set_var("USERPROFILE", v),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+            match &self.home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            let _ = std::env::set_current_dir(&self.cwd);
+        }
+    }
+
+    fn capture_env_cwd() -> EnvCwdGuard {
+        EnvCwdGuard {
+            data: std::env::var_os(DATA_DIR_ENV),
+            profile: std::env::var_os("USERPROFILE"),
+            home: std::env::var_os("HOME"),
+            cwd: std::env::current_dir().unwrap(),
+        }
+    }
+
+    /// issue #103 PA 墓碑：设 `GALLERY_DATA_DIR` 时绝不迁移 —— 否则会把用户
+    /// 真实库灌进 e2e 隔离目录（issue #81 数据隔离契约）。
+    ///
+    /// 用真 tmpdir + 真 env：`cwd` 里放一份「用户旧库」，`GALLERY_DATA_DIR` 指向
+    /// 隔离目录，调 `get_db_path()` 后隔离目录里绝不能出现库文件，旧库字节不变，
+    /// 且 home 不被碰。
+    ///
+    /// 变异墓碑：把 `get_db_path` 的门控 `data_dir.is_none()` 改宽（恒迁移），
+    /// 这条必须红。
+    #[test]
+    fn get_db_path_override_never_migrates_legacy_db() {
+        let _lock = GATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("gc_gate_override_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let cwd = base.join("cwd");
+        let override_dir = base.join("override");
+        let home = base.join("home");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let legacy = cwd.join("gallery_culling.db");
+        std::fs::write(&legacy, b"user-real-db-bytes").unwrap();
+
+        let _guard = capture_env_cwd();
+        std::env::set_var(DATA_DIR_ENV, &override_dir);
+        std::env::set_var("USERPROFILE", &home);
+        std::env::set_var("HOME", &home);
+        std::env::set_current_dir(&cwd).unwrap();
+
+        let path = get_db_path();
+        assert_eq!(path, override_dir.join("gallery_culling.db"));
+        assert!(
+            !override_dir.join("gallery_culling.db").exists(),
+            "设 GALLERY_DATA_DIR 时绝不迁移旧库到覆盖目录，否则会把用户真实库灌进e2e隔离目录"
+        );
+        assert_eq!(
+            std::fs::read(&legacy).unwrap(),
+            b"user-real-db-bytes",
+            "源必须保留（不移动）"
+        );
+        assert!(!home.exists(), "覆盖优先时不能碰用户 home 目录");
+
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// issue #103 PA 墓碑：默认分支（未设覆盖、home 可用）跑一次性迁移，且绝不
+    /// 在 cwd 产生 0 字节 `gallery_culling.db`（issue #81 的教训）。
+    ///
+    /// 两段同锁内：先空 `cwd` 调 `get_db_path()` 断言 `cwd` 无文件；再写入旧库后
+    /// 再次调用，断言 home 库被复制、源保留。变异（门控改窄为永不迁移，或把旧的
+    /// `OpenOptions::create` 可写性探测加回来）必须让这条红。
+    #[test]
+    fn get_db_path_default_migrates_once_and_never_touches_cwd() {
+        let _lock = GATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("gc_gate_default_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let cwd = base.join("cwd");
+        let home = base.join("home");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let legacy = cwd.join("gallery_culling.db");
+
+        let _guard = capture_env_cwd();
+        std::env::remove_var(DATA_DIR_ENV);
+        std::env::set_var("USERPROFILE", &home);
+        std::env::set_var("HOME", &home);
+        std::env::set_current_dir(&cwd).unwrap();
+
+        // 空 cwd：默认分支绝不能在 cwd 产生 0 字节库（旧 `OpenOptions` 探测的教训）。
+        let path = get_db_path();
+        assert_eq!(path, home.join(".galleryculling").join("gallery_culling.db"));
+        assert!(
+            !legacy.exists(),
+            "默认分支绝不能在 cwd 产生 0 字节 gallery_culling.db"
+        );
+        assert!(
+            !home
+                .join(".galleryculling")
+                .join("gallery_culling.db")
+                .exists(),
+            "无旧库时首次启动不凭空造库文件"
+        );
+
+        // 写入旧库后再次调用：默认分支必须一次性迁移到 home，源保留。
+        std::fs::write(&legacy, b"legacy-settings").unwrap();
+        let path2 = get_db_path();
+        assert_eq!(path2, home.join(".galleryculling").join("gallery_culling.db"));
+        assert_eq!(
+            std::fs::read(home.join(".galleryculling").join("gallery_culling.db")).unwrap(),
+            b"legacy-settings",
+            "默认分支必须把 cwd 旧库复制到 home"
+        );
+        assert_eq!(
+            std::fs::read(&legacy).unwrap(),
+            b"legacy-settings",
+            "迁移只复制不移动，cwd 源必须保留"
+        );
+
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn pending_upsert_keeps_latest_intent() {
         let (db, path) = temp_db("pending_upsert");
