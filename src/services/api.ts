@@ -1,5 +1,5 @@
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
-import { open, save } from '@tauri-apps/plugin-dialog';
+import { pickPathWithDialog } from '../utils/pickPath';
 import {
   AlbumItemInput,
   AlbumOpenResult,
@@ -328,13 +328,12 @@ export const api = {
    * Open native folder picker dialog
    */
   selectFolderDialog: async (defaultPath?: string): Promise<string | null> => {
-    const selected = await open({
+    return pickPathWithDialog('open', {
       directory: true,
       multiple: false,
       defaultPath: defaultPath || undefined,
       title: '选择照片文件夹',
     });
-    return typeof selected === 'string' ? selected : null;
   },
 
   /**
@@ -360,24 +359,22 @@ export const api = {
 
   /** 「存为选片集」的文件对话框。取消返回 null（不是空串 —— 空串是合法输入）。 */
   selectAlbumSavePath: async (defaultPath?: string): Promise<string | null> => {
-    const selected = await save({
+    return pickPathWithDialog('save', {
       defaultPath: defaultPath || undefined,
       title: '存为选片集',
       filters: [{ name: '选片集', extensions: ['galleryalbum'] }],
     });
-    return typeof selected === 'string' ? selected : null;
   },
 
   /** 「打开选片集」的文件对话框。 */
   selectAlbumOpenPath: async (defaultPath?: string): Promise<string | null> => {
-    const selected = await open({
+    return pickPathWithDialog('open', {
       multiple: false,
       directory: false,
       defaultPath: defaultPath || undefined,
       title: '打开选片集',
       filters: [{ name: '选片集', extensions: ['galleryalbum'] }],
     });
-    return typeof selected === 'string' ? selected : null;
   },
 
   /**
@@ -395,14 +392,13 @@ export const api = {
 
   /** 「导入 Lightroom 目录」的文件对话框。LR 的扩展名就是 `.lrcat`。 */
   selectLrcatPath: async (defaultPath?: string): Promise<string | null> => {
-    const selected = await open({
+    return pickPathWithDialog('open', {
       multiple: false,
       directory: false,
       defaultPath: defaultPath || undefined,
       title: '选择 Lightroom 目录',
       filters: [{ name: 'Lightroom 目录', extensions: ['lrcat'] }],
     });
-    return typeof selected === 'string' ? selected : null;
   },
 
   /**

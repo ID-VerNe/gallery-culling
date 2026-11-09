@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { pickPathWithDialog } from '../utils/pickPath';
 
 /**
  * LUMEN RAW 设置体验的薄封装（M-15）。
@@ -44,10 +44,9 @@ export async function probeLumen(cliPath: string): Promise<LumenProbeResult> {
  * 与设置里 Photoshop 路径的「浏览」同款过滤器（只列 exe/app）。
  */
 export async function pickLumenCliPath(): Promise<string | null> {
-  const selected = await open({
+  return pickPathWithDialog('open', {
     multiple: false,
     title: '选择 lumen-cli 可执行文件 (lumen-cli.exe)',
     filters: [{ name: 'Executable', extensions: ['exe', 'app'] }],
   });
-  return typeof selected === 'string' ? selected : null;
 }

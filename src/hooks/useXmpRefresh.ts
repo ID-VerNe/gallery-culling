@@ -24,8 +24,8 @@ import { useToast } from '../components/Toast';
 import { useTaskMutex } from './useTaskMutex';
 import { groupPath } from '../utils/groupPath';
 import { normalizeFilePath } from '../utils/pathNormalize';
+import { toCullFlag } from '../utils/cullFlag';
 import type {
-  CullFlag,
   PhotoGroupInfo,
   XmpConflictChoice,
   XmpRefreshConflict,
@@ -79,15 +79,6 @@ function indexByPath(groups: PhotoGroupInfo[]): Map<string, string> {
     if (path) index.set(normalizeFilePath(path), g.id);
   }
   return index;
-}
-
-/**
- * 后端回传的旗标是字符串（serde 不做枚举校验）。落到 UI 前收一次口：
- * 认不出来就当无色标 —— 宁可少一个角标，也不要让 `flag` 变成类型之外的值
- * 把筛选和快捷键一起带偏。
- */
-function toCullFlag(flag: string): CullFlag {
-  return flag === 'pick' || flag === 'reject' ? flag : 'none';
 }
 
 function baseNameOf(path: string): string {

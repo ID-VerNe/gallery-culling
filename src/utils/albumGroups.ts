@@ -18,13 +18,13 @@ import type {
   AlbumItemInput,
   AlbumOpenResult,
   AlbumResolvedDoc,
-  CullFlag,
   PhotoFileInfo,
   PhotoGroupInfo,
   SortOrder,
   ToneAdjustments,
 } from '../types';
 import { normalizeFilePath } from './pathNormalize';
+import { toCullFlag } from './cullFlag';
 
 export interface AlbumLoad {
   /** 可以直接进集合的分组。 */
@@ -55,14 +55,6 @@ function fileInfo(path: string, size: number, mtime: number): PhotoFileInfo {
     size,
     mtime,
   };
-}
-
-/**
- * 后端回传的旗标是字符串（serde 不做枚举校验）。落到 UI 前收一次口 ——
- * 与 `useXmpRefresh` 同口径：认不出来就当没有，别让类型外的值带偏筛选。
- */
-function toCullFlag(flag: string): CullFlag {
-  return flag === 'pick' || flag === 'reject' ? flag : 'none';
 }
 
 export function toAlbumGroups(result: AlbumOpenResult): AlbumLoad {
