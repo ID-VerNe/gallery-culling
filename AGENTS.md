@@ -94,7 +94,7 @@ npm run parity                             # CI 等价复跑：在被推送 sha 
 
 - `src-tauri/src/lumen.rs`：3101 行 → **58 行门面 + 12 个子模块**
 - `src-tauri/src/commands.rs`：1673 行 → **209 行门面 + 8 个子模块**
-- `src/App.tsx`：1810 行 → **686 行 + 22 个自定义 hook**
+- `src/App.tsx`：1166 行 → **1134 行 + 24 个自定义 hook**（#112 抽出 `useScanSessionPolicy` 与状态栏/空状态纯 selector 后）
 - 三个视口合计 1790 行 → 1278 行
 - 共享层：
   - `src/utils/viewportZoom.ts` —— 缩放几何**单一真值**
