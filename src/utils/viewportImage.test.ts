@@ -11,39 +11,19 @@
  */
 import { describe, it, expect } from 'vitest';
 import { resolveViewportImage } from './viewportImage';
-import type { PhotoGroupInfo } from '../types';
+import { jpgFile, makeGroup, rawFile } from '../test/factories';
 
-function jpgOnly(id: string): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
-    jpg: { name: `${id}.jpg`, extension: 'jpg', path: `D:/shoot/${id}.jpg`, size: 1, mtime: 0 },
-    status: 'JPG_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '', hasXmp: false,
-  };
-}
+const jpgOnly = (id: string) => makeGroup(id, { jpg: jpgFile(id, 'D:/shoot') });
 
-function rawPlusJpg(id: string): PhotoGroupInfo {
-  return {
-    ...jpgOnly(id),
-    raw: { name: `${id}.NEF`, extension: 'NEF', path: `D:/shoot/${id}.NEF`, size: 1, mtime: 0 },
+const rawPlusJpg = (id: string) =>
+  makeGroup(id, {
     status: 'COMPLETE',
-  };
-}
+    jpg: jpgFile(id, 'D:/shoot'),
+    raw: rawFile(id, 'NEF', 'D:/shoot'),
+  });
 
-function rawOnly(id: string): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
-    raw: { name: `${id}.NEF`, extension: 'NEF', path: `D:/shoot/${id}.NEF`, size: 1, mtime: 0 },
-    status: 'RAW_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '', hasXmp: false,
-  };
-}
+const rawOnly = (id: string) =>
+  makeGroup(id, { status: 'RAW_ONLY', raw: rawFile(id, 'NEF', 'D:/shoot'), jpg: undefined });
 
 const NO_LUMEN = { url: null };
 

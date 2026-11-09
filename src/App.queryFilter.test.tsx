@@ -12,35 +12,17 @@ import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import App from './App';
 import { mockInvokeCommand } from './test/setup';
-import type { CullFlag, FolderScanResult, PhotoGroupInfo, ToneState } from './types';
+import type { FolderScanResult, ToneState } from './types';
+import { makeGroup } from './test/factories';
 import { DEFAULT_TONE } from './utils/autoTone';
 
-function mkGroup(baseName: string, rating: number, flag: CullFlag): PhotoGroupInfo {
-  return {
-    id: baseName.toLowerCase(),
-    baseName,
-    jpg: {
-      name: `${baseName}.jpg`,
-      extension: 'jpg',
-      path: `D:/shoot/JPG/${baseName}.jpg`,
-      size: 1024,
-      mtime: 0,
-    },
-    status: 'JPG_ONLY',
-    rating,
-    flag,
-    label: '',
-    hasXmp: false,
-  };
-}
-
 // 5 张：3 星以上 3 张（A/B/D），Pick 2 张（A/D），淘汰 1 张（C）。
-const allGroups: PhotoGroupInfo[] = [
-  mkGroup('DSC_1001', 5, 'pick'),
-  mkGroup('DSC_1002', 3, 'none'),
-  mkGroup('DSC_2001', 0, 'reject'),
-  mkGroup('DSC_2002', 4, 'pick'),
-  mkGroup('DSC_3001', 0, 'none'),
+const allGroups = [
+  makeGroup('dsc_1001', { baseName: 'DSC_1001', rating: 5, flag: 'pick' }),
+  makeGroup('dsc_1002', { baseName: 'DSC_1002', rating: 3 }),
+  makeGroup('dsc_2001', { baseName: 'DSC_2001', flag: 'reject' }),
+  makeGroup('dsc_2002', { baseName: 'DSC_2002', rating: 4, flag: 'pick' }),
+  makeGroup('dsc_3001', { baseName: 'DSC_3001' }),
 ];
 
 const scanResult: FolderScanResult = {

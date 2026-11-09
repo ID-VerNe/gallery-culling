@@ -9,28 +9,13 @@ import { describe, it, expect } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { mockInvokeCommand } from './test/setup';
-import type { FolderScanResult, PhotoGroupInfo, ToneState } from './types';
+import type { FolderScanResult, ToneState } from './types';
+import { makeGroup } from './test/factories';
 import { DEFAULT_TONE } from './utils/autoTone';
-
-const mkGroup = (baseName: string): PhotoGroupInfo => ({
-  id: baseName.toLowerCase(),
-  baseName,
-  jpg: {
-    name: `${baseName}.jpg`,
-    extension: 'jpg',
-    path: `D:/shoot/JPG/${baseName}.jpg`,
-    size: 1024,
-    mtime: 0,
-  },
-  status: 'JPG_ONLY',
-  rating: 0,
-  flag: 'none',
-  label: '', hasXmp: false,
-});
 
 // `DSC_1` 命中前两张；`DSC_2001` 只被用来证明「候选已离开可见集」。
 const NAMES = ['DSC_1001', 'DSC_1002', 'DSC_2001', 'DSC_2002', 'DSC_3001'];
-const allGroups = NAMES.map(mkGroup);
+const allGroups = NAMES.map((b) => makeGroup(b.toLowerCase(), { baseName: b }));
 
 const scanResult: FolderScanResult = {
   groups: allGroups,

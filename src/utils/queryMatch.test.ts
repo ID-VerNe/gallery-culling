@@ -11,20 +11,11 @@
  */
 import { describe, expect, it } from 'vitest';
 import { matchesParsedQuery, matchesQuery, parseQuery } from './queryMatch';
+import { makeGroup } from '../test/factories';
 import type { PhotoGroupInfo } from '../types';
 
-function group(over: Partial<PhotoGroupInfo> = {}): PhotoGroupInfo {
-  return {
-    id: 'x',
-    baseName: 'DSC01234',
-    status: 'COMPLETE',
-    rating: 0,
-    flag: 'none',
-    label: '',
-    hasXmp: false,
-    ...over,
-  };
-}
+const group = (over: Partial<PhotoGroupInfo> = {}) =>
+  makeGroup('x', { baseName: 'DSC01234', status: 'COMPLETE', jpg: undefined, ...over });
 
 /** 一条完整的 RAW+JPG 组，用于字段级断言。 */
 const RICH = group({

@@ -20,7 +20,7 @@ import { SplitCompareViewport } from './SplitCompareViewport';
 import { BeforeAfterViewport } from './BeforeAfterViewport';
 import { act } from 'react';
 import { GESTURE, SETTLE } from '../utils/viewportMotion';
-import type { PhotoGroupInfo } from '../types';
+import { jpgFile, makeGroup } from '../test/factories';
 
 /** jsdom 不实现 Pointer Capture，拖拽相关用例依赖它。 */
 function stubPointerCapture() {
@@ -34,17 +34,7 @@ beforeEach(() => {
   stubPointerCapture();
 });
 
-function jpgGroup(id: string): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
-    jpg: { name: `${id}.jpg`, extension: 'jpg', path: `D:/shoot/${id}.jpg`, size: 1, mtime: 0 },
-    status: 'JPG_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '', hasXmp: false,
-  };
-}
+const jpgGroup = (id: string) => makeGroup(id, { jpg: jpgFile(id, 'D:/shoot') });
 
 /** 从 `transform: translate(Xpx, Ypx) scale(...)` 读出缩放。 */
 function readScale(el: HTMLElement): number {

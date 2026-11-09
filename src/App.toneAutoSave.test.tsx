@@ -17,24 +17,10 @@ import {
   mockInvokeError,
 } from './test/setup';
 import type { FolderScanResult, PhotoGroupInfo, ToneState } from './types';
+import { makeGroup } from './test/factories';
 import { DEFAULT_TONE } from './utils/autoTone';
 
-const group: PhotoGroupInfo = {
-  id: 'g1',
-  baseName: 'IMG_0001',
-  jpg: {
-    name: 'IMG_0001.jpg',
-    extension: 'jpg',
-    path: 'D:/shoot/JPG/IMG_0001.jpg',
-    size: 1024,
-    mtime: 0,
-  },
-  status: 'JPG_ONLY',
-  rating: 0,
-  flag: 'none',
-  label: '',
-  hasXmp: false,
-};
+const group = makeGroup('g1', { baseName: 'IMG_0001' });
 
 const scanResult: FolderScanResult = {
   groups: [group],
@@ -58,20 +44,6 @@ const toneReport = {
   projectPath: null,
   warnings: [],
 };
-
-/** 造一张同目录的 JPG 分组，用于切图/队列场景。 */
-function makeGroup(id: string, baseName: string): PhotoGroupInfo {
-  return {
-    ...group,
-    id,
-    baseName,
-    jpg: {
-      ...group.jpg!,
-      name: `${baseName}.jpg`,
-      path: `D:/shoot/JPG/${baseName}.jpg`,
-    },
-  };
-}
 
 /**
  * 声明 App 启动 + 扫描 + 调色面板所触达的全部命令。
@@ -216,7 +188,7 @@ describe('App —— 调色自动保存 (issue #67)', () => {
   });
 
   it('调完立刻切图：上一张的「已自动保存」不能挂到新照片上', async () => {
-    mockStartup({}, [group, makeGroup('g2', 'IMG_0002')]);
+    mockStartup({}, [group, makeGroup('g2', { baseName: 'IMG_0002' })]);
     await openTonalPanelWithPhoto();
 
     dragExposure('1.2');
@@ -236,9 +208,9 @@ describe('App —— 调色自动保存 (issue #67)', () => {
     const deferred: Array<(value: unknown) => void> = [];
     mockStartup({}, [
       group,
-      makeGroup('g2', 'IMG_0002'),
-      makeGroup('g3', 'IMG_0003'),
-      makeGroup('g4', 'IMG_0004'),
+      makeGroup('g2', { baseName: 'IMG_0002' }),
+      makeGroup('g3', { baseName: 'IMG_0003' }),
+      makeGroup('g4', { baseName: 'IMG_0004' }),
     ]);
     // 让写盘停在 pending，才能稳定制造「一张在写、多张排队」的窗口。
     mockInvokeCommand('apply_tone_cmd', () => new Promise((resolve) => deferred.push(resolve)));

@@ -19,24 +19,10 @@ import {
 } from './useToneEditing';
 import { invokeCalls, mockInvokeCommand } from '../test/setup';
 import { DEFAULT_TONE } from '../utils/autoTone';
+import { makeGroup } from '../test/factories';
 import type { PhotoGroupInfo } from '../types';
 
-const group: PhotoGroupInfo = {
-  id: 'g1',
-  baseName: 'IMG_0001',
-  jpg: {
-    name: 'IMG_0001.jpg',
-    extension: 'jpg',
-    path: 'D:/shoot/JPG/IMG_0001.jpg',
-    size: 1024,
-    mtime: 0,
-  },
-  status: 'JPG_ONLY',
-  rating: 0,
-  flag: 'none',
-  label: '',
-  hasXmp: false,
-};
+const group = makeGroup('g1', { baseName: 'IMG_0001' });
 
 const toneReport = {
   xmpWritten: true,
@@ -45,18 +31,7 @@ const toneReport = {
   warnings: [],
 };
 
-function makeGroup(id: string, baseName: string): PhotoGroupInfo {
-  return {
-    ...group,
-    id,
-    baseName,
-    jpg: {
-      ...group.jpg!,
-      name: `${baseName}.jpg`,
-      path: `D:/shoot/JPG/${baseName}.jpg`,
-    },
-  };
-}
+
 function setup(opts: { currentGroup?: PhotoGroupInfo | undefined } = {}) {
   mockInvokeCommand('apply_tone_cmd', toneReport);
   const hook = renderHook(
@@ -145,7 +120,7 @@ describe('useToneEditing —— 自动保存管线（issue #113）', () => {
 
   it('写盘进行中 g1/g2 两个待写任务共存，逐张补写不丢较早那张（单飞 Map 队列）', async () => {
     const deferred: Array<(value: unknown) => void> = [];
-    const g2 = makeGroup('g2', 'IMG_0002');
+    const g2 = makeGroup('g2', { baseName: 'IMG_0002' });
     const { result, rerender } = setup();
     // setup() 之后覆盖：第一次写盘停在 pending，才能稳定制造“在写”窗口。
     mockInvokeCommand(

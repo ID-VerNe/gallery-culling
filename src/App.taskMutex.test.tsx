@@ -9,27 +9,11 @@ import { describe, it, expect } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { mockInvokeCommand } from './test/setup';
-import type { FolderScanResult, PhotoGroupInfo } from './types';
-
-const group = (id: string): PhotoGroupInfo => ({
-  id,
-  baseName: id,
-  jpg: {
-    name: `${id}.jpg`,
-    extension: 'jpg',
-    path: `D:/shoot/JPG/${id}.jpg`,
-    size: 1024,
-    mtime: 1,
-  },
-  status: 'JPG_ONLY',
-  rating: 0,
-  flag: 'none',
-  label: '',
-  hasXmp: false,
-});
+import { makeGroup } from './test/factories';
+import type { FolderScanResult } from './types';
 
 const scanResult: FolderScanResult = {
-  groups: [group('IMG_0001'), group('IMG_0002'), group('IMG_0003')],
+  groups: [makeGroup('IMG_0001'), makeGroup('IMG_0002'), makeGroup('IMG_0003')],
   totalCount: 3,
   jpgFolder: 'D:/shoot/JPG',
   rawFolder: '',

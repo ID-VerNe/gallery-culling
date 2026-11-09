@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { mockInvokeCommand, mockInvokeError } from '../test/setup';
 import { useExternalApps } from './useExternalApps';
-import type { PhotoGroupInfo } from '../types';
+import { makeGroup, makeFile } from '../test/factories';
 
 const { toastApi, toastCalls } = vi.hoisted(() => {
   const calls: { kind: 'success' | 'error' | 'info'; message: string }[] = [];
@@ -24,29 +24,12 @@ const { toastApi, toastCalls } = vi.hoisted(() => {
 
 vi.mock('../components/Toast', () => ({ useToast: () => toastApi }));
 
-const group: PhotoGroupInfo = {
-  id: 'g1',
+const group = makeGroup('g1', {
   baseName: 'DSC00001',
-  raw: {
-    name: 'DSC00001.ARW',
-    extension: 'ARW',
-    path: 'D:/shoot/RAW/DSC00001.ARW',
-    size: 1,
-    mtime: 1,
-  },
-  jpg: {
-    name: 'DSC00001.JPG',
-    extension: 'JPG',
-    path: 'D:/shoot/JPG/DSC00001.JPG',
-    size: 1,
-    mtime: 1,
-  },
+  raw: makeFile('D:/shoot/RAW/DSC00001.ARW', { extension: 'ARW', size: 1, mtime: 1 }),
+  jpg: makeFile('D:/shoot/JPG/DSC00001.JPG', { extension: 'JPG', size: 1, mtime: 1 }),
   status: 'COMPLETE',
-  rating: 0,
-  flag: 'none',
-  label: '',
-  hasXmp: false,
-};
+});
 
 const setup = () =>
   renderHook(() =>

@@ -12,40 +12,23 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MetadataEditorModal } from './MetadataEditorModal';
 import { invokeCount, lastInvokeArgs, mockInvokeCommand } from '../test/setup';
-import type { PhotoGroupInfo } from '../types';
+import { makeGroup, makeFile } from '../test/factories';
 
 const BATCH_CMD = 'batch_update_metadata_cmd';
 
-function makeGroup(id: string): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
+function makeEditorGroup(id: string) {
+  return makeGroup(id, {
     status: 'COMPLETE',
-    rating: 0,
-    flag: 'none',
-    label: '', hasXmp: false,
-    raw: {
-      name: `${id}.RW2`,
-      extension: 'RW2',
-      path: `D:/shoot/RAW/${id}.RW2`,
-      size: 1,
-      mtime: 0,
-    },
-    jpg: {
-      name: `${id}.JPG`,
-      extension: 'JPG',
-      path: `D:/shoot/JPG/${id}.JPG`,
-      size: 1,
-      mtime: 0,
-    },
+    raw: makeFile(`D:/shoot/RAW/${id}.RW2`, { extension: 'RW2', size: 1 }),
+    jpg: makeFile(`D:/shoot/JPG/${id}.JPG`, { extension: 'JPG', size: 1 }),
     // 预填 EXIF：打开模态后校验即可通过（模拟当前照片本身带镜头信息）。
     exif: { lensModel: 'Voigtlander APO-LANTHAR 50mm F2', focalLength: '50mm', aperture: 'f/2.0' },
-  };
+  });
 }
 
-const GROUP_1 = makeGroup('IMG_0001');
-const GROUP_2 = makeGroup('IMG_0002');
-const GROUP_3 = makeGroup('IMG_0003');
+const GROUP_1 = makeEditorGroup('IMG_0001');
+const GROUP_2 = makeEditorGroup('IMG_0002');
+const GROUP_3 = makeEditorGroup('IMG_0003');
 const ALL_GROUPS = [GROUP_1, GROUP_2, GROUP_3];
 
 function setup() {

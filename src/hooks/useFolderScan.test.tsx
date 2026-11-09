@@ -11,7 +11,8 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useFolderScan } from './useFolderScan';
 import { mockInvokeCommand } from '../test/setup';
-import type { FolderProbe, PhotoGroupInfo } from '../types';
+import { makeFile, makeGroup } from '../test/factories';
+import type { FolderProbe } from '../types';
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn(async () => null),
@@ -37,25 +38,14 @@ const probe = (mode: FolderProbe['mode'], extra: Partial<FolderProbe> = {}): Fol
   ...extra,
 });
 
-const file = (name: string) => ({
-  name,
-  extension: name.split('.').pop()!.toLowerCase(),
-  path: name,
-  size: 1,
-  mtime: 1,
-});
+const file = (name: string) => makeFile(name, { size: 1, mtime: 1 });
 
-const group = (id: string, status: PhotoGroupInfo['status']): PhotoGroupInfo => ({
-  id,
-  baseName: id,
-  status,
-  rating: 0,
-  flag: 'none',
-  label: '',
-  hasXmp: false,
-  ...(status !== 'RAW_ONLY' ? { jpg: file(`${id}.jpg`) } : {}),
-  ...(status !== 'JPG_ONLY' ? { raw: file(`${id}.nef`) } : {}),
-});
+const group = (id: string, status: 'COMPLETE' | 'JPG_ONLY' | 'RAW_ONLY') =>
+  makeGroup(id, {
+    status,
+    ...(status !== 'RAW_ONLY' ? { jpg: file(`${id}.jpg`) } : { jpg: undefined }),
+    ...(status !== 'JPG_ONLY' ? { raw: file(`${id}.nef`) } : {}),
+  });
 
 afterEach(() => {
   vi.mocked(open).mockReset();

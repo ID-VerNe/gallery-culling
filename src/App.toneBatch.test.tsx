@@ -8,28 +8,14 @@ import { describe, it, expect } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { invokeCalls, mockInvokeCommand } from './test/setup';
-import type { FolderScanResult, PhotoGroupInfo, ToneState } from './types';
+import { makeGroup, rawFile } from './test/factories';
+import type { FolderScanResult, ToneState } from './types';
 import { DEFAULT_TONE } from './utils/autoTone';
 
-const group = (id: string): PhotoGroupInfo => ({
-  id,
-  baseName: id,
-  raw: {
-    name: `${id}.ARW`,
-    extension: 'ARW',
-    path: `D:/shoot/RAW/${id}.ARW`,
-    size: 1024,
-    mtime: 1,
-  },
-  status: 'RAW_ONLY',
-  rating: 0,
-  flag: 'none',
-  label: '',
-  hasXmp: false,
-});
-
 const scanResult: FolderScanResult = {
-  groups: [group('IMG_0001'), group('IMG_0002'), group('IMG_0003')],
+  groups: ['IMG_0001', 'IMG_0002', 'IMG_0003'].map((id) =>
+    makeGroup(id, { status: 'RAW_ONLY', raw: rawFile(id), jpg: undefined }),
+  ),
   totalCount: 3,
   jpgFolder: 'D:/shoot/JPG',
   rawFolder: 'D:/shoot/RAW',

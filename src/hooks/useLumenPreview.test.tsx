@@ -15,6 +15,7 @@ import {
   mockInvokeCommand,
   mockInvokeError,
 } from '../test/setup';
+import { makeGroup, rawFile } from '../test/factories';
 import type { LumenStatus, PhotoGroupInfo } from '../types';
 
 const available: LumenStatus = {
@@ -25,24 +26,13 @@ const available: LumenStatus = {
   detail: 'ok',
 };
 
-function photo(id: string, overrides: Partial<PhotoGroupInfo> = {}): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
-    raw: {
-      name: `${id}.CR3`,
-      extension: 'CR3',
-      path: `D:/shoot/${id}.CR3`,
-      size: 1,
-      mtime: 0,
-    },
+const photo = (id: string, overrides: Partial<PhotoGroupInfo> = {}) =>
+  makeGroup(id, {
     status: 'RAW_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '', hasXmp: false,
+    raw: rawFile(id, 'CR3', 'D:/shoot'),
+    jpg: undefined,
     ...overrides,
-  };
-}
+  });
 
 describe('useLumenPreview', () => {
   it('引擎未启用时零请求：连 lumen_preview_cmd 都不该发出', async () => {

@@ -2,15 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MetadataEditorModal } from './MetadataEditorModal';
 import { mockInvokeCommand } from '../test/setup';
-import type { PhotoGroupInfo } from '../types';
+import { makeGroup, makeFile } from '../test/factories';
 
-const group: PhotoGroupInfo = {
-  id: 'IMG_0001', baseName: 'IMG_0001', status: 'COMPLETE',
-  rating: 0, flag: 'none', label: '', hasXmp: false,
-  raw: { name: 'IMG_0001.RW2', extension: 'RW2', path: 'D:/shoot/RAW/IMG_0001.RW2', size: 1, mtime: 0 },
-  jpg: { name: 'IMG_0001.JPG', extension: 'JPG', path: 'D:/shoot/JPG/IMG_0001.JPG', size: 1, mtime: 0 },
+const group = makeGroup('IMG_0001', {
+  status: 'COMPLETE',
+  raw: makeFile('D:/shoot/RAW/IMG_0001.RW2', { extension: 'RW2', size: 1 }),
+  jpg: makeFile('D:/shoot/JPG/IMG_0001.JPG', { extension: 'JPG', size: 1 }),
   exif: { lensModel: '50mm', focalLength: '50mm', aperture: 'f/2' },
-};
+});
 
 function setup() {
   mockInvokeCommand('batch_update_metadata_cmd', 1);

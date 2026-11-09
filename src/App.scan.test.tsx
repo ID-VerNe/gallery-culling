@@ -13,26 +13,11 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import App from './App';
 import { emitMockEvent, invokeCount, mockInvokeCommand } from './test/setup';
 import { TASK_CANCELLED_SENTINEL } from './services/taskApi';
-import type { FolderScanResult, PhotoGroupInfo, ToneState } from './types';
+import type { FolderScanResult, ToneState } from './types';
+import { makeGroup } from './test/factories';
 import { DEFAULT_TONE } from './utils/autoTone';
 
-const mkGroup = (baseName: string): PhotoGroupInfo => ({
-  id: baseName.toLowerCase(),
-  baseName,
-  jpg: {
-    name: `${baseName}.jpg`,
-    extension: 'jpg',
-    path: `D:/shoot/JPG/${baseName}.jpg`,
-    size: 1024,
-    mtime: 0,
-  },
-  status: 'JPG_ONLY',
-  rating: 0,
-  flag: 'none',
-  label: '', hasXmp: false,
-});
-
-const allGroups = ['DSC_1001', 'DSC_1002', 'DSC_2001'].map(mkGroup);
+const allGroups = ['DSC_1001', 'DSC_1002', 'DSC_2001'].map((b) => makeGroup(b.toLowerCase(), { baseName: b }));
 
 const scanResult: FolderScanResult = {
   groups: allGroups,
