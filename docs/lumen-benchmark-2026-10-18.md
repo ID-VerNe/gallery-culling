@@ -847,7 +847,7 @@ Reach 1-5（受影响用户比例）、Impact 1-5、Confidence 0-1、Effort 人�
 - 新增分支变异存活率 0（每个新分支至少一条能红的用例）。
 
 **验收方式**
-- 每迭代结束跑：`npx tsc --noEmit` + `npx vitest run --pool=vmForks` + `cargo test --lib` + `npm run e2e:render`。
+- 每迭代结束跑：`node node_modules/typescript/bin/tsc --noEmit` + `node node_modules/vitest/vitest.mjs run --pool=vmForks` + `cargo test --lib` + `npm run e2e:render`（包内入口，勿用 `npx`——`npx tsc` 在 node_modules 缺席时会装到同名包 `tsc@2.0.4` 并 exit 0 假绿，见 #24）。
 - 真实文件回归：至少 3 个相机品牌（Sony/Canon/Nikon）× 3 种场景（RAW+JPG / RAW-only / JPG-only）× 2 种外部状态（有 XMP / 无色标）。
 - 互操作抽检：Lightroom Classic、Capture One、Bridge 各打开一次，确认 Rating/Label 语义。
 
