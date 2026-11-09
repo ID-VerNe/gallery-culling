@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
-use sha2::{Digest, Sha256};
+
+use crate::cachekey::sha256_hex16;
 
 use super::LumenError;
 use super::PreviewVariant;
@@ -78,13 +79,8 @@ pub fn lumen_cache_key_with_recipe(
         variant_tag,
         recipe_tag
     );
-    let digest = Sha256::digest(payload.as_bytes());
-    // 16 位小写 hex = 前 8 字节。
-    digest
-        .iter()
-        .take(8)
-        .map(|b| format!("{:02x}", b))
-        .collect()
+    // 16 位小写 hex = SHA256 前 8 字节（`cachekey::sha256_hex16`，issue #142）。
+    sha256_hex16(&payload)
 }
 
 /// 预览产物落盘路径：`<cache_root>/lumen/<key>_<width>[_orig]_lumen.jpg`。

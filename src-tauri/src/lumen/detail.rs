@@ -15,7 +15,8 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use serde_json::Value;
-use sha2::{Digest, Sha256};
+
+use crate::cachekey::sha256_hex16;
 
 use super::cache::mtime_tag;
 use super::recipe_hash;
@@ -51,12 +52,8 @@ pub fn detail_cache_key(
         mtime_tag(project_mtime),
         recipe_tag
     );
-    let digest = Sha256::digest(payload.as_bytes());
-    digest
-        .iter()
-        .take(8)
-        .map(|b| format!("{:02x}", b))
-        .collect()
+    // 16 位小写 hex = SHA256 前 8 字节（`cachekey::sha256_hex16`，issue #142）。
+    sha256_hex16(&payload)
 }
 
 /// 细节产物落盘路径：`<cache_root>/lumen/<key>_detail_lumen.jpg`。
