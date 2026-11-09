@@ -8,24 +8,16 @@ import {
   DOUBLE_CLICK_SCALE,
   clampScale,
   clampToPane,
-  clampToTrail,
   dampToPane,
   dragGrab,
   dragTarget,
   isFitScale,
-  isFlingVelocity,
-  nowMs,
   oneToOneScale,
   paneMaxPan,
-  pointerVelocity,
-  projectFling,
-  pushPointerSample,
-  runInertia,
-  type InertiaRun,
-  type PointerSample,
   type Vec2,
 } from '../utils/viewportZoom';
 import { GESTURE, SETTLE } from '../utils/viewportMotion';
+import { useInertiaGesture } from './useInertiaGesture';
 
 /** useZoomPan 的全部对外面（单图视口在用；双栏视口用 useDualZoomPan）。 */
 export interface ZoomPan {
@@ -104,18 +96,15 @@ export function useZoomPan(
   // 更新，也从结构上排除「读到旧 dragStart」的可能。
   const grabRef = useRef<Vec2>({ x: 0, y: 0 });
   const leaveListenerRef = useRef<(() => void) | null>(null);
-  // 收尾采样与在飞的收尾（issue #22）。采样存 ref：pointermove 的频率不该变成渲染次数。
-  const samplesRef = useRef<PointerSample[]>([]);
-  const inertiaRef = useRef<InertiaRun | null>(null);
-
-  /** 停掉在飞的收尾：任何「新意图」（按下 / 滚轮 / ± / 复位 / 换图）都优先。 */
-  const cancelInertia = useCallback(() => {
-    inertiaRef.current?.stop();
-    inertiaRef.current = null;
-  }, []);
-
-  // 卸载时不能留 rAF：否则收尾会在组件消失后继续 setState。
-  useEffect(() => cancelInertia, [cancelInertia]);
+  // 惯性骨架（issue #123）：单栏注入 clampToPane / setPos / paneMaxPan，抬手
+  // 编排在工厂里，两 hook 不再各存一份 samplesRef / inertiaRef。
+  const { cancelInertia, clearSamples, clearForNewImage, sampleDrag, finishPointerUp } =
+    useInertiaGesture({
+      clampPos: (p) => clampToPane(containerRef.current, imgRef.current, p, scale),
+      writePos: (p) => setPos(p),
+      getMaxPan: () => paneMaxPan(containerRef.current, imgRef.current, scale),
+      setTransition,
+    });
 
   const leaveOneToOne = useCallback(() => {
     leaveListenerRef.current?.();
@@ -129,13 +118,10 @@ export function useZoomPan(
   // 在 `resetKey` 变化时跑；首次挂载状态本来就是 1 / {0,0}，无需补一次。
   useEffect(() => {
     leaveOneToOne();
-    // 换图即取消在飞的收尾：惯性属于上一张照片的位移，带进新图就会把它推出画面。
-    inertiaRef.current?.stop();
-    inertiaRef.current = null;
-    samplesRef.current = [];
+    clearForNewImage();
     setScale(1);
     setPos({ x: 0, y: 0 });
-  }, [resetKey, leaveOneToOne]);
+  }, [resetKey, leaveOneToOne, clearForNewImage]);
 
   const zoomBy = useCallback(
     (factor: number) => {
@@ -158,9 +144,7 @@ export function useZoomPan(
    */
   const reset = useCallback(() => {
     leaveListenerRef.current?.();
-    inertiaRef.current?.stop();
-    inertiaRef.current = null;
-    samplesRef.current = [];
+    clearForNewImage();
     setTransition(SETTLE);
     setScale(1);
     setPos({ x: 0, y: 0 });
@@ -172,14 +156,12 @@ export function useZoomPan(
     const s = img ? oneToOneScale(img.naturalWidth, img.offsetWidth) : null;
     const landing = s ?? fallback;
     if (landing === undefined) return null;
-    inertiaRef.current?.stop();
-    inertiaRef.current = null;
-    samplesRef.current = [];
+    clearForNewImage();
     setTransition(SETTLE);
     setScale(landing);
     setPos({ x: 0, y: 0 });
     return landing;
-  }, []);
+  }, [clearForNewImage]);
 
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
@@ -207,13 +189,13 @@ export function useZoomPan(
       // 只按下还什么都没离开 1:1：没有位移的单击（选片、进调色）不该把
       // 1:1 状态打掉。真正的离开判据是 handlePointerMove 里的「真的动了」。
       cancelInertia();
-      samplesRef.current = [];
+      clearSamples();
       setTransition(GESTURE);
       setIsDragging(true);
       grabRef.current = dragGrab(e.clientX, e.clientY, pos);
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     },
-    [pos, cancelInertia],
+    [pos, cancelInertia, clearSamples],
   );
 
   const handlePointerMove = useCallback(
@@ -223,17 +205,13 @@ export function useZoomPan(
       // PB-8：越界段乘阻尼，手指贴着边推仍然有反馈；抬手后再由 clampToPane 收回。
       const next = dampToPane(containerRef.current, imgRef.current, target, scale);
       // 速度采样：只留最近 100ms，抬手前停一下速度自然归零（不会「一停手还在飞」）。
-      samplesRef.current = pushPointerSample(samplesRef.current, {
-        t: nowMs(),
-        x: e.clientX,
-        y: e.clientY,
-      });
+      sampleDrag(e.clientX, e.clientY);
       // 夹紧之后位置真变了才算离开 1:1：1:1 时平移本就封死在原点，按着不放
       // 不该让「再按 Z」变成「重新进 1:1」而不是「回适应」。
       if (next.x !== pos.x || next.y !== pos.y) leaveOneToOne();
       setPos(next);
     },
-    [isDragging, scale, pos, leaveOneToOne],
+    [isDragging, scale, pos, leaveOneToOne, sampleDrag],
   );
 
   const handlePointerUp = useCallback(
@@ -243,62 +221,10 @@ export function useZoomPan(
       const host = e.currentTarget as HTMLElement;
       if (host.hasPointerCapture(e.pointerId)) host.releasePointerCapture(e.pointerId);
 
-      // PB-6：把手上的速度交出去。落点先过 clampToPane —— 惯性再大也不会
-      // 把画面甩出「照片不露空」的范围；越界时这就是回弹的落点。
-      //
-      // 松手点本身必须入样：停手 400ms 再松手时窗口里只剩它一个点，速度自然
-      // 归零；少了这一步，400ms 前的旧速度会被当成「手指当前速度」继续甩。
-      const velocity = pointerVelocity(
-        pushPointerSample(samplesRef.current, {
-          t: nowMs(),
-          x: e.clientX,
-          y: e.clientY,
-        }),
-      );
-      samplesRef.current = [];
-      const projection = projectFling(velocity);
-      const target = clampToPane(
-        containerRef.current,
-        imgRef.current,
-        { x: pos.x + projection.x, y: pos.y + projection.y },
-        scale,
-      );
-      const settled = clampToPane(containerRef.current, imgRef.current, pos, scale);
-      // 抬手瞬间的越界量：收尾时按 remain 逐帧收敛到 0（回弹曲线），而不是被剪掉。
-      const overflow = { x: pos.x - settled.x, y: pos.y - settled.y };
-      const outOfBounds = settled.x !== pos.x || settled.y !== pos.y;
-
-      if (!isFlingVelocity(velocity) && !outOfBounds) {
-        setTransition(SETTLE);
-        return;
-      }
-
-      // 收尾期间是手势通道：逐帧写 transform，不能再让 CSS 补一次间。
-      setTransition(GESTURE);
-      inertiaRef.current?.stop();
-      inertiaRef.current = runInertia(
-        pos,
-        target,
-        // 每帧按「当前边界 + 尚未衰减的越界量」夹紧：回弹逐帧收敛，边界中途
-        // 收紧时新边界立刻生效（不能等落定才跳回去）。
-        (next, remain) =>
-          setPos(
-            clampToTrail(
-              next,
-              paneMaxPan(containerRef.current, imgRef.current, scale),
-              overflow,
-              remain,
-            ),
-          ),
-        () => {
-          inertiaRef.current = null;
-          // 落定这一帧按当前几何再夹一次：收尾途中换图 / 改窗口也不会留在界外。
-          setPos(clampToPane(containerRef.current, imgRef.current, target, scale));
-          setTransition(SETTLE);
-        },
-      );
+      // 抬手编排在 useInertiaGesture 工厂里（PB-6/PB-8，见工厂注释）。
+      finishPointerUp(e.clientX, e.clientY, pos);
     },
-    [isDragging, pos, scale],
+    [isDragging, pos, finishPointerUp],
   );
 
   /** 双击：一处判「是不是适应」，一处应用落点 —— 三视口共用。 */
