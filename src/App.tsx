@@ -5,7 +5,7 @@ import { PreviewViewport, type PreviewZoomApi } from './components/PreviewViewpo
 import { BeforeAfterViewport } from './components/BeforeAfterViewport';
 import { SplitCompareViewport } from './components/SplitCompareViewport';
 import { TonalAdjuster } from './components/TonalAdjuster';
-import { BottomBar, type StatusPane, type StatusZoom } from './components/BottomBar';
+import { BottomBar } from './components/BottomBar';
 import { BatchExportModal } from './components/BatchExportModal';
 import { SettingsModal } from './components/SettingsModal';
 import { MetadataEditorModal } from './components/MetadataEditorModal';
@@ -39,7 +39,9 @@ import { useSessionDebounce } from './hooks/useSessionDebounce';
 import { toLumenGateStatus, useLumenStatus } from './hooks/useLumenStatus';
 import { useLumenOrchestration } from './hooks/useLumenOrchestration';
 import { useExternalApps } from './hooks/useExternalApps';
-import type { ViewportEmptyState } from './components/PreviewViewport';
+import { useScanSessionPolicy } from './hooks/useScanSessionPolicy';
+import { selectStatusPanes, selectStatusZoom } from './utils/statusViewModel';
+import { selectViewportEmptyState } from './utils/viewportEmptyState';
 import {
   PhotoGroupInfo,
   SortOrder,
@@ -51,7 +53,6 @@ import { sortAlbumGroups, toAlbumItems } from './utils/albumGroups';
 import { isSameDir } from './utils/pathNormalize';
 import { usesExifField } from './utils/queryMatch';
 import { fileNameOf } from './utils/pathNormalize';
-import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from './utils/viewportZoom';
 
 
 function AppShell() {
@@ -243,50 +244,33 @@ function AppShell() {
     skipRemaining,
   } = batch;
 
-  const handleScanned = useCallback(
-    (
-      scanned: PhotoGroupInfo[],
-      initialTones: Record<string, ToneAdjustments>,
-      historyIndex: number | null,
-      selectedIndexAtStart: number | null,
-      scannedJpgFolder: string,
-    ) => {
-      setGroups(scanned);
-      // PA 门控放行：当前目录已完成一次成功扫描。
-      setScannedFolder(scannedJpgFolder);
-      toneSeed(initialTones);
-      // 扫描是异步的：若用户在扫描窗口内已经改过选中，恢复会话位置会**覆盖
-      // 用户操作**（2026-10-15 e2e run5 实锤：点击 IMG_010 被翻回 IMG_011，
-      // 随后的 apply 写错了文件）。快照相等（用户没动过）才按会话恢复。
-      const userMovedDuringScan =
-        selectedIndexAtStart !== null &&
-        selectedIndexAtStart !== selectedIndexRef.current;
-      // PB 兜底：扫描时读回为空才用启动预读（同目录才用，归一化比较防写法分叉），
-      // 有扫描时值以扫描时为准（PA 已保证启动不再覆盖，预读只防 key 分叉等空读）。
-      const startupHist = startupHistoryRef.current;
-      const effectiveHistory =
-        historyIndex ??
-        (startupHist && isSameDir(startupHist.folder, scannedJpgFolder)
-          ? startupHist.index
-          : null);
-      if (userMovedDuringScan) {
-        // 尊重用户选择：只把旧索引钳制到新集合范围内，不做会话恢复。
-        setSelectedIndex((prev) => Math.max(0, Math.min(prev, scanned.length - 1)));
-        setCompareIndex((prev) => Math.max(0, Math.min(prev, scanned.length - 1)));
-      } else if (effectiveHistory !== null && effectiveHistory < scanned.length) {
-        setSelectedIndex(effectiveHistory);
-        setCompareIndex(Math.min(effectiveHistory + 1, scanned.length - 1));
-      } else {
-        setSelectedIndex(0);
-        setCompareIndex(scanned.length > 1 ? 1 : 0);
-      }
-      // Drop anything pinned to a photo that no longer exists.
-      setPinnedId(null);
-      // 集合换了来源：选片集身份失效（不这么做顶栏会一直声称来自某本选片集）。
-      albumClearRef.current();
-    },
+  /**
+   * 扫描成功后的会话恢复/钳制策略（issue #112 抽出 `useScanSessionPolicy`）。
+   *
+   * `toneSeed` / `setPinnedId` 声明在回调之后（useFolderScan 依赖本回调
+   * 的稳定 identity），经 ref 前转（与 `albumClearRef` 同一模式）。
+   */
+  const toneSeedRef = useRef<(tones: Record<string, ToneAdjustments>) => void>(() => {});
+  const setPinnedIdRef = useRef<(id: string | null) => void>(() => {});
+  const callToneSeed = useCallback(
+    (tones: Record<string, ToneAdjustments>) => toneSeedRef.current(tones),
     [],
   );
+  const callSetPinnedId = useCallback(
+    (id: string | null) => setPinnedIdRef.current(id),
+    [],
+  );
+  const handleScanned = useScanSessionPolicy({
+    setGroups,
+    setScannedFolder,
+    toneSeed: callToneSeed,
+    setSelectedIndex,
+    setCompareIndex,
+    setPinnedId: callSetPinnedId,
+    albumClearRef,
+    selectedIndexRef,
+    startupHistoryRef,
+  });
 
   const scan = useFolderScan({
     onScanned: handleScanned,
@@ -382,6 +366,7 @@ function AppShell() {
     toneDirty,
     discardToneEditsFor,
   } = tone;
+  toneSeedRef.current = toneSeed;
 
   /**
    * PB-13：右侧栏交叉淡入。
@@ -438,6 +423,7 @@ function AppShell() {
     swap: handleSwapCompare,
     setPinnedId,
   } = pin;
+  setPinnedIdRef.current = setPinnedId;
 
   /**
    * FR-10：选片集。
@@ -611,39 +597,37 @@ function AppShell() {
    * 窗口底栏；双图 / 前后对照顶部已有自己的控制条，不占用底栏。
    */
   const [previewZoom, setPreviewZoom] = useState<PreviewZoomApi | null>(null);
-  const statusZoom = useMemo<StatusZoom | undefined>(() => {
-    if (external.viewMode !== 'single' || !currentGroup || !previewZoom) return undefined;
-    return {
-      label: scaleLabel(previewZoom.scale),
-      atMin: previewZoom.scale <= ZOOM_MIN,
-      atMax: previewZoom.scale >= ZOOM_MAX,
-      onZoomOut: () => previewZoom.zoomBy(1 / ZOOM_STEP),
-      onZoomIn: () => previewZoom.zoomBy(ZOOM_STEP),
-      onReset: previewZoom.reset,
-    };
-  }, [external.viewMode, currentGroup, previewZoom]);
+  const statusZoom = useMemo(
+    () =>
+      selectStatusZoom({
+        viewMode: external.viewMode,
+        currentGroup,
+        previewZoom,
+      }),
+    [external.viewMode, currentGroup, previewZoom],
+  );
 
   /**
    * 状态栏窗格（issue #62）：三视口共用同一个底栏；双图按 `L` / `R` 分两组，
    * 每组的动作回调都绑定本窗格自己的 group —— 给左图点红标不能落到右图。
    */
-  const statusPanes = useMemo<StatusPane[]>(() => {
-    if (external.viewMode === 'split') {
-      const pane = (
-        slot: 'L' | 'R',
-        group: PhotoGroupInfo | undefined,
-      ): StatusPane => ({
-        slot,
-        group,
-        tone: group ? toneMap[group.id] || group.tone : undefined,
-        onRate: (rating) => group && handleRate(rating, group),
-        onFlag: (flag) => group && handleFlag(flag, group),
-        onLabel: (label) => group && void setLabel(label, group),
-      });
-      return [pane('L', leftCompareGroup), pane('R', rightCompareGroup)];
-    }
-    return [{ group: currentGroup, tone: currentTone, onRate: applyRating, onFlag: applyFlag, onLabel: applyLabel }];
-  }, [
+  const statusPanes = useMemo(
+    () =>
+      selectStatusPanes({
+        viewMode: external.viewMode,
+        leftCompareGroup,
+        rightCompareGroup,
+        toneMap,
+        currentGroup,
+        currentTone,
+        applyRating,
+        applyFlag,
+        applyLabel,
+        handleRate,
+        handleFlag,
+        setLabel,
+      }),
+    [
     external.viewMode,
     leftCompareGroup,
     rightCompareGroup,
@@ -693,32 +677,16 @@ function AppShell() {
 
   // Empty-state copy. "No folder loaded" and "filter matched nothing" are
   // different problems and must not share a message.
-  const viewportEmptyState = useMemo<ViewportEmptyState>(() => {
-    if (groups.length === 0) {
-      return {
-        title: '未加载照片',
-        // A5/A7 + #66：默认路径是「选一个文件夹」，JPG / RAW / 混合都支持；
-        // 只有确实想分目录存放时才需要动第二个输入框。
-        description:
-          '选择一个包含照片的文件夹即可（只有 JPG、只有 RAW、或两者混合都支持）；如果 RAW 单独放在另一个目录，再手动指定 RAW 路径。',
-        actionLabel: '打开照片文件夹',
-        onAction: handleBrowseAuto,
-      };
-    }
-    if (filteredGroups.length === 0) {
-      return {
-        title: '当前筛选下没有照片',
-        description:
-          '还没有照片匹配这个筛选条件。先给照片打星或标记保留，或者切换到「全部照片」。',
-        actionLabel: '显示全部照片',
-        onAction: () => setFilterMode('all'),
-      };
-    }
-    return {
-      title: '未选择照片',
-      description: '从右侧宫格列表中选择一张照片。',
-    };
-  }, [groups.length, filteredGroups.length, handleBrowseAuto]);
+  const viewportEmptyState = useMemo(
+    () =>
+      selectViewportEmptyState({
+        totalCount: groups.length,
+        filteredCount: filteredGroups.length,
+        onBrowseAuto: handleBrowseAuto,
+        onShowAll: () => setFilterMode('all'),
+      }),
+    [groups.length, filteredGroups.length, handleBrowseAuto],
+  );
 
   return (
     <div className="flex flex-col h-screen w-screen bg-background-base text-white overflow-hidden antialiased">
