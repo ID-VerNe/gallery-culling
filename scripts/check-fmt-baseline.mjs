@@ -13,9 +13,9 @@
  * 新文件可以单独 `rustfmt --edition 2021 <file>`，只碰它自己。
  */
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadManifest } from './run-gates.mjs';
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -53,7 +53,7 @@ export function judgeFmt(diffs, baseline) {
 }
 
 function main() {
-  const manifest = JSON.parse(readFileSync(join(ROOT, 'scripts', 'gates.json'), 'utf8'));
+  const manifest = loadManifest();
   const baseline = manifest.fmtBaseline;
   if (typeof baseline !== 'number') {
     console.error('FAIL: gates.json 缺少数字型 fmtBaseline');
