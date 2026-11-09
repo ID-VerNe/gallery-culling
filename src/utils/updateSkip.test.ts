@@ -89,3 +89,43 @@ describe('UPDATE_ENDPOINT —— 与 tauri.conf.json 不许漂移', () => {
     expect(UPDATE_ENDPOINT).toBe(tauriConf.plugins.updater.endpoints[0]);
   });
 });
+
+/**
+ * issue #98 评估证据：两个更新标记维持存 `localStorage`（WebView2 profile，随
+ * 用户 home 而非安装目录），评估后不迁进 SQLite / home 目录。这里钉住「读写走
+ * 注入的 Storage」——存储层与具体 profile / 全局对象解耦，换安装目录不会改变
+ * 读写契约，也不受本次 DB 落点改动影响。
+ */
+describe('注入 Storage —— 读写契约与安装目录/cwd 无关（issue #98）', () => {
+  function memoryStorage(): Storage {
+    const map = new Map<string, string>();
+    return {
+      get length() {
+        return map.size;
+      },
+      clear: () => map.clear(),
+      getItem: (k: string) => map.get(k) ?? null,
+      key: (i: number) => [...map.keys()][i] ?? null,
+      removeItem: (k: string) => {
+        map.delete(k);
+      },
+      setItem: (k: string, v: string) => {
+        map.set(k, v);
+      },
+    };
+  }
+
+  it('write/read/clear 都作用于注入的 Storage，不污染全局 localStorage', () => {
+    const storage = memoryStorage();
+    const written = writeSkipRecord(
+      '2.0.6',
+      UPDATE_ENDPOINT,
+      new Date('2026-11-09T00:00:00.000Z'),
+      storage,
+    );
+    expect(readSkipRecord(storage)).toEqual(written);
+    expect(localStorage.getItem(UPDATE_SKIP_KEY)).toBeNull();
+    clearSkipRecord(storage);
+    expect(readSkipRecord(storage)).toBeNull();
+  });
+});

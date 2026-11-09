@@ -75,3 +75,42 @@ describe('updatePending —— 结果判定', () => {
     expect(classifyPendingUpdate(record(), '   ')).toBe('none');
   });
 });
+
+/**
+ * issue #98 评估证据：与 `updateSkip` 同口径，两个更新标记维持存 `localStorage`
+ * （WebView2 profile，随用户 home 而非安装目录），评估后不迁进 SQLite / home 目录。
+ * 钉住「读写走注入的 Storage」：换安装目录不会改变读写契约。
+ */
+describe('注入 Storage —— 读写契约与安装目录/cwd 无关（issue #98）', () => {
+  function memoryStorage(): Storage {
+    const map = new Map<string, string>();
+    return {
+      get length() {
+        return map.size;
+      },
+      clear: () => map.clear(),
+      getItem: (k: string) => map.get(k) ?? null,
+      key: (i: number) => [...map.keys()][i] ?? null,
+      removeItem: (k: string) => {
+        map.delete(k);
+      },
+      setItem: (k: string, v: string) => {
+        map.set(k, v);
+      },
+    };
+  }
+
+  it('write/read/clear 都作用于注入的 Storage，不污染全局 localStorage', () => {
+    const storage = memoryStorage();
+    const written = writePendingRecord(
+      '2.0.4',
+      '2.0.5',
+      new Date('2026-11-09T00:00:00.000Z'),
+      storage,
+    );
+    expect(readPendingRecord(storage)).toEqual(written);
+    expect(localStorage.getItem(UPDATE_PENDING_KEY)).toBeNull();
+    clearPendingRecord(storage);
+    expect(readPendingRecord(storage)).toBeNull();
+  });
+});

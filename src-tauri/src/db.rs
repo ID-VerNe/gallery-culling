@@ -595,51 +595,107 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Re
     Ok(())
 }
 
-/// 数据目录覆盖口子（issue #81）。
+/// 数据目录覆盖口子（issue #81，issue #98 沿用）。
 ///
 /// 只给 dev / e2e 用：真窗口 e2e 默认会落在 `tauri dev` 的 cwd（`src-tauri`），
 /// 于是测试直接读写开发库 —— 用户的「上次目录 / 上次会话 / 旧评级旗标」会污染
 /// 场景，场景跑完又会把夹具路径写回用户库。设置这个变量后，库改到指定目录的
-/// `gallery_culling.db`，e2e 每次起一份空库即可。**未设置时行为逐字不变**。
+/// `gallery_culling.db`，e2e 每次起一份空库即可。
+/// **未设置时（issue #98）落到用户 home 下的固定目录**，不再随 cwd 流浪。
 pub const DATA_DIR_ENV: &str = "GALLERY_DATA_DIR";
 
 const DB_FILE_NAME: &str = "gallery_culling.db";
 
-fn get_db_path() -> PathBuf {
-    let data_dir = std::env::var_os(DATA_DIR_ENV).map(PathBuf::from);
-    let local_writable = if data_dir.as_ref().is_some_and(|d| !d.as_os_str().is_empty()) {
-        // 有覆盖目录时**不能**再探测 cwd：探测本身带 create(true)，会在
-        // `src-tauri` 里留下一个 0 字节的 gallery_culling.db —— 隔离等于没做
-        // （issue #81 真窗口 e2e 已实证：真实库指纹从 absent 变成 0 字节）。
-        false
-    } else {
-        // create(true) 配 write(true) 但**没有** truncate(true)：刻意如此 ——
-        // 这里只是探测「当前目录可写」，绝不能把已存在的数据库清空。
-        std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(false)
-            .open(DB_FILE_NAME)
-            .is_ok()
-    };
-    resolve_db_path(data_dir, local_writable)
+/// 用户 home 下的应用数据子目录（issue #98）。
+///
+/// 遵循 issue 修复候选的 `%USERPROFILE%\.galleryculling\`：配置库固定落在这里，
+/// 与安装目录 / 启动 cwd 无关，重装换目录后仍能读到原设置。
+const APP_DATA_SUBDIR: &str = ".galleryculling";
+
+/// 取用户 home 目录（零新依赖）。
+///
+/// Windows 用 `USERPROFILE`，其它平台 / 无 `USERPROFILE` 时用 `HOME`；空串按
+/// 「取不到」处理。刻意不引入 `dirs`：`Database::new()` 在 `.setup()` 之前调用
+/// （`lib.rs:29`），此刻没有 `AppHandle`，拿不到 Tauri `PathResolver`；沿用
+/// `lumen/engine.rs:184` 的环境变量口径即可。
+fn user_home_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
 }
 
-/// 纯路径决策：`data_dir` 非空时优先，其次 cwd 相对库，最后临时目录兜底。
+fn get_db_path() -> PathBuf {
+    // 不再用 OpenOptions::create(true) 探测 cwd 可写性：那样会在 cwd 留下
+    // 0 字节的 gallery_culling.db（issue #81 的教训），且默认落点本就与 cwd 无关。
+    let data_dir = std::env::var_os(DATA_DIR_ENV)
+        .map(PathBuf::from)
+        .filter(|d| !d.as_os_str().is_empty());
+    let home_dir = user_home_dir();
+    let path = resolve_db_path(data_dir.clone(), home_dir.clone());
+
+    // 一次性迁移：只有走默认 home 分支（未设 / 空串覆盖、home 可用）才把 cwd 旧库
+    // 复制过去。设置了 GALLERY_DATA_DIR 时绝不迁移 —— 否则会把用户真实库灌进
+    // e2e 隔离目录，违反 issue #81 的数据隔离契约。
+    if data_dir.is_none() && home_dir.is_some() {
+        migrate_legacy_db(&path, &PathBuf::from(DB_FILE_NAME));
+    }
+    path
+}
+
+/// 一次性迁移旧库（issue #98）：home 库不存在且 cwd 旧库存在时复制过去。
 ///
-/// 覆盖目录建不出来时**不回落**用户库 —— 隔离失败必须响亮，否则 e2e 又会
-/// 静默写真实数据；`Connection::open` 会在那个不存在的路径上直接报错。
-fn resolve_db_path(data_dir: Option<PathBuf>, local_writable: bool) -> PathBuf {
+/// 只复制、不移动、不覆盖、不删源；失败只警告不阻断启动 —— 最坏情况是老用户
+/// 这次以空库启动，配置仍在 cwd 旧库里，数据不丢。
+fn migrate_legacy_db(target: &Path, legacy: &Path) {
+    if target.exists() || !legacy.is_file() {
+        return;
+    }
+    if let Some(parent) = target.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!(
+                "迁移旧配置库：创建目标目录失败（{}）：{}",
+                parent.display(),
+                e
+            );
+            return;
+        }
+    }
+    match std::fs::copy(legacy, target) {
+        Ok(_) => eprintln!("已把旧配置库迁移到 {}（源保留）", target.display()),
+        Err(e) => eprintln!(
+            "迁移旧配置库失败（{} -> {}）：{}，将使用空库启动",
+            legacy.display(),
+            target.display(),
+            e
+        ),
+    }
+}
+
+/// 纯路径决策（issue #98）：
+/// - `data_dir` 非空 → 覆盖优先（issue #81 e2e 隔离）：`create_dir_all` 后直接返回
+///   `dir/DB_FILE_NAME`，**不回落**用户库 —— 隔离失败必须响亮；
+/// - 否则 → 用户 home 下的固定目录 `home/.galleryculling/gallery_culling.db`；
+/// - `home_dir` 取不到（极端环境）→ `temp_dir()` 兜底，与 cwd 可写性无关。
+///
+/// home 由调用方传入（便于单测、不硬编码盘符）。两个分支都在返回前确保父目录
+/// 存在，否则 `Connection::open` 建不了库；建目录失败只警告不阻断。
+fn resolve_db_path(data_dir: Option<PathBuf>, home_dir: Option<PathBuf>) -> PathBuf {
     if let Some(dir) = data_dir.filter(|d| !d.as_os_str().is_empty()) {
         if let Err(e) = std::fs::create_dir_all(&dir) {
             eprintln!("创建数据目录失败（{}）：{}", dir.display(), e);
         }
         return dir.join(DB_FILE_NAME);
     }
-    if local_writable {
-        PathBuf::from(DB_FILE_NAME)
-    } else {
-        std::env::temp_dir().join(DB_FILE_NAME)
+    match home_dir {
+        Some(home) => {
+            let dir = home.join(APP_DATA_SUBDIR);
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                eprintln!("创建用户数据目录失败（{}）：{}", dir.display(), e);
+            }
+            dir.join(DB_FILE_NAME)
+        }
+        None => std::env::temp_dir().join(DB_FILE_NAME),
     }
 }
 
@@ -683,35 +739,148 @@ mod tests {
         (Database::open(&path).expect("建临时库"), path)
     }
 
-    /// issue #81：`GALLERY_DATA_DIR` 是 e2e 的数据隔离口子。
+    /// issue #81 + #98：`GALLERY_DATA_DIR` 是 e2e 的数据隔离口子，优先级最高。
     ///
-    /// 核心契约是「覆盖目录 > cwd 相对库」——cwd 即使可写也必须让位，否则
-    /// e2e 仍会读写 `src-tauri/gallery_culling.db`，隔离形同虚设。
+    /// 覆盖目录即使建得出来、home 也给了，仍必须落在覆盖目录；且 home 目录
+    /// 不能被顺手创建（证明覆盖分支根本没碰 home）。
     #[test]
     fn data_dir_override_wins_and_creates_directory() {
-        let dir = std::env::temp_dir().join(format!("gc_data_dir_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let path = resolve_db_path(Some(dir.clone()), true);
+        let base = std::env::temp_dir().join(format!("gc_override_{}", std::process::id()));
+        let dir = base.join("override");
+        let home = base.join("home");
+        let _ = std::fs::remove_dir_all(&base);
+        let path = resolve_db_path(Some(dir.clone()), Some(home.clone()));
         assert_eq!(path, dir.join("gallery_culling.db"));
         assert!(
             dir.is_dir(),
             "覆盖目录应被创建，否则 Connection::open 建不了库"
         );
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!home.exists(), "覆盖优先时不能碰用户 home 目录");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// 未设置 / 空串时保持原行为：cwd 可写用相对库，否则临时目录兜底。
+    /// issue #98：默认落点固定在用户 home 的 `.galleryculling` 子目录，
+    /// 既不是 cwd 相对库，也不是 temp —— 换安装目录 / cwd 不改写同一份配置。
     ///
-    /// 空串也要按「未设置」处理：`$env:GALLERY_DATA_DIR=""` 是 Windows 上很
-    /// 常见的残留，若当成路径会把库丢到磁盘根。
+    /// 变异墓碑：把实现里的 `home.join(APP_DATA_SUBDIR)` 改回
+    /// `PathBuf::from(DB_FILE_NAME)`，这条必须红。
     #[test]
-    fn empty_or_missing_data_dir_keeps_default_resolution() {
-        let local = PathBuf::from("gallery_culling.db");
-        let temp = std::env::temp_dir().join("gallery_culling.db");
-        assert_eq!(resolve_db_path(Some(PathBuf::new()), true), local);
-        assert_eq!(resolve_db_path(Some(PathBuf::new()), false), temp);
-        assert_eq!(resolve_db_path(None, true), local);
-        assert_eq!(resolve_db_path(None, false), temp);
+    fn default_db_path_lands_in_user_home() {
+        let home = std::env::temp_dir().join(format!("gc_home_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let expected = home.join(".galleryculling").join("gallery_culling.db");
+        let path = resolve_db_path(None, Some(home.clone()));
+        assert_eq!(path, expected, "默认库必须落在用户 home 的固定子目录");
+        assert_ne!(
+            path,
+            PathBuf::from("gallery_culling.db"),
+            "不能再是 cwd 相对库"
+        );
+        assert_ne!(
+            path,
+            std::env::temp_dir().join("gallery_culling.db"),
+            "不能再落 temp"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// 空串 / 未设置覆盖时按「未设置」处理，走默认 home 落点。
+    /// （原用例锁的「cwd 可写用相对库 / 不可写落 temp」是 issue #98 要删掉的旧行为。）
+    #[test]
+    fn empty_or_missing_data_dir_uses_home() {
+        let home = std::env::temp_dir().join(format!("gc_empty_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let expected = home.join(".galleryculling").join("gallery_culling.db");
+        assert_eq!(
+            resolve_db_path(Some(PathBuf::new()), Some(home.clone())),
+            expected
+        );
+        assert_eq!(resolve_db_path(None, Some(home.clone())), expected);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// 覆盖目录建不出来时不回落用户库：仍返回覆盖路径，让 Connection::open 报错。
+    /// 用一个「文件挡住路径」的目录逼 create_dir_all 失败。
+    #[test]
+    fn override_dir_failure_does_not_fall_back_to_home() {
+        let base = std::env::temp_dir().join(format!("gc_override_fail_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let blocker = base.join("blocker");
+        std::fs::write(&blocker, b"not a dir").unwrap();
+        let impossible = blocker.join("child"); // 父是文件，create_dir_all 必失败
+        let home = base.join("home");
+        let path = resolve_db_path(Some(impossible.clone()), Some(home.clone()));
+        assert_eq!(
+            path,
+            impossible.join("gallery_culling.db"),
+            "隔离失败仍返回覆盖路径"
+        );
+        assert!(
+            !home.join(".galleryculling").exists(),
+            "绝不回落写用户 home 库"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 连 home 都取不到时才落 temp（极端兜底，与 cwd 可写性无关）。
+    #[test]
+    fn no_home_falls_back_to_temp() {
+        assert_eq!(
+            resolve_db_path(None, None),
+            std::env::temp_dir().join("gallery_culling.db")
+        );
+    }
+
+    /// issue #98 一次性迁移：home 库不存在 + cwd 旧库存在 → 复制（保留源）。
+    #[test]
+    fn migrate_legacy_db_copies_keeps_source() {
+        let base = std::env::temp_dir().join(format!("gc_migrate_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let legacy = base.join("legacy.db");
+        let target = base.join("home").join("gallery_culling.db");
+        std::fs::write(&legacy, b"old settings bytes").unwrap();
+
+        migrate_legacy_db(&target, &legacy);
+        assert_eq!(std::fs::read(&target).unwrap(), b"old settings bytes");
+        assert_eq!(
+            std::fs::read(&legacy).unwrap(),
+            b"old settings bytes",
+            "源必须保留（不移动）"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 目标已存在时绝不覆盖（新配置不能被旧库回灌）。
+    #[test]
+    fn migrate_legacy_db_does_not_overwrite_existing_target() {
+        let base = std::env::temp_dir().join(format!("gc_migrate_noover_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let legacy = base.join("legacy.db");
+        let target = base.join("home").join("gallery_culling.db");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, b"old").unwrap();
+        std::fs::write(&target, b"new").unwrap();
+
+        migrate_legacy_db(&target, &legacy);
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 源不存在时是空操作（首次全新安装不该凭空造库）。
+    #[test]
+    fn migrate_legacy_db_no_source_is_noop() {
+        let base = std::env::temp_dir().join(format!("gc_migrate_nosrc_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let legacy = base.join("missing.db");
+        let target = base.join("home").join("gallery_culling.db");
+
+        migrate_legacy_db(&target, &legacy);
+        assert!(!target.exists());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
