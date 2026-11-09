@@ -532,6 +532,9 @@ impl Database {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
+        // issue #108 PK：save/load 同一 canonical key（斜杠/大小写/末尾斜杠互通），
+        // 与前端 `normalizeDir` 同口径。
+        let key = normalize_session_key(jpg_folder);
 
         conn.execute(
             "INSERT INTO sessions (jpg_folder, raw_folder, last_index, sort_order, updated_at)
@@ -541,13 +544,7 @@ impl Database {
                 last_index = ?3,
                 sort_order = ?4,
                 updated_at = ?5",
-            params![
-                jpg_folder,
-                raw_folder,
-                last_index as i64,
-                sort_order,
-                now as i64
-            ],
+            params![key, raw_folder, last_index as i64, sort_order, now as i64],
         )
         .map_err(|e| format!("保存会话失败: {}", e))?;
 
@@ -556,11 +553,12 @@ impl Database {
 
     pub fn load_session(&self, jpg_folder: &str) -> Result<Option<(usize, String)>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let key = normalize_session_key(jpg_folder);
         let mut stmt = conn
             .prepare("SELECT last_index, sort_order FROM sessions WHERE jpg_folder = ?1")
             .map_err(|e| e.to_string())?;
 
-        let mut rows = stmt.query(params![jpg_folder]).map_err(|e| e.to_string())?;
+        let mut rows = stmt.query(params![key]).map_err(|e| e.to_string())?;
 
         if let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let last_index: i64 = row.get(0).unwrap_or(0);
@@ -570,6 +568,23 @@ impl Database {
             Ok(None)
         }
     }
+}
+
+/// 会话键归一化（issue #108 PK）：`save`/`load` 同口径。
+///
+/// 与前端 `normalizeDir`（`src/utils/pathNormalize.ts:13-14`）一致：`/ \+$/` 去尾、
+/// `\` → `/`、小写。Windows 下 `D:\shoot\JPG`、`D:/shoot/JPG/`、`d:/shoot/jpg`
+/// 是同一目录，精确字符串等值会漏读 → 回退第一张。根目录（`/`）退化为 `/` 而非空串。
+fn normalize_session_key(folder: &str) -> String {
+    let trimmed = folder.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let no_trailing = trimmed.trim_end_matches(['/', '\\']);
+    if no_trailing.is_empty() {
+        return "/".to_string();
+    }
+    no_trailing.replace('\\', "/").to_lowercase()
 }
 
 /// 给已存在的表补一列（幂等）。
@@ -978,6 +993,33 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].rating, 2);
         assert_eq!(rows[0].updated_at, 42);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// issue #108 PK：会话键归一化——不同写法同 key（斜杠/大小写/末尾斜杠）。
+    /// 变异墓碑：去掉 `normalize_session_key`（恢复精确字符串匹配），本条必须红。
+    #[test]
+    fn session_key_normalization_roundtrip() {
+        assert_eq!(normalize_session_key("D:\\shoot\\JPG"), "d:/shoot/jpg");
+        assert_eq!(normalize_session_key("D:/shoot/JPG/"), "d:/shoot/jpg");
+        assert_eq!(normalize_session_key("d:/shoot/jpg"), "d:/shoot/jpg");
+        assert_eq!(
+            normalize_session_key("  D:/Shoot/JPG\\\\  "),
+            "d:/shoot/jpg"
+        );
+
+        let (db, path) = temp_db("session_norm");
+        db.save_session("D:\\shoot\\JPG", "", 46, "time_filename")
+            .unwrap();
+        // 另一种写法读回同一行
+        let hit = db.load_session("d:/shoot/jpg/").unwrap();
+        assert_eq!(hit, Some((46, "time_filename".to_string())));
+
+        // 第二种写法覆盖同一行（不产生第二行）
+        db.save_session("d:/shoot/jpg/", "", 7, "filename").unwrap();
+        let hit2 = db.load_session("D:\\shoot\\JPG").unwrap();
+        assert_eq!(hit2, Some((7, "filename".to_string())));
 
         let _ = std::fs::remove_file(&path);
     }

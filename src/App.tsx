@@ -16,6 +16,7 @@ import { AlbumDialog, type AlbumSaveScope } from './components/AlbumDialog';
 import { LrcatDialog } from './components/LrcatDialog';
 import { ToastProvider, useToast } from './components/Toast';
 import { TaskProgressBar } from './components/TaskProgressBar';
+import { api } from './services/api';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useLumenStartupNotice } from './hooks/useLumenStartupNotice';
 import { useLumenEngine } from './hooks/useLumenEngine';
@@ -47,6 +48,7 @@ import {
 import { DEFAULT_TONE } from './utils/autoTone';
 import { isToneAutoSaveEnabled } from './utils/toneAutoSave';
 import { sortAlbumGroups, toAlbumItems } from './utils/albumGroups';
+import { isSameDir } from './utils/pathNormalize';
 import { usesExifField } from './utils/queryMatch';
 import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from './utils/viewportZoom';
 
@@ -62,9 +64,22 @@ function AppShell() {
 
   // 读回设置并回填默认目录。必须在 jpgFolder/rawFolder/sortOrder 的 state
   // 声明之后挂载，所以放在它们后面。
+  // issue #108 PB：回填默认目录时同步预读该目录的会话断点（只读不写），
+  // 暂存 startupHistoryRef，扫描完成时作兜底（扫描时读回为空才用），
+  // 与 userMovedDuringScan 的“用户优先”不冲突。经由回调异步触发，
+  // 此时后面声明的 startupHistoryRef 已初始化（与 setJpgFolder 同模式）。
   const { settings, applySettings, persistFolders, lumenRefreshToken } =
     useAppSettings((s) => {
-      if (s.defaultJpgFolder) setJpgFolder(s.defaultJpgFolder);
+      if (s.defaultJpgFolder) {
+        setJpgFolder(s.defaultJpgFolder);
+        const folder = s.defaultJpgFolder;
+        void api
+          .loadSession(folder)
+          .then((h) => {
+            if (h) startupHistoryRef.current = { folder, index: h[0] };
+          })
+          .catch(() => {});
+      }
       if (s.defaultRawFolder) setRawFolder(s.defaultRawFolder);
       if (s.sortOrder) setSortOrder(s.sortOrder as SortOrder);
     });
@@ -121,6 +136,18 @@ function AppShell() {
    */
   const selectedIndexRef = useRef(selectedIndex);
   selectedIndexRef.current = selectedIndex;
+
+  /**
+   * issue #108 PB：启动预读的会话断点（folder 精确匹配）。
+   * settings 回填时填充；handleScanned 空依赖读它做兜底。
+   */
+  const startupHistoryRef = useRef<{ folder: string; index: number } | null>(null);
+
+  /**
+   * issue #108 PA：当前已完成扫描的目录（state，驱动 useSessionDebounce 的
+   * hasScanned 门控重新渲染）。换目录后 false 直到新目录扫描完成。
+   */
+  const [scannedFolder, setScannedFolder] = useState('');
 
   /** 稳定引用：useFolderScan 的 handleScan 依赖它，内联箭头会让 identity 抖动。 */
   const getSelectedIndex = useCallback(() => selectedIndexRef.current, []);
@@ -221,8 +248,11 @@ function AppShell() {
       initialTones: Record<string, ToneAdjustments>,
       historyIndex: number | null,
       selectedIndexAtStart: number | null,
+      scannedJpgFolder: string,
     ) => {
       setGroups(scanned);
+      // PA 门控放行：当前目录已完成一次成功扫描。
+      setScannedFolder(scannedJpgFolder);
       toneSeed(initialTones);
       // 扫描是异步的：若用户在扫描窗口内已经改过选中，恢复会话位置会**覆盖
       // 用户操作**（2026-10-15 e2e run5 实锤：点击 IMG_010 被翻回 IMG_011，
@@ -230,13 +260,21 @@ function AppShell() {
       const userMovedDuringScan =
         selectedIndexAtStart !== null &&
         selectedIndexAtStart !== selectedIndexRef.current;
+      // PB 兜底：扫描时读回为空才用启动预读（同目录才用，归一化比较防写法分叉），
+      // 有扫描时值以扫描时为准（PA 已保证启动不再覆盖，预读只防 key 分叉等空读）。
+      const startupHist = startupHistoryRef.current;
+      const effectiveHistory =
+        historyIndex ??
+        (startupHist && isSameDir(startupHist.folder, scannedJpgFolder)
+          ? startupHist.index
+          : null);
       if (userMovedDuringScan) {
         // 尊重用户选择：只把旧索引钳制到新集合范围内，不做会话恢复。
         setSelectedIndex((prev) => Math.max(0, Math.min(prev, scanned.length - 1)));
         setCompareIndex((prev) => Math.max(0, Math.min(prev, scanned.length - 1)));
-      } else if (historyIndex !== null && historyIndex < scanned.length) {
-        setSelectedIndex(historyIndex);
-        setCompareIndex(Math.min(historyIndex + 1, scanned.length - 1));
+      } else if (effectiveHistory !== null && effectiveHistory < scanned.length) {
+        setSelectedIndex(effectiveHistory);
+        setCompareIndex(Math.min(effectiveHistory + 1, scanned.length - 1));
       } else {
         setSelectedIndex(0);
         setCompareIndex(scanned.length > 1 ? 1 : 0);
@@ -506,6 +544,9 @@ function AppShell() {
     rawFolder,
     lastIndex: selectedIndex,
     sortOrder,
+    // issue #108 PA：当前目录未完成扫描前不写盘（防启动初值 0 覆盖断点）。
+    // 同目录判断走 isSameDir（写法分叉不误关门，与 PK 同口径）。
+    hasScanned: !album.path && jpgFolder !== '' && isSameDir(scannedFolder, jpgFolder),
   });
 
   // Metadata batch updated handler

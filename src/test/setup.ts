@@ -14,6 +14,7 @@
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, vi } from 'vitest';
 import { cleanup } from '@testing-library/react';
+import { normalizeDir } from '../utils/pathNormalize';
 
 /* -------------------------------------------------------------------------- */
 /* invoke: 命令名 -> 返回值 / 抛出                                              */
@@ -27,6 +28,49 @@ interface InvokeCall {
 }
 
 const recordedCalls: InvokeCall[] = [];
+
+/**
+ * 会话内存库（issue #108 PD）：`save_session_cmd` 写后 `load_session_cmd` 可读回。
+ *
+ * 此前 `save`/`load` 只是互不联动的返回值表（`App.session.test.tsx` 的“恢复到索引 2”
+ * 是同进程内 mock 返回常量），结构上测不到“启动写入覆盖历史值”。本表模拟
+ * `db.rs` 的 `sessions` 表：key 走与前端一致的 `normalizeDir`（正斜杠+去尾斜杠+小写），
+ * 与 PK 归一化同口径。旧测试若显式 `mockInvokeCommand('save/load…')` 会覆盖本表安装的
+ * 函数式 mock——新用例请先 `seedSession` 并在其后不再覆盖这两命令。
+ */
+const sessionMemory = new Map<string, [number, string]>();
+
+/** 读内存库（归一化 key），供断言“历史值是否被覆盖”用。 */
+export function readSessionMemory(jpgFolder: string): [number, string] | null {
+  const v = sessionMemory.get(normalizeDir(jpgFolder));
+  return v ? [...v] : null;
+}
+
+/**
+ * 预置内存库并安装联动的 save/load 函数式 mock。
+ * 调用后 `save_session_cmd` 的参数写进表、`load_session_cmd` 读回表（无行返回 null，
+ * 与 `db.rs load_session` 的 `None` 同义）。
+ */
+export function seedSession(
+  jpgFolder: string,
+  lastIndex: number,
+  sortOrder: string,
+): void {
+  sessionMemory.set(normalizeDir(jpgFolder), [lastIndex, sortOrder]);
+  mockInvokeCommand('save_session_cmd', (args) => {
+    sessionMemory.set(normalizeDir(String((args as Record<string, unknown> | undefined)?.jpgFolder ?? '')), [
+      Number((args as Record<string, unknown> | undefined)?.lastIndex ?? 0),
+      String((args as Record<string, unknown> | undefined)?.sortOrder ?? 'time_filename'),
+    ]);
+    return true;
+  });
+  mockInvokeCommand('load_session_cmd', (args) => {
+    const v = sessionMemory.get(
+      normalizeDir(String((args as Record<string, unknown> | undefined)?.jpgFolder ?? '')),
+    );
+    return v ? [v[0], v[1]] : null;
+  });
+}
 
 /** 命令名 -> 返回值（可能是函数式，按 args 求值）。 */
 const commandResults = new Map<string, unknown>();
@@ -241,6 +285,7 @@ export function resetInvokeMocks(): void {
   commandErrors.clear();
   invokeHandler = null;
   invokeSpy.mockClear();
+  sessionMemory.clear();
   resetMockEvents();
   resetMockWindow();
 }

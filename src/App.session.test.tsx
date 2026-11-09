@@ -16,7 +16,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import App from './App';
-import { invokeCount, lastInvokeArgs, mockInvokeCommand } from './test/setup';
+import {
+  invokeCount,
+  lastInvokeArgs,
+  mockInvokeCommand,
+  readSessionMemory,
+  seedSession,
+} from './test/setup';
 import type { FolderScanResult, PhotoGroupInfo, ToneState } from './types';
 import { DEFAULT_TONE } from './utils/autoTone';
 
@@ -119,7 +125,7 @@ describe('App —— 扫描会话防抖保存 (N-14b)', () => {
     mockStartup(null);
     await scanCompleted();
 
-    // 让「目录设置完成后」排队的那次防抖先落地，得到一个基线。
+    // issue #108 后：启动未扫描不写盘，这里落地的 1 次是扫描后恢复 0 的写盘（PA 门控放行后）。
     await advance(500);
     const base = invokeCount('save_session_cmd');
     expect(base).toBe(1);
@@ -144,6 +150,35 @@ describe('App —— 扫描会话防抖保存 (N-14b)', () => {
     await advance(500);
 
     expect(screen.getByLabelText('当前第 3 张，共 5 张')).toBeInTheDocument();
+  });
+
+  it('启动初始化写入不应覆盖历史值（issue #108 墓碑 PA）', async () => {
+    // 库里已有 last_index=4（第 5 张），启动后未扫描时推进防抖窗口，
+    // 绝不能把初值 0 写盘覆盖。去掉 hasScanned 门控恢复无条件写 0，本条必红。
+    mockStartup(null);
+    seedSession('D:/shoot/JPG', 4, 'time_filename');
+    render(<App />);
+    await flush();
+    await advance(500);
+    expect(invokeCount('save_session_cmd')).toBe(0);
+    expect(readSessionMemory('D:/shoot/JPG')).toEqual([4, 'time_filename']);
+  });
+
+  it('重启 → 扫描 → 回到上次索引（issue #108 墓碑 PB，内存库 round-trip）', async () => {
+    // seed 内存库 4 → 启动 → 未扫描不覆盖 → 扫描 → 读回 4 → 底栏第 5 张。
+    // 先 advance(500) 复现真实时序（启动后用户先停 500ms+ 才点扫描）：
+    // 修前启动写入先把内存库打成 0，扫描恢复 0，底栏为第 1 张，本条红。
+    mockStartup(null);
+    seedSession('D:/shoot/JPG', 4, 'time_filename');
+    render(<App />);
+    await flush();
+    await advance(500);
+    const btn = screen.getByRole('button', { name: '扫描照片目录' });
+    fireEvent.click(btn);
+    await flush();
+    expect(screen.getByText(/扫描完成/)).toBeInTheDocument();
+    expect(screen.getByLabelText('当前第 5 张，共 5 张')).toBeInTheDocument();
+    expect(readSessionMemory('D:/shoot/JPG')).toEqual([4, 'time_filename']);
   });
 
   it('重新扫描会静默丢弃钉基准（既有语义，用测试钉住）', async () => {
