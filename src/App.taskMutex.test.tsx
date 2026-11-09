@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { mockInvokeCommand } from './test/setup';
+import { makeSettings } from './test/settingsFactory';
 import type { FolderScanResult, PhotoGroupInfo } from './types';
 
 const group = (id: string): PhotoGroupInfo => ({
@@ -37,17 +38,7 @@ const scanResult: FolderScanResult = {
 };
 
 function mockStartup(overrides: { scan?: unknown } = {}) {
-  mockInvokeCommand('get_settings_cmd', {
-    defaultJpgFolder: 'D:/shoot/JPG',
-    defaultRawFolder: '',
-    photoshopPath: '',
-    thumbnailWidth: 200,
-    sortOrder: 'time_filename',
-    lumenEnabled: false,
-    lumenCliPath: '',
-    lumenGridThumbnails: false,
-    lumenExpectAi: false,
-  });
+  mockInvokeCommand('get_settings_cmd', makeSettings());
   mockInvokeCommand('save_settings_cmd', true);
   mockInvokeCommand('save_session_cmd', true);
   mockInvokeCommand('scan_folders_cmd', overrides.scan ?? scanResult);

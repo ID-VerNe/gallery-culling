@@ -11,6 +11,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import App from './App';
 import { invokeCalls, invokeCount, mockInvokeCommand } from './test/setup';
+import { makeSettings } from './test/settingsFactory';
 import type { AlbumOpenResult, FolderScanResult, PhotoGroupInfo } from './types';
 
 const openMock = vi.mocked(openDialog);
@@ -65,17 +66,7 @@ const albumResult: AlbumOpenResult = {
 };
 
 function mockStartup() {
-  mockInvokeCommand('get_settings_cmd', {
-    defaultJpgFolder: 'D:/shoot/JPG',
-    defaultRawFolder: '',
-    photoshopPath: '',
-    thumbnailWidth: 200,
-    sortOrder: 'time_filename',
-    lumenEnabled: false,
-    lumenCliPath: '',
-    lumenGridThumbnails: false,
-    lumenExpectAi: false,
-  });
+  mockInvokeCommand('get_settings_cmd', makeSettings());
   mockInvokeCommand('save_settings_cmd', true);
   mockInvokeCommand('save_session_cmd', true);
   mockInvokeCommand('scan_folders_cmd', scanResult);

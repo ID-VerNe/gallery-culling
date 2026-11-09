@@ -17,7 +17,8 @@ import { describe, it, expect } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { invokeCount, mockInvokeCommand } from './test/setup';
-import type { FolderScanResult, PhotoGroupInfo } from './types';
+import { makeSettings } from './test/settingsFactory';
+import type { FolderScanResult, PhotoGroupInfo, SortOrder } from './types';
 
 const mkGroup = (baseName: string): PhotoGroupInfo => ({
   id: baseName.toLowerCase(),
@@ -47,20 +48,10 @@ const scanResult: FolderScanResult = {
 
 /** 启动 mock；sortOrder 可指定（模拟本机库里保存过的排序），history 为会话索引。 */
 function mockStartup(
-  savedSortOrder: string,
+  savedSortOrder: SortOrder,
   history: [number, string] | null = null,
 ) {
-  mockInvokeCommand('get_settings_cmd', {
-    defaultJpgFolder: 'D:/shoot/JPG',
-    defaultRawFolder: '',
-    photoshopPath: '',
-    thumbnailWidth: 200,
-    sortOrder: savedSortOrder,
-    lumenEnabled: false,
-    lumenCliPath: '',
-    lumenGridThumbnails: false,
-    lumenExpectAi: false,
-  });
+  mockInvokeCommand('get_settings_cmd', makeSettings({ sortOrder: savedSortOrder }));
   mockInvokeCommand('save_settings_cmd', true);
   mockInvokeCommand('save_session_cmd', true);
   mockInvokeCommand('load_session_cmd', history);
