@@ -5,9 +5,9 @@
  * 抛错，两条路都必须静默回落到相机内嵌缩略图。断言用 invoke 的**命令名**来区分
  * 走了哪条路。
  */
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { ThumbnailGrid } from './ThumbnailGrid';
+import { resetThumbnailLoaderForTest, ThumbnailGrid } from './ThumbnailGrid';
 import { invokeCount, lastInvokeArgs, mockInvokeCommand, mockInvokeError } from '../test/setup';
 import type { PhotoGroupInfo } from '../types';
 
@@ -43,6 +43,12 @@ function renderGrid(groups: PhotoGroupInfo[], lumenThumbnails: boolean) {
 
 const cellFor = (name: string) =>
   screen.getByRole('option', { name: new RegExp(name) });
+
+// issue #107：loader 提到模块级后跨用例存活 — 每个用例从空缓存起测，
+// 否则共用路径（D:/shoot/a.*）会在测试间串扰计数。
+beforeEach(() => {
+  resetThumbnailLoaderForTest();
+});
 
 describe('ThumbnailGrid —— 缩略图来源', () => {
   it('lumenThumbnails=false：只调 get_thumbnail_cmd，一次都不碰 lumen_preview_cmd', async () => {
