@@ -50,6 +50,7 @@ import { isToneAutoSaveEnabled } from './utils/toneAutoSave';
 import { sortAlbumGroups, toAlbumItems } from './utils/albumGroups';
 import { isSameDir } from './utils/pathNormalize';
 import { usesExifField } from './utils/queryMatch';
+import { fileNameOf } from './utils/pathNormalize';
 import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from './utils/viewportZoom';
 
 
@@ -758,7 +759,7 @@ function AppShell() {
         isRefreshingXmp={xmpRefresh.refreshing}
         scanBlockedReason={mutex.blockReason('scan')}
         onOpenAlbum={() => setIsAlbumOpen(true)}
-        albumName={album.path ? baseNameOfPath(album.path) : null}
+        albumName={album.path ? fileNameOf(album.path) : null}
         albumCount={album.path ? groups.length : undefined}
         onImportLrcat={() => setIsLrcatOpen(true)}
       />
@@ -1135,15 +1136,10 @@ function AppShell() {
  * 只显示文件名不显示全路径 —— 弹窗宽度有限，而用户认得出自己的照片；
  * 完整路径在 tooltip 与日志里。
  */
-/** 取路径末段（顶栏芯片只放得下文件名）。 */
-function baseNameOfPath(path: string): string {
-  return path.split(/[\/]/).pop() ?? path;
-}
-
 function conflictMessage(conflict: UndoConflict | null): string {
   if (!conflict) return '';
   const lines = conflict.details.slice(0, 5).map((d) => {
-    const name = d.path.split(/[\\/]/).pop() ?? d.path;
+    const name = fileNameOf(d.path);
     return `· ${name}：${d.detail}`;
   });
   if (conflict.details.length > 5) {

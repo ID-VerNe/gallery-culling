@@ -14,6 +14,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { Modal } from './Modal';
 import { isColorLabel, LABEL_DOT_CLASS, labelName } from '../utils/labels';
+import { fileNameOf } from '../utils/pathNormalize';
 import type {
   CullStateSnapshot,
   XmpConflictAction,
@@ -36,10 +37,6 @@ const DEFAULT_ACTION: XmpConflictAction = 'keep-local';
 function stars(rating: number): string {
   const filled = Math.max(0, Math.min(5, rating));
   return '★'.repeat(filled) + '☆'.repeat(5 - filled);
-}
-
-function baseNameOf(path: string): string {
-  return path.split(/[\\/]/).pop() ?? path;
 }
 
 /** 三项标记的紧凑展示：星级 + 旗标 + 色标点。 */
@@ -169,7 +166,7 @@ export const XmpConflictDialog: React.FC<XmpConflictDialogProps> = ({
 
       <ul className="flex flex-col gap-2">
         {conflicts.map((c) => {
-          const name = baseNameOf(c.path);
+          const name = fileNameOf(c.path);
           const action = actionOf(c);
           return (
             <li
