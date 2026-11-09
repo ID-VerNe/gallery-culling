@@ -5,22 +5,19 @@ import {
   planLrcatImport,
   selectLrcatWrites,
 } from './lrcatMatch';
+import { makeFile, makeGroup } from '../test/factories';
 import type { LrcatPhoto, PhotoGroupInfo } from '../types';
 
 function group(over: Partial<PhotoGroupInfo> = {}): PhotoGroupInfo {
   const base = over.baseName ?? 'DSC1';
   const dir = over.id ? over.id.slice(0, over.id.lastIndexOf('/')) : 'D:/shoot';
-  return {
-    id: `${dir}/${base}`,
+  return makeGroup(`${dir}/${base}`, {
     baseName: base,
-    raw: { name: `${base}.ARW`, extension: 'ARW', path: `${dir}/${base}.ARW`, size: 1, mtime: 0 },
+    raw: makeFile(`${dir}/${base}.ARW`, { extension: 'ARW', size: 1 }),
     status: 'RAW_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '',
-    hasXmp: false,
+    jpg: undefined,
     ...over,
-  } as PhotoGroupInfo;
+  });
 }
 
 function photo(over: Partial<LrcatPhoto> = {}): LrcatPhoto {

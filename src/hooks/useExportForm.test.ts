@@ -11,35 +11,29 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useExportForm } from './useExportForm';
+import { makeFile, makeGroup } from '../test/factories';
 import type { CullFlag, FilterMode, PhotoGroupInfo } from '../types';
 import { parseQuery } from '../utils/queryMatch';
 
-const file = (path: string) => ({
-  name: path.split('/').pop() ?? '',
-  extension: (path.split('.').pop() ?? '').toLowerCase(),
-  path,
-  size: 1024,
-  mtime: 0,
-});
-
+// E-07 守护：`opts.xmp ?? false` 是变异锚点（issue #117 重构后仍需红）。
+// 工厂默认 `hasXmp: false`，这里显式透传 opts.xmp 保证
+// `mk('X', { xmp: true }) -> 3` 的断言能抓 XMP 分支。
 const mk = (
   baseName: string,
   opts: { flag?: CullFlag; rating?: number; dir?: string; raw?: boolean; xmp?: boolean } = {},
 ): PhotoGroupInfo => {
   const dir = opts.dir ?? 'D:/shoot/JPG';
   const hasRaw = opts.raw !== false;
-  return {
-    id: baseName,
-    baseName,
-    jpg: file(`${dir}/${baseName}.jpg`),
-    // raw 是**可选**字段：没有 RAW 的组必须真的不带这个键（而不是 null），
-    // 否则 `g.raw ? …` 的判断与真实扫描结果不一致，「仅含 RAW」档会误收。
-    ...(hasRaw ? { raw: file(`D:/shoot/RAW/${baseName}.NEF`) } : {}),
-    status: hasRaw ? 'COMPLETE' : 'JPG_ONLY',
+  return makeGroup(baseName, {
     rating: opts.rating ?? 0,
     flag: opts.flag ?? 'none',
-    label: '', hasXmp: opts.xmp ?? false,
-  };
+    hasXmp: opts.xmp ?? false,
+    status: hasRaw ? 'COMPLETE' : 'JPG_ONLY',
+    jpg: makeFile(`${dir}/${baseName}.jpg`),
+    // raw 是**可选**字段：没有 RAW 的组必须真的不带这个键（而不是 null），
+    // 否则 `g.raw ? …` 的判断与真实扫描结果不一致，「仅含 RAW」档会误收。
+    ...(hasRaw ? { raw: makeFile(`D:/shoot/RAW/${baseName}.NEF`) } : {}),
+  });
 };
 
 /**

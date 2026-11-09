@@ -8,27 +8,17 @@ import { describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { useRatingFlagSync } from './useRatingFlagSync';
 import { invokeCalls, mockInvokeCommand } from '../test/setup';
+import { makeGroup, rawFile } from '../test/factories';
 import type { PhotoGroupInfo } from '../types';
 
-function group(overrides: Partial<PhotoGroupInfo> = {}): PhotoGroupInfo {
-  return {
-    id: 'A0001',
-    baseName: 'A0001',
-    raw: {
-      name: 'A0001.ARW',
-      extension: 'ARW',
-      path: 'D:/shoot/A0001.ARW',
-      size: 1,
-      mtime: 1,
-    },
+const group = (overrides: Partial<PhotoGroupInfo> = {}) =>
+  makeGroup('A0001', {
     status: 'RAW_ONLY',
+    raw: rawFile('A0001', 'ARW', 'D:/shoot'),
     rating: 3,
-    flag: 'none',
-    label: '',
-    hasXmp: false,
+    jpg: undefined,
     ...overrides,
-  };
-}
+  });
 
 function setup(g: PhotoGroupInfo) {
   mockInvokeCommand('update_rating_flag_cmd', true);

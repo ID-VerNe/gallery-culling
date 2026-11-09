@@ -8,24 +8,11 @@
  */
 import { describe, expect, it } from 'vitest';
 import { ALL_FILTER_MODES, countByFilter, matchesFilter } from './filterMatch';
+import { makeGroup } from '../test/factories';
 import type { CullFlag, FilterMode, PhotoGroupInfo } from '../types';
 
-function group(
-  id: string,
-  flag: CullFlag,
-  rating: number,
-  label = '',
-): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
-    status: 'JPG_ONLY',
-    rating,
-    flag,
-    label,
-    hasXmp: false,
-  };
-}
+const group = (id: string, flag: CullFlag, rating: number, label = '') =>
+  makeGroup(id, { flag, rating, label, jpg: undefined });
 
 /** 覆盖每个档位边界：保留/淘汰/未标记、0★/1★/3★/4★/5★。 */
 const FIXTURE: PhotoGroupInfo[] = [

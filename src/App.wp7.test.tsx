@@ -10,37 +10,18 @@ import { describe, it, expect } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import App from './App';
 import { mockInvokeCommand } from './test/setup';
+import { makeGroup } from './test/factories';
 import { makeSettings } from './test/settingsFactory';
-import type { CullFlag, FolderScanResult, PhotoGroupInfo, ToneState } from './types';
+import type { FolderScanResult, ToneState } from './types';
 import { DEFAULT_TONE } from './utils/autoTone';
-
-const mkGroup = (
-  baseName: string,
-  rating: number,
-  flag: CullFlag,
-): PhotoGroupInfo => ({
-  id: baseName.toLowerCase(),
-  baseName,
-  jpg: {
-    name: `${baseName}.jpg`,
-    extension: 'jpg',
-    path: `D:/shoot/JPG/${baseName}.jpg`,
-    size: 1024,
-    mtime: 0,
-  },
-  status: 'JPG_ONLY',
-  rating,
-  flag,
-  label: '', hasXmp: false,
-});
 
 // all=5 · pick=1 · reject=1 · unmarked=1 · star3=2 · star5=1
 const allGroups = [
-  mkGroup('DSC_1001', 3, 'none'),
-  mkGroup('DSC_1002', 5, 'pick'),
-  mkGroup('DSC_2001', 0, 'reject'),
-  mkGroup('DSC_2002', 0, 'none'),
-  mkGroup('DSC_3001', 2, 'none'),
+  makeGroup('dsc_1001', { baseName: 'DSC_1001', rating: 3 }),
+  makeGroup('dsc_1002', { baseName: 'DSC_1002', rating: 5, flag: 'pick' }),
+  makeGroup('dsc_2001', { baseName: 'DSC_2001', flag: 'reject' }),
+  makeGroup('dsc_2002', { baseName: 'DSC_2002' }),
+  makeGroup('dsc_3001', { baseName: 'DSC_3001', rating: 2 }),
 ];
 
 const scanResult: FolderScanResult = {

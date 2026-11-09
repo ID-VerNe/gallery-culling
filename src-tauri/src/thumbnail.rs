@@ -296,7 +296,7 @@ fn get_or_create_thumbnail_single(
     file_path: &Path,
     target_width: u32,
     abs_path: &Path,
-    mtime: u64,
+    mtime: u128,
     read_orientation_fn: &impl Fn(&Path) -> u32,
 ) -> Result<String, String> {
     let index_key = ThumbIndexKey {
@@ -696,43 +696,152 @@ mod tests {
         let _: StdMutex<()> = StdMutex::new(());
     }
 
-    /// 存量缓存兼容性的硬证明：用**旧算法**（重构前逐字）复算缓存文件名，断言与
-    /// 重构后的 `cache_path_for` 完全一致。若不一致，说明已有缓存会被整体作废。
+    /// issue #142 墓碑：同秒覆写（mtime 只前进 500ms、秒数不变）必须重新生成，
+    /// 不能命中进程内索引返回旧图。基线（秒级指纹 + 索引命中只查
+    /// `cache_file_usable`）下第二次调用读 0 次 orientation、返回同一路径旧字节 → 红。
     #[test]
-    fn cache_path_matches_legacy_algorithm() {
+    fn thumbnail_same_second_rewrite_regenerates() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = TEMP_SEQ.fetch_add(1, Ordering::SeqCst);
+        let root =
+            std::env::temp_dir().join(format!("gfx_samesecond142_{}_{}", std::process::id(), seq));
+        let data_dir = root.join("data");
+        let src_dir = root.join("src");
+        std::fs::create_dir_all(&src_dir).expect("create src dir");
+        let src = src_dir.join("photo142.jpg");
+
+        // 固定同一秒内的两个时刻：首次 +100ms，覆写后 +600ms（秒相同、纳秒不同）。
+        let base = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let write_src = |rgb: image::Rgb<u8>| {
+            let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(400, 300, rgb));
+            img.save(&src).expect("save source jpg");
+        };
+        let set_mtime = |t: std::time::SystemTime| {
+            std::fs::File::options()
+                .write(true)
+                .open(&src)
+                .expect("open for set_modified")
+                .set_modified(t)
+                .expect("set mtime");
+        };
+
+        write_src(image::Rgb([200, 30, 30]));
+        set_mtime(base + Duration::from_millis(100));
+
+        let prev = std::env::var_os(crate::db::DATA_DIR_ENV);
+        std::env::set_var(crate::db::DATA_DIR_ENV, &data_dir);
+        struct EnvGuard(Option<std::ffi::OsString>);
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match &self.0 {
+                    Some(v) => std::env::set_var(crate::db::DATA_DIR_ENV, v),
+                    None => std::env::remove_var(crate::db::DATA_DIR_ENV),
+                }
+            }
+        }
+        let _guard = EnvGuard(prev);
+
+        let first = get_or_create_thumbnail(&src, 200).expect("首次生成");
+        let first_bytes = std::fs::read(&first).expect("read first thumb");
+        assert!(
+            PathBuf::from(&first).starts_with(&data_dir),
+            "缓存必须落在隔离目录 {}",
+            data_dir.display()
+        );
+
+        // 同秒覆写：换像素 + mtime 只前进 500ms。
+        write_src(image::Rgb([30, 200, 30]));
+        set_mtime(base + Duration::from_millis(600));
+
+        let reads = Cell::new(0u32);
+        let second = get_or_create_thumbnail_with(&src, 200, |_| {
+            reads.set(reads.get() + 1);
+            1
+        })
+        .expect("覆写后生成");
+
+        assert_eq!(
+            reads.get(),
+            1,
+            "同秒覆写必须落到未命中分支（读一次 orientation）；索引命中读 0 次即 stale"
+        );
+        assert_ne!(
+            second, first,
+            "同秒覆写必须换缓存路径（纳秒指纹进 payload）"
+        );
+        let second_bytes = std::fs::read(&second).expect("read second thumb");
+        assert_ne!(
+            second_bytes, first_bytes,
+            "同秒覆写后缩略图内容必须已换，不能返回旧字节"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 存量缓存兼容性的硬证明（issue #142 修订）：自 thumb-v3 起，指纹改纳秒、
+    /// payload 后缀 `thumb-v2` → `thumb-v3`，旧缓存**有意一次性失效**（懒重生成，
+    /// 论证见 PR/plan）。本测试用独立复算的 v3 算法锁住新口径，并断言它与
+    /// v2 旧算法确实不同，防止有人静默回退到秒级键。
+    #[test]
+    fn cache_path_matches_thumb_v3_algorithm() {
         use sha2::Digest as _;
+        use std::time::UNIX_EPOCH;
         let src = unique_temp_file("legacy");
 
-        let legacy = {
-            let abs = std::fs::canonicalize(&src).unwrap_or_else(|_| src.clone());
-            let mtime = std::fs::metadata(&src)
+        let (abs, mtime_nanos) = {
+            let a = std::fs::canonicalize(&src).unwrap_or_else(|_| src.clone());
+            let nanos = std::fs::metadata(&src)
                 .and_then(|m| m.modified())
-                .map(|t| {
-                    t.duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs()
-                })
+                .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos())
+                .unwrap_or(0);
+            (a, nanos)
+        };
+        let hash16 = |key: String| {
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(key.as_bytes());
+            format!("{:x}", hasher.finalize())
+        };
+        let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
+        let v3 = {
+            let key = format!(
+                "{}-{}-{}-{}-thumb-v3",
+                abs.to_string_lossy(),
+                mtime_nanos,
+                200u32,
+                1u32
+            );
+            let hash = hash16(key);
+            let filename = format!("{}_{}_{}_rot{}.jpg", &hash[..16], stem, 200u32, 1u32);
+            get_cache_dir().join(filename)
+        };
+        let v2_legacy = {
+            let mtime_secs = std::fs::metadata(&src)
+                .and_then(|m| m.modified())
+                .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs())
                 .unwrap_or(0);
             let key = format!(
                 "{}-{}-{}-{}-thumb-v2",
                 abs.to_string_lossy(),
-                mtime,
+                mtime_secs,
                 200u32,
                 1u32
             );
-            let mut hasher = sha2::Sha256::new();
-            hasher.update(key.as_bytes());
-            let hash = format!("{:x}", hasher.finalize());
-            let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
+            let hash = hash16(key);
             let filename = format!("{}_{}_{}_rot{}.jpg", &hash[..16], stem, 200u32, 1u32);
             get_cache_dir().join(filename)
         };
 
-        let (abs, mtime) = file_fingerprint(&src);
+        let (abs2, mtime2) = file_fingerprint(&src);
+        assert_eq!(abs2, abs);
         assert_eq!(
-            cache_path_for(&abs, mtime, &src, 200, 1),
-            legacy,
-            "重构后的缓存文件名必须与旧算法逐字一致（否则存量缓存全部失效）"
+            cache_path_for(&abs2, mtime2, &src, 200, 1),
+            v3,
+            "thumb-v3 纳秒口径必须与独立复算一致"
+        );
+        assert_ne!(
+            v3, v2_legacy,
+            "thumb-v3 必须与 v2 秒级旧算法不同（有意失效，不得静默复用旧缓存）"
         );
         cleanup_temp(&src);
     }

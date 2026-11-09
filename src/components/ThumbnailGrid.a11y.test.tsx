@@ -9,19 +9,10 @@ import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { ThumbnailGrid } from './ThumbnailGrid';
 import { mockInvokeCommand } from '../test/setup';
-import type { PhotoGroupInfo } from '../types';
+import { makeGroup, rawFile } from '../test/factories';
 
-function group(id: string): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
-    raw: { name: `${id}.CR3`, extension: 'CR3', path: `D:/s/${id}.CR3`, size: 1, mtime: 0 },
-    status: 'RAW_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '', hasXmp: false,
-  };
-}
+const group = (id: string) =>
+  makeGroup(id, { status: 'RAW_ONLY', raw: rawFile(id, 'CR3', 'D:/s'), jpg: undefined });
 
 const GROUPS = ['a', 'b', 'c'].map(group);
 

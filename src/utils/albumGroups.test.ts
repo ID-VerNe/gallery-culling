@@ -9,6 +9,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { toAlbumGroups, toAlbumItems, sortAlbumGroups } from './albumGroups';
+import { makeFile, makeGroup } from '../test/factories';
 import type { AlbumOpenResult, AlbumResolvedDoc, PhotoGroupInfo } from '../types';
 
 function doc(over: Partial<AlbumResolvedDoc> = {}): AlbumResolvedDoc {
@@ -147,16 +148,8 @@ describe('toAlbumGroups —— 分组重建', () => {
 });
 
 describe('toAlbumItems —— 保存时取哪些路径', () => {
-  const group = (over: Partial<PhotoGroupInfo>): PhotoGroupInfo => ({
-    id: 'x',
-    baseName: 'a',
-    status: 'RAW_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '',
-    hasXmp: false,
-    ...over,
-  });
+  const group = (over: Partial<PhotoGroupInfo>) =>
+    makeGroup('x', { baseName: 'a', status: 'RAW_ONLY', jpg: undefined, ...over });
 
   it('RAW 优先，配对 JPG 单独给一条', () => {
     const items = toAlbumItems([
@@ -190,16 +183,13 @@ describe('toAlbumItems —— 保存时取哪些路径', () => {
 });
 
 describe('sortAlbumGroups —— 选片集视图本地排序', () => {
-  const g = (baseName: string, rating: number, mtime: number): PhotoGroupInfo => ({
-    id: baseName,
-    baseName,
-    status: 'RAW_ONLY',
-    rating,
-    flag: 'none',
-    label: '',
-    hasXmp: false,
-    raw: { name: `${baseName}.ARW`, extension: 'arw', path: `/x/${baseName}.ARW`, size: 1, mtime },
-  });
+  const g = (baseName: string, rating: number, mtime: number) =>
+    makeGroup(baseName, {
+      status: 'RAW_ONLY',
+      rating,
+      jpg: undefined,
+      raw: makeFile(`/x/${baseName}.ARW`, { extension: 'arw', size: 1, mtime }),
+    });
 
   it('按文件名', () => {
     const out = sortAlbumGroups([g('b', 1, 2), g('a', 5, 9)], 'filename');

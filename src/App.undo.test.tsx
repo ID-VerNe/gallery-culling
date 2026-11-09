@@ -9,25 +9,12 @@ import { describe, it, expect } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import App from './App';
 import { invokeCount, lastInvokeArgs, mockInvokeCommand } from './test/setup';
+import { makeGroup } from './test/factories';
 import { makeSettings } from './test/settingsFactory';
 import type { FolderScanResult, PhotoGroupInfo, ToneState } from './types';
 import { DEFAULT_TONE } from './utils/autoTone';
 
-const group: PhotoGroupInfo = {
-  id: 'g1',
-  baseName: 'IMG_0001',
-  jpg: {
-    name: 'IMG_0001.jpg',
-    extension: 'jpg',
-    path: 'D:/shoot/JPG/IMG_0001.jpg',
-    size: 1024,
-    mtime: 0,
-  },
-  status: 'JPG_ONLY',
-  rating: 0,
-  flag: 'none',
-  label: '', hasXmp: false,
-};
+const group = makeGroup('g1', { baseName: 'IMG_0001' });
 
 const scanResult: FolderScanResult = {
   groups: [group],
@@ -72,22 +59,9 @@ async function scanOne(groups: PhotoGroupInfo[] = [group]) {
 }
 
 /** 三张不同起点的照片：撤销时能凭写回的 rating 分辨回退到哪一层。 */
-const trio: PhotoGroupInfo[] = [1, 2, 3].map((rating, i) => {
-  const name = `IMG_000${i + 1}`;
-  return {
-    ...group,
-    id: `g${i + 1}`,
-    baseName: name,
-    rating,
-    jpg: {
-      name: `${name}.jpg`,
-      extension: 'jpg',
-      path: `D:/shoot/JPG/${name}.jpg`,
-      size: 1024,
-      mtime: 0,
-    },
-  };
-});
+const trio = [1, 2, 3].map((rating, i) =>
+  makeGroup(`g${i + 1}`, { baseName: `IMG_000${i + 1}`, rating }),
+);
 
 const rateCalls = () => invokeCount('update_rating_flag_cmd');
 

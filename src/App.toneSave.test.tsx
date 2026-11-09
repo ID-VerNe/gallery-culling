@@ -9,25 +9,12 @@ import { describe, it, expect } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { invokeCount, mockInvokeCommand } from './test/setup';
+import { makeGroup } from './test/factories';
 import { makeSettings } from './test/settingsFactory';
-import type { FolderScanResult, PhotoGroupInfo, ToneState } from './types';
+import type { FolderScanResult, ToneState } from './types';
 import { DEFAULT_TONE } from './utils/autoTone';
 
-const group: PhotoGroupInfo = {
-  id: 'g1',
-  baseName: 'IMG_0001',
-  jpg: {
-    name: 'IMG_0001.jpg',
-    extension: 'jpg',
-    path: 'D:/shoot/JPG/IMG_0001.jpg',
-    size: 1024,
-    mtime: 0,
-  },
-  status: 'JPG_ONLY',
-  rating: 0,
-  flag: 'none',
-  label: '', hasXmp: false,
-};
+const group = makeGroup('g1', { baseName: 'IMG_0001' });
 
 const scanResult: FolderScanResult = {
   groups: [group],

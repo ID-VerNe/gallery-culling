@@ -22,6 +22,7 @@ import {
   mockInvokeError,
   setInvokeHandler,
 } from '../test/setup';
+import { makeFile, makeGroup, rawFile } from '../test/factories';
 import type {
   CullStateSnapshot,
   PhotoGroupInfo,
@@ -50,32 +51,14 @@ vi.mock('../components/Toast', () => ({ useToast: () => toastApi }));
 /* 夹具                                                                        */
 /* -------------------------------------------------------------------------- */
 
-function group(id: string, extra: Partial<PhotoGroupInfo> = {}): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
-    raw: {
-      name: `${id}.ARW`,
-      extension: 'ARW',
-      path: `D:/shoot/RAW/${id}.ARW`,
-      size: 1,
-      mtime: 1,
-    },
-    jpg: {
-      name: `${id}.JPG`,
-      extension: 'JPG',
-      path: `D:/shoot/JPG/${id}.JPG`,
-      size: 1,
-      mtime: 1,
-    },
+const group = (id: string, extra: Partial<PhotoGroupInfo> = {}) =>
+  makeGroup(id, {
     status: 'COMPLETE',
-    rating: 0,
-    flag: 'none',
-    label: '',
+    raw: rawFile(id),
+    jpg: makeFile(`D:/shoot/JPG/${id}.JPG`, { extension: 'JPG', size: 1, mtime: 1 }),
     hasXmp: true,
     ...extra,
-  };
-}
+  });
 
 const state = (
   rating: number,

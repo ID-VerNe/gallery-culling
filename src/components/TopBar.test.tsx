@@ -9,13 +9,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { TopBar } from './TopBar';
 import { countByFilter } from '../utils/filterMatch';
-import type { CullFlag, FilterMode, PhotoGroupInfo } from '../types';
+import { makeGroup } from '../test/factories';
+import type { FilterMode } from '../types';
 
-const GROUPS: PhotoGroupInfo[] = [
-  { id: 'a', baseName: 'a', status: 'JPG_ONLY', rating: 3, flag: 'pick', label: '', hasXmp: false },
-  { id: 'b', baseName: 'b', status: 'JPG_ONLY', rating: 0, flag: 'reject', label: '', hasXmp: false },
-  { id: 'c', baseName: 'c', status: 'JPG_ONLY', rating: 0, flag: 'none' as CullFlag, label: '', hasXmp: false },
-  { id: 'd', baseName: 'd', status: 'JPG_ONLY', rating: 5, flag: 'none' as CullFlag, label: '', hasXmp: false },
+const GROUPS = [
+  makeGroup('a', { rating: 3, flag: 'pick', jpg: undefined }),
+  makeGroup('b', { flag: 'reject', jpg: undefined }),
+  makeGroup('c', { jpg: undefined }),
+  makeGroup('d', { rating: 5, jpg: undefined }),
 ];
 
 function renderTopBar(

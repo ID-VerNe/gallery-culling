@@ -45,10 +45,11 @@ npm run parity                             # CI 等价复跑：在被推送 sha 
 | 6 | `static` | `check-version-sync.mjs` | `package.json`、`src-tauri/tauri.conf.json`、`package-lock.json` 的两处根版本必须一致（issue #23）。2.0.4 那次 bump 漏了 lock，`npm ci` 不报错、也没有门禁拦，不一致躺了一个版本 |
 | 7 | `static` | `check-borders-emitted.mjs` | 扫 src 里所有描边颜色类，逐个去 Tailwind 产物里核对有没有规则（issue #18 · PD-1）。`border.default` 生成的是 `border-border-default`，写成 `border-default` 时一条规则都不产出、回落 currentColor（body 为 text-white，看起来是 100% 白线），只有这条能盯住 |
 | 8 | `static` | `check-sidecar-lock.mjs` | sidecar 锁文件与磁盘产物一致（issue #73）：锁文件字段齐全、`version` 与 `PINNED_LUMEN_VERSION` 一致；产物在盘时再核 exe 哈希、目录文件数与 contentSha256。锁文件入库而 181.6MB 产物不入库，换产物没人报警只能靠这条。干净检出恒无产物，此时打印「未取回」并放行——CI 上固定红就失去意义 |
-| 9 | `unit` | `vitest` | 前端全量用例；--pool=vmForks 见 vitest.config.ts 的 pool 说明（Windows 上的既定跑法）。直指包内入口而非 `npx vitest`：本地缺席时 npx 会去 registry 装 vitest@5（另一个大版本，可能真报绿），绕过了 package-lock（issue #24） |
-| 10 | `rust` | `cargo test --lib` | 后端全量单测（真 tmpdir，不 mock fs）；7 例真机冒烟默认 ignored |
+| 9 | `static` | `check-export-names.mjs` | 三处手写导出名一致性（issue #124）：解析 Rust 的 EXPORT_MANIFEST_NAME/EXPORT_TMP_PREFIX，与 TS exportMessages.ts 及 e2e 字面量逐个比对；改任一处后只有这条能变红 |
+| 10 | `unit` | `vitest` | 前端全量用例；--pool=vmForks 见 vitest.config.ts 的 pool 说明（Windows 上的既定跑法）。直指包内入口而非 `npx vitest`：本地缺席时 npx 会去 registry 装 vitest@5（另一个大版本，可能真报绿），绕过了 package-lock（issue #24） |
+| 11 | `rust` | `cargo test --lib` | 后端全量单测（真 tmpdir，不 mock fs）；7 例真机冒烟默认 ignored |
 
-共 10 个 CI 门禁，分 3 个分片（static 8、unit 1、rust 1）；manual 2、support 1 见 `scripts/gates.json`。
+共 11 个 CI 门禁，分 3 个分片（static 9、unit 1、rust 1）；manual 2、support 1 见 `scripts/gates.json`。
 <!-- gates:ci:end -->
 
 ### 0.2 证据与验证纪律
@@ -93,7 +94,7 @@ npm run parity                             # CI 等价复跑：在被推送 sha 
 
 - `src-tauri/src/lumen.rs`：3101 行 → **58 行门面 + 12 个子模块**
 - `src-tauri/src/commands.rs`：1673 行 → **209 行门面 + 8 个子模块**
-- `src/App.tsx`：1810 行 → **686 行 + 22 个自定义 hook**
+- `src/App.tsx`：1166 行 → **1134 行 + 24 个自定义 hook**（#112 抽出 `useScanSessionPolicy` 与状态栏/空状态纯 selector 后）
 - 三个视口合计 1790 行 → 1278 行
 - 共享层：
   - `src/utils/viewportZoom.ts` —— 缩放几何**单一真值**

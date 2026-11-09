@@ -11,30 +11,14 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import App from './App';
 import { invokeCalls, invokeCount, mockInvokeCommand } from './test/setup';
+import { makeGroup } from './test/factories';
 import { makeSettings } from './test/settingsFactory';
-import type { AlbumOpenResult, FolderScanResult, PhotoGroupInfo } from './types';
+import type { AlbumOpenResult, FolderScanResult } from './types';
 
 const openMock = vi.mocked(openDialog);
 
-const group = (id: string): PhotoGroupInfo => ({
-  id,
-  baseName: id,
-  jpg: {
-    name: `${id}.jpg`,
-    extension: 'jpg',
-    path: `D:/shoot/JPG/${id}.jpg`,
-    size: 1024,
-    mtime: 1,
-  },
-  status: 'JPG_ONLY',
-  rating: 0,
-  flag: 'none',
-  label: '',
-  hasXmp: false,
-});
-
 const scanResult: FolderScanResult = {
-  groups: [group('IMG_0001')],
+  groups: [makeGroup('IMG_0001')],
   totalCount: 1,
   jpgFolder: 'D:/shoot/JPG',
   rawFolder: '',
