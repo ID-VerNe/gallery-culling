@@ -4,19 +4,18 @@ import {
   RotateCcw,
   Save,
   Sliders,
-  SunMedium,
-  Contrast,
-  Thermometer,
   CloudSun,
-  Droplets,
   Copy,
   X,
 } from 'lucide-react';
 import { ToneAdjustments } from '../types';
 import { DEFAULT_TONE } from '../utils/autoTone';
 import { usePanelInitialFocus } from '../hooks/usePanelInitialFocus';
-import { useActivity, useTaskMutex } from '../hooks/useTaskMutex';
+import { useAppliedPreset } from '../hooks/useAppliedPreset';
+import { useAiMask } from '../hooks/useAiMask';
+import { useToneBatchEntry } from '../hooks/useToneBatchEntry';
 import { ConfirmDialog } from './ConfirmDialog';
+import { ToneSliders } from './ToneSliders';
 
 /** AI 蒙版可选区域（中文展示，英文 id 落进 .lumen 工程）。 */
 const MASK_REGIONS: Array<{ id: string; label: string }> = [
@@ -88,85 +87,6 @@ interface TonalAdjusterProps {
   applying?: boolean;
 }
 
-/**
- * Slider descriptors. `tint` was missing from the panel even though the type
- * defines it, `computeAutoTone` produces it and `getToneFilterString` applies
- * it — the user could not see or correct a value that was actively being
- * written into their preview (F-16).
- */
-const SLIDERS: Array<{
-  field: keyof ToneAdjustments;
-  label: string;
-  icon: React.ReactNode;
-  min: number;
-  max: number;
-  step: number;
-  /** How to format the readout. */
-  format: (v: number) => string;
-  describe: string;
-}> = [
-  {
-    field: 'exposure',
-    label: '曝光',
-    icon: <SunMedium className="w-3.5 h-3.5 text-white/60" aria-hidden="true" />,
-    min: -3,
-    max: 3,
-    step: 0.05,
-    format: (v) => (v >= 0 ? `+${v.toFixed(2)}` : v.toFixed(2)),
-    describe: '整体明暗，单位为 EV',
-  },
-  {
-    field: 'shadows',
-    label: '阴影',
-    icon: <CloudSun className="w-3.5 h-3.5 text-white/60" aria-hidden="true" />,
-    min: -100,
-    max: 100,
-    step: 1,
-    format: (v) => `${v > 0 ? '+' : ''}${Math.round(v)}`,
-    describe: '暗部提亮或压暗',
-  },
-  {
-    field: 'highlights',
-    label: '高光',
-    icon: <SunMedium className="w-3.5 h-3.5 text-white/60" aria-hidden="true" />,
-    min: -100,
-    max: 100,
-    step: 1,
-    format: (v) => `${v > 0 ? '+' : ''}${Math.round(v)}`,
-    describe: '亮部细节恢复',
-  },
-  {
-    field: 'temperature',
-    label: '色温',
-    icon: <Thermometer className="w-3.5 h-3.5 text-white/60" aria-hidden="true" />,
-    min: -100,
-    max: 100,
-    step: 1,
-    format: (v) => `${v > 0 ? '+' : ''}${Math.round(v)}`,
-    describe: '冷暖偏移',
-  },
-  {
-    field: 'tint',
-    label: '色调',
-    icon: <Droplets className="w-3.5 h-3.5 text-white/60" aria-hidden="true" />,
-    min: -100,
-    max: 100,
-    step: 1,
-    format: (v) => `${v > 0 ? '+' : ''}${Math.round(v)}`,
-    describe: '绿 / 洋红偏移',
-  },
-  {
-    field: 'contrast',
-    label: '对比度',
-    icon: <Contrast className="w-3.5 h-3.5 text-white/60" aria-hidden="true" />,
-    min: -100,
-    max: 100,
-    step: 1,
-    format: (v) => `${v > 0 ? '+' : ''}${Math.round(v)}`,
-    describe: '明暗反差强度',
-  },
-];
-
 export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
   tone,
   onChange,
@@ -195,52 +115,43 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
   const [saveFeedback, setSaveFeedback] = useState(false);
   /** 保存失败提示（统一命令的 rejection 出口） */
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [maskRegion, setMaskRegion] = useState('sky');
-  const [maskDehaze, setMaskDehaze] = useState(60);
-  const [isMasking, setIsMasking] = useState(false);
-  const [maskError, setMaskError] = useState<string | null>(null);
   // C4：预设与 AI 蒙版都会"点一下即刻写 LUMEN 工程"，属不可逆落盘操作。
   // 先弹二次确认，确认后才真正下发，避免误点直接改到磁盘上。
-  const [pendingPreset, setPendingPreset] = useState<string | null>(null);
-  const [pendingMask, setPendingMask] = useState(false);
+  // 预设待确认名 / 已套用名 / 序号仲裁在 useAppliedPreset 成组；
+  // 蒙版待确认在 useAiMask 成组；这里只留重置确认（T-03）与保存反馈。
   /** T-03：重置调色需二次确认（与预设/蒙版一致）。 */
   const [pendingReset, setPendingReset] = useState(false);
-  /**
-   * 已成功套用的预设名（下拉框显示用）。只在下发链路 resolve `true` 后写入，
-   * 失败/取消一律不改 —— 显示的名字永远对应「确实写进了这张照片的 .lumen」。
-   */
-  const [appliedPreset, setAppliedPreset] = useState<string | null>(null);
-  /** FR-07：套用时是否同时写 LUMEN 工程（默认关 —— 200 张会非常慢）。 */
-  const [applyWriteLumen, setApplyWriteLumen] = useState(false);
-  /**
-   * FR-09：AI 蒙版与批量套用都接进全局互斥表。
-   * AI 蒙版占用 LUMEN 编辑态，运行期间不能让渲染导出或套用调色插进来。
-   */
-  const mutex = useTaskMutex();
-  useActivity('ai', isMasking);
-  const aiBlockedReason = mutex.blockReason('ai');
-  const applyBlockedReason = mutex.blockReason('apply-tone');
-  /** 上一次渲染的 photoId：换照片的同一帧就清掉 appliedPreset（免闪一帧旧名）。 */
-  const [presetPhotoId, setPresetPhotoId] = useState(photoId);
-  if (presetPhotoId !== photoId) {
-    setPresetPhotoId(photoId);
-    setAppliedPreset(null);
-  }
-  /** 连续套用的序号：迟到的旧结果不许覆盖新选择（与 Bug B 同类：异步结果不得翻转用户最新动作）。 */
-  const applySeqRef = useRef(0);
+
+  // issue #115：四工作流成组抽 hook —— 预设（seq 仲裁 + 同帧清零）、蒙版
+  //（isMasking 与 useActivity('ai') 同处）、批量入口分别收进各自 hook，
+  // 本组件只负责组合渲染与保存/重置（400ms 自动保存链路（Refs #67）不动）。
+  const {
+    appliedPreset,
+    pendingPreset,
+    requestPreset,
+    cancelPendingPreset,
+    confirmPreset,
+  } = useAppliedPreset({ photoId, onApplyPreset });
+  const {
+    maskRegion,
+    setMaskRegion,
+    maskDehaze,
+    setMaskDehaze,
+    isMasking,
+    maskError,
+    pendingMask,
+    setPendingMask,
+    aiBlockedReason,
+    handleApplyMaskClick,
+  } = useAiMask({ onApplyMask });
+  const { applyWriteLumen, setApplyWriteLumen, applyBlockedReason } =
+    useToneBatchEntry();
 
   // 面板互换时（E 键 / 触发按钮）旧 DOM 被整棵卸载，焦点会退回 body。
   // 挂载时若焦点无主，就把焦点移入本面板容器，让读屏播报 region 名；
   // 有意不聚焦第一个滑杆——滑杆拿到焦点后方向键会被占用，妨碍用户先浏览。
   const rootRef = useRef<HTMLDivElement>(null);
   usePanelInitialFocus(rootRef, true);
-
-  const handleSlider = (field: keyof ToneAdjustments, value: number) => {
-    onChange({
-      ...tone,
-      [field]: value,
-    });
-  };
 
   const handleReset = () => {
     // T-03：重置会一键抹掉 6 个调色值，且无 undo 栈可回退。同一面板里
@@ -262,36 +173,6 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
   const triggerAutoTone = () => {
     if (onAuto) onAuto();
     else if (onAutoTone) onAutoTone();
-  };
-
-  const handleApplyMaskClick = async () => {
-    if (!onApplyMask) return;
-    setIsMasking(true);
-    setMaskError(null);
-    try {
-      await onApplyMask(maskRegion, maskDehaze);
-      // 任务成功才关对话框（closeOnConfirm={false} 已阻止乐观关闭）。
-      setPendingMask(false);
-    } catch (err) {
-      console.error('AI 蒙版失败:', err);
-      setMaskError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setIsMasking(false);
-    }
-  };
-
-  /**
-   * 预设二次确认（C4）后的真正下发。「已套用」标记只在成功（resolve true）
-   * 后写入：失败时 hook 侧已有 toast 报错，这里绝不让名字先于事实出现。
-   * 序号仲裁：前一次还在飞行时又确认了新的，迟到的旧结果被丢弃 ——
-   * 显示永远以用户最后一次确认为准。
-   */
-  const handleConfirmPreset = async () => {
-    const name = pendingPreset;
-    if (!name) return;
-    const seq = ++applySeqRef.current;
-    const ok = await onApplyPreset?.(name);
-    if (seq === applySeqRef.current && ok) setAppliedPreset(name);
   };
 
   const handleSaveClick = async () => {
@@ -376,38 +257,8 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
         </button>
       </div>
 
-      {/* Sliders Container */}
-      <div className="flex flex-col gap-4">
-        {SLIDERS.map((s) => {
-          const value = tone[s.field] as number;
-          return (
-            <div className="flex flex-col gap-1.5" key={s.field}>
-              <div className="flex justify-between items-center text-white/80 gap-2">
-                <span className="flex items-center gap-1 min-w-0">
-                  {s.icon}
-                  <span className="truncate">{s.label}</span>
-                </span>
-                <span className="font-mono text-[11px] tabular-nums text-white/70 shrink-0">
-                  {s.format(value)}
-                </span>
-              </div>
-              <input
-                type="range"
-                min={s.min}
-                max={s.max}
-                step={s.step}
-                value={value}
-                onChange={(e) =>
-                  handleSlider(s.field, parseFloat(e.target.value))
-                }
-                className="tone-slider"
-                aria-label={`${s.label}，${s.describe}`}
-                aria-valuetext={s.format(value)}
-              />
-            </div>
-          );
-        })}
-      </div>
+      {/* Sliders Container —— 纯展示子组件（issue #115 · PA），只传 tone/onChange */}
+      <ToneSliders tone={tone} onChange={onChange} />
 
       {/* 分歧提示：两侧真值不一致，明确告知而不是静默取一个 */}
       {divergent && (
@@ -435,11 +286,11 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
               id="tonal-preset"
               // 受控：显示「已成功套用」的预设名（没套过 = 占位项）。
               // 选择新预设只开二次确认框、不改这里 —— 确认前下拉保持原值，
-              // 成功后才切换（见 handleConfirmPreset）。
+              // 成功后才切换（见 useAppliedPreset.confirmPreset）。
               value={appliedPreset ?? ''}
               onChange={(e) => {
                 // C4：先记下要套用的预设，弹二次确认后再真正下发。
-                if (e.target.value) setPendingPreset(e.target.value);
+                if (e.target.value) requestPreset(e.target.value);
               }}
               className="focus-ring flex-1 min-w-0 bg-background-base border border-border-default rounded-md px-2 py-1.5 text-white outline-none text-xs focus:border-white/40"
             >
@@ -653,9 +504,9 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
       {/* C4：预设与 AI 蒙版落盘前二次确认（不可在本应用内撤销） */}
       <ConfirmDialog
         isOpen={pendingPreset !== null}
-        onClose={() => setPendingPreset(null)}
+        onClose={cancelPendingPreset}
         onConfirm={() => {
-          void handleConfirmPreset();
+          void confirmPreset();
         }}
         title="套用 LUMEN RAW 预设"
         message={`将把「${pendingPreset ?? ''}」写入该照片的 LUMEN RAW 工程并保存。\n这会覆盖工程里当前的调色，且无法在本应用内撤销。`}
