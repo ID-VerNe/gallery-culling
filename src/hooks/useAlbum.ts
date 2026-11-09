@@ -18,6 +18,7 @@ import { api } from '../services/api';
 import { useToast } from '../components/Toast';
 import { useTaskMutex } from './useTaskMutex';
 import { toAlbumGroups, type AlbumLoad } from '../utils/albumGroups';
+import { fileNameOf } from '../utils/pathNormalize';
 import type { AlbumItemInput, AlbumOpenResult } from '../types';
 
 export interface UseAlbumOptions {
@@ -51,10 +52,6 @@ export interface AlbumApi {
   dismissReport: () => void;
   /** 换数据源（扫描）时清掉选片集身份。 */
   clear: () => void;
-}
-
-function baseNameOf(path: string): string {
-  return path.split(/[\\/]/).pop() ?? path;
 }
 
 export function useAlbum({ onLoaded }: UseAlbumOptions): AlbumApi {
@@ -100,7 +97,7 @@ export function useAlbum({ onLoaded }: UseAlbumOptions): AlbumApi {
       try {
         const res = await api.saveAlbum(target, items);
         setReport(null);
-        toast.success(`已保存 ${res.saved} 张到 ${baseNameOf(res.path)}。`);
+        toast.success(`已保存 ${res.saved} 张到 ${fileNameOf(res.path)}。`);
         return true;
       } catch (err) {
         console.error('save_album_cmd failed:', err);
@@ -148,7 +145,7 @@ export function useAlbum({ onLoaded }: UseAlbumOptions): AlbumApi {
           `已打开 ${load.groups.length} 张，${res.missing} 张找不到（列表见「选片集」）。`,
         );
       } else {
-        toast.success(`已打开选片集 ${baseNameOf(res.path)}，共 ${load.groups.length} 张。`);
+        toast.success(`已打开选片集 ${fileNameOf(res.path)}，共 ${load.groups.length} 张。`);
       }
       return res;
     } catch (err) {

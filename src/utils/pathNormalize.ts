@@ -48,3 +48,23 @@ export const normalizeFilePath = (p: string): string =>
  */
 export const isSameFile = (a: string, b: string): boolean =>
   normalizeFilePath(a) === normalizeFilePath(b);
+
+/**
+ * 取路径末段（文件名）。
+ *
+ * 默认保留扩展名（顶栏芯片、toast、弹窗等展示位）；`stripExtension: true`
+ * 才剥扩展名（LR 匹配键，见 `lrcatMatch.baseNameOf`）。
+ *
+ * 正反斜杠都切：后端经 Tauri 文件对话框回原生 Windows 路径
+ * （`D:\shoot\album.galleryalbum`），只切 `/` 会把整串路径当文件名（#122）。
+ * 空串回空串；剥扩展名时 `dot > 0` 才剥，隐藏文件名（`.gallery`）保留。
+ */
+export function fileNameOf(
+  path: string,
+  options?: { stripExtension?: boolean },
+): string {
+  const file = path.split(/[\\/]/).pop() ?? path;
+  if (!options?.stripExtension) return file;
+  const dot = file.lastIndexOf('.');
+  return dot > 0 ? file.slice(0, dot) : file;
+}

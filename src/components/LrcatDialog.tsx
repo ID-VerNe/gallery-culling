@@ -15,6 +15,7 @@
 import React, { useState } from 'react';
 import { AlertTriangle, Database } from 'lucide-react';
 import { Modal } from './Modal';
+import { fileNameOf } from '../utils/pathNormalize';
 import { selectLrcatWrites } from '../utils/lrcatMatch';
 import type { LrcatPlan } from '../utils/lrcatMatch';
 import type { LrcatReadResult } from '../types';
@@ -33,10 +34,6 @@ interface LrcatDialogProps {
   onPick: () => void;
   onApply: (overwrite: boolean) => void;
   onCancel: () => void;
-}
-
-function baseNameOf(path: string): string {
-  return path.split(/[\\/]/).pop() ?? path;
 }
 
 /** 报告里的路径只留末两段：完整路径塞进弹窗会挤成一团。 */
@@ -128,7 +125,7 @@ export const LrcatDialog: React.FC<LrcatDialogProps> = ({
             {/* 来源与规模 */}
             <div className="flex items-center gap-2 flex-wrap text-[12px] text-white/60">
               <span className="text-white/85" title={report.catalog}>
-                {baseNameOf(report.catalog)}
+                {fileNameOf(report.catalog)}
               </span>
               <span aria-hidden="true">·</span>
               <span>库里 {report.total} 张</span>

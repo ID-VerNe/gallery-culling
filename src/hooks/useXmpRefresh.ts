@@ -23,7 +23,7 @@ import { api } from '../services/api';
 import { useToast } from '../components/Toast';
 import { useTaskMutex } from './useTaskMutex';
 import { groupPath } from '../utils/groupPath';
-import { normalizeFilePath } from '../utils/pathNormalize';
+import { fileNameOf, normalizeFilePath } from '../utils/pathNormalize';
 import { toCullFlag } from '../utils/cullFlag';
 import type {
   PhotoGroupInfo,
@@ -79,10 +79,6 @@ function indexByPath(groups: PhotoGroupInfo[]): Map<string, string> {
     if (path) index.set(normalizeFilePath(path), g.id);
   }
   return index;
-}
-
-function baseNameOf(path: string): string {
-  return path.split(/[\\/]/).pop() ?? path;
 }
 
 export function useXmpRefresh({
@@ -161,7 +157,7 @@ export function useXmpRefresh({
       }
 
       if (failed.length > 0) {
-        const names = failed.slice(0, 3).map(baseNameOf).join('、');
+        const names = failed.slice(0, 3).map((p) => fileNameOf(p)).join('、');
         const more = failed.length > 3 ? ` 等 ${failed.length} 张` : '';
         toastRef.current.error(
           `${failed.length} 张的 XMP 读不出来（文件被占用或已删除）：${names}${more}。` +
@@ -290,7 +286,7 @@ export function useXmpRefresh({
         }
         const head = failed
           .slice(0, 3)
-          .map((f) => `· ${baseNameOf(f.path)}：${f.message}`)
+          .map((f) => `· ${fileNameOf(f.path)}：${f.message}`)
           .join('\n');
         const more = failed.length > 3 ? `\n…另有 ${failed.length - 3} 张` : '';
         toastRef.current.error(

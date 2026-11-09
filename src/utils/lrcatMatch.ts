@@ -12,7 +12,7 @@
  * 一个 group 只认领一条 LR 记录：LR 里 RAW 与 JPG 是两条 `Adobe_images`，
  * 都指向同一组时取**先出现的那条**（LR 的导出顺序），避免来回覆盖。
  */
-import { normalizeDir, normalizeFilePath, parentDirOf } from './pathNormalize';
+import { fileNameOf, normalizeDir, normalizeFilePath, parentDirOf } from './pathNormalize';
 import type { LrcatPhoto, PhotoGroupInfo } from '../types';
 
 /** 命中的方式，报告里要分开说：路径命中是确定的，同名命中是推断。 */
@@ -98,10 +98,7 @@ export function planLrcatImport(
 
 /** 从路径取文件名（不含扩展名），与 `PhotoGroupInfo.baseName` 同口径。 */
 export function baseNameOf(path: string): string {
-  const normalized = path.replace(/\\/g, '/');
-  const file = normalized.slice(normalized.lastIndexOf('/') + 1);
-  const dot = file.lastIndexOf('.');
-  return dot > 0 ? file.slice(0, dot) : file;
+  return fileNameOf(path, { stripExtension: true });
 }
 
 /**

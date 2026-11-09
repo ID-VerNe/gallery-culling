@@ -14,6 +14,7 @@
 import React from 'react';
 import { FolderPlus, FolderOpen, AlertTriangle, BookMarked } from 'lucide-react';
 import { Modal } from './Modal';
+import { fileNameOf } from '../utils/pathNormalize';
 import type { AlbumOpenResult } from '../types';
 
 export type AlbumSaveScope = 'selected' | 'filtered';
@@ -38,10 +39,6 @@ interface AlbumDialogProps {
   onSave: () => void;
   onOpen: () => void;
   onDismissReport: () => void;
-}
-
-function baseNameOf(path: string): string {
-  return path.split(/[\\/]/).pop() ?? path;
 }
 
 /** 缺失项展示用的路径：相对路径原样（它是文件里记的），绝对路径取末两段。 */
@@ -104,7 +101,7 @@ export const AlbumDialog: React.FC<AlbumDialogProps> = ({
             <>
               <span aria-hidden="true">·</span>
               <span className="text-white/85" title={albumPath}>
-                来自选片集 {baseNameOf(albumPath)}
+                来自选片集 {fileNameOf(albumPath)}
               </span>
             </>
           )}
