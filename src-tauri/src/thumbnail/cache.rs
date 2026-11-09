@@ -177,19 +177,16 @@ pub(super) fn file_fingerprint(file_path: &Path) -> (PathBuf, u64) {
 
 /// 取文件 mtime 的 Unix 秒数（缺省 0）。
 ///
-/// 缓存新鲜度判定的输入。**必须与 `scanner::secs_from_meta` 分开**：那边收
-/// 已经取好的 metadata，这边自己 stat；更重要的是缺省值语义不同 —— 这里 0
-/// 表示「取不到时间戳」，与真实的 epoch 0 无法区分，因此缓存判定逻辑不接受
-/// 「mtime == 0 就认为是最新的」这种写法。
+/// 缓存新鲜度判定的输入。签名收 Path（自己 stat），与 `scanner::secs_from_meta`
+/// 收 `Option<&Metadata>` 的签名保留分开；实现收敛到 clock，哨兵 0。
+/// 缺省值语义不同 —— 这里 0 表示「取不到时间戳」，与真实的 epoch 0 无法
+/// 区分，因此缓存判定逻辑不接受「mtime == 0 就认为是最新的」这种写法。
 pub(super) fn file_mtime_secs(file_path: &Path) -> u64 {
-    fs::metadata(file_path)
-        .and_then(|m| m.modified())
-        .map(|t| {
-            t.duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-        })
-        .unwrap_or(0)
+    crate::clock::mtime_u64(
+        crate::clock::MtimeInput::Path(file_path),
+        crate::clock::MtimeUnit::Secs,
+        0,
+    )
 }
 
 /// 用**已算好的**指纹拼出缓存文件路径（避免重复 `canonicalize`/`metadata`）。

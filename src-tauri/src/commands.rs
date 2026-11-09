@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use crate::db::Database;
 use crate::lumen;
@@ -202,12 +202,9 @@ impl ProgressThrottle {
     }
 }
 
-/// 当前 Unix 秒（清单文件用）。
+/// 当前 Unix 秒（清单文件用）。实现收敛到 clock（issue #139），哨兵 0。
 fn now_epoch_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    crate::clock::now_secs_u64()
 }
 
 /// 把一次 `spawn_blocking` 收进统一的 JoinError→String 包装。
