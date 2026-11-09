@@ -5,19 +5,16 @@ import {
   Unlink,
   Sparkles,
   Sliders,
-  RotateCcw,
-  ZoomIn,
-  ZoomOut,
 } from 'lucide-react';
 import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
 import { api } from '../services/api';
 import { getToneFilterString } from '../utils/autoTone';
-import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from '../utils/viewportZoom';
 import { useViewportImage } from '../hooks/useViewportImage';
 import { useDualZoomPan } from '../hooks/useDualZoomPan';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import type { ViewportEmptyState } from './PreviewViewport';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
+import { ViewportZoomBar } from './ViewportZoomBar';
 import { ExifCapsule } from './ExifCapsule';
 
 interface BeforeAfterViewportProps {
@@ -96,8 +93,6 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
     );
   }
 
-  const effectiveScale = zoom.effectiveScale;
-
   const beforeFocused = !zoom.sync && zoom.activePane === 'before';
   const afterFocused = !zoom.sync && zoom.activePane === 'after';
 
@@ -121,58 +116,20 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {/* Zoom controls */}
-          <div className="flex items-center gap-0.5 bg-background-surface rounded text-[11px]">
-            <button
-              onClick={() => zoom.zoomBy(1 / ZOOM_STEP)}
-              disabled={effectiveScale <= ZOOM_MIN}
-              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-l active:scale-[0.96] press disabled:opacity-40 disabled:cursor-not-allowed"
-              title="缩小"
-              aria-label="缩小"
-            >
-              <ZoomOut className="w-3.5 h-3.5" aria-hidden="true" />
-            </button>
-            {zoom.sync ? (
-              <span
-                className="font-mono tabular-nums text-white/80 w-10 text-center"
-                aria-label={`当前缩放 ${scaleLabel(zoom.scaleOf('before'))}`}
-              >
-                {scaleLabel(zoom.scaleOf('before'))}
-              </span>
-            ) : (
-              <span
-                className="font-mono tabular-nums text-white/80 px-1 text-center flex items-center gap-1"
-                aria-label={`当前缩放：前 ${scaleLabel(zoom.scaleOf('before'))}，后 ${scaleLabel(
-                  zoom.scaleOf('after'),
-                )}（聚焦${zoom.activePane === 'before' ? '前' : '后'}图）`}
-              >
-                <span className={zoom.activePane === 'before' ? 'text-white' : 'text-white/45'}>
-                  前 {scaleLabel(zoom.scaleOf('before'))}
-                </span>
-                <span className="text-white/25">/</span>
-                <span className={zoom.activePane === 'after' ? 'text-white' : 'text-white/45'}>
-                  后 {scaleLabel(zoom.scaleOf('after'))}
-                </span>
-              </span>
-            )}
-            <button
-              onClick={() => zoom.zoomBy(ZOOM_STEP)}
-              disabled={effectiveScale >= ZOOM_MAX}
-              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 active:scale-[0.96] press disabled:opacity-40 disabled:cursor-not-allowed"
-              title="放大"
-              aria-label="放大"
-            >
-              <ZoomIn className="w-3.5 h-3.5" aria-hidden="true" />
-            </button>
-            <button
-              onClick={zoom.reset}
-              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-r active:scale-[0.96] press"
-              title={`重置缩放与平移（当前 ${scaleLabel(effectiveScale)}）`}
-              aria-label={`重置缩放与平移（当前 ${scaleLabel(effectiveScale)}）`}
-            >
-              <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
-            </button>
-          </div>
+          <ViewportZoomBar
+            zoom={zoom}
+            panes={{
+              first: 'before',
+              second: 'after',
+              firstShort: '前',
+              secondShort: '后',
+              firstName: '前',
+              secondName: '后',
+              dimClass: 'text-white/45',
+            }}
+            zoomOutLabel="缩小"
+            zoomInLabel="放大"
+          />
 
           {/* Quick open Luminar AI */}
           <button

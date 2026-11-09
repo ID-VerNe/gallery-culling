@@ -52,13 +52,18 @@ describe('材质三档令牌（issue #18 · PC-1 + PC-3）', () => {
     expect(css).toContain('--color-bg-toast-rgb:');
   });
 
-  it('缩放控件组外壳走结构档 bg-background-surface，不再 bg-white/10（BeforeAfter + SplitCompare）', () => {
+  it('缩放控件组外壳走结构档 bg-background-surface，不再 bg-white/10（ViewportZoomBar 共用）', () => {
+    const bar = readSrc('src/components/ViewportZoomBar.tsx');
     const ba = readSrc('src/components/BeforeAfterViewport.tsx');
     const sc = readSrc('src/components/SplitCompareViewport.tsx');
     // 两视口的缩放按钮组外壳原先都是 `bg-white/10 rounded`（与交互层白底同档），
-    // 结构层应走 2% surface 令牌与交互层解耦。
-    expect(ba).toContain('gap-0.5 bg-background-surface rounded text-[11px]');
-    expect(sc).toContain('gap-0.5 bg-background-surface rounded text-[11px]');
+    // 结构层应走 2% surface 令牌与交互层解耦；issue #120 后只在共用
+    // ViewportZoomBar 落盘，两调用方不再自备副本。
+    expect(bar).toContain('gap-0.5 bg-background-surface rounded text-[11px]');
+    expect(ba).toContain('ViewportZoomBar');
+    expect(sc).toContain('ViewportZoomBar');
+    expect(ba).not.toContain('gap-0.5 bg-background-surface rounded text-[11px]');
+    expect(sc).not.toContain('gap-0.5 bg-background-surface rounded text-[11px]');
   });
 
   it('状态栏的 Pick/Reject 静息无底色、选中才叠语义色（三视口同动词同材质）', () => {

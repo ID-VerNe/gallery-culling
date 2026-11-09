@@ -5,20 +5,17 @@ import {
   Unlink,
   Pin,
   ArrowLeftRight,
-  RotateCcw,
-  ZoomIn,
-  ZoomOut,
   Sparkles,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
 import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
 import { getToneFilterString } from '../utils/autoTone';
-import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, scaleLabel } from '../utils/viewportZoom';
 import { useViewportImage, type ViewportImage } from '../hooks/useViewportImage';
 import { useDualZoomPan } from '../hooks/useDualZoomPan';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
+import { ViewportZoomBar } from './ViewportZoomBar';
 
 interface SplitCompareViewportProps {
   leftGroup?: PhotoGroupInfo;
@@ -249,8 +246,6 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
     );
   };
 
-  const effectiveScale = zoom.effectiveScale;
-
   return (
     <div className="flex-1 flex flex-col h-full w-full bg-background-surface relative">
       {/* Top Sync & Compare Control Bar */}
@@ -279,58 +274,20 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
             <span className="pb-[1px]">左右互换 (S)</span>
           </button>
 
-          {/* Zoom: – / readout / reset / + */}
-          <div className="flex items-center gap-0.5 bg-background-surface rounded text-[11px]">
-            <button
-              onClick={() => zoom.zoomBy(1 / ZOOM_STEP)}
-              disabled={effectiveScale <= ZOOM_MIN}
-              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-l active:scale-[0.96] press disabled:opacity-40 disabled:cursor-not-allowed"
-              title="缩小"
-              aria-label="缩小双图"
-            >
-              <ZoomOut className="w-3.5 h-3.5" aria-hidden="true" />
-            </button>
-            {zoom.sync ? (
-              <span
-                className="font-mono tabular-nums text-white/80 w-10 text-center"
-                aria-label={`当前缩放 ${scaleLabel(zoom.scaleOf('left'))}`}
-              >
-                {scaleLabel(zoom.scaleOf('left'))}
-              </span>
-            ) : (
-              <span
-                className="font-mono tabular-nums text-white/80 px-1 text-center flex items-center gap-1"
-                aria-label={`当前缩放：左 ${scaleLabel(zoom.scaleOf('left'))}，右 ${scaleLabel(
-                  zoom.scaleOf('right'),
-                )}（聚焦${zoom.activePane === 'left' ? '左' : '右'}图）`}
-              >
-                <span className={zoom.activePane === 'left' ? 'text-white' : 'text-white/60'}>
-                  L {scaleLabel(zoom.scaleOf('left'))}
-                </span>
-                <span className="text-white/25">/</span>
-                <span className={zoom.activePane === 'right' ? 'text-white' : 'text-white/60'}>
-                  R {scaleLabel(zoom.scaleOf('right'))}
-                </span>
-              </span>
-            )}
-            <button
-              onClick={() => zoom.zoomBy(ZOOM_STEP)}
-              disabled={zoom.effectiveScale >= ZOOM_MAX}
-              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 active:scale-[0.96] press disabled:opacity-40 disabled:cursor-not-allowed"
-              title="放大"
-              aria-label="放大双图"
-            >
-              <ZoomIn className="w-3.5 h-3.5" aria-hidden="true" />
-            </button>
-            <button
-              onClick={zoom.reset}
-              className="focus-ring tap-target p-1 text-white/70 hover:text-white hover:bg-white/15 rounded-r active:scale-[0.96] press"
-              title={`重置缩放与平移（当前 ${scaleLabel(zoom.effectiveScale)}）`}
-              aria-label={`重置缩放与平移（当前 ${scaleLabel(zoom.effectiveScale)}）`}
-            >
-              <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
-            </button>
-          </div>
+          <ViewportZoomBar
+            zoom={zoom}
+            panes={{
+              first: 'left',
+              second: 'right',
+              firstShort: 'L',
+              secondShort: 'R',
+              firstName: '左',
+              secondName: '右',
+              dimClass: 'text-white/60',
+            }}
+            zoomOutLabel="缩小双图"
+            zoomInLabel="放大双图"
+          />
 
           {/* Sync Zoom toggle */}
           <button
