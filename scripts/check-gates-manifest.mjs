@@ -21,15 +21,14 @@
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { BUCKETS, loadManifest } from './run-gates.mjs';
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const MANIFEST_PATH = join(ROOT, 'scripts', 'gates.json');
 export const AGENTS_PATH = join(ROOT, 'AGENTS.md');
 export const CI_PATH = join(ROOT, '.github', 'workflows', 'ci.yml');
 
 const BEGIN = '<!-- gates:ci:begin -->';
 const END = '<!-- gates:ci:end -->';
-const BUCKETS = ['ci', 'manual', 'support'];
 /** 只有这种形态的名字才对应磁盘文件；`tsc --noEmit` 这类是直接命令。 */
 const SCRIPT_NAME = /^check-[a-z0-9-]+\.mjs$/;
 
@@ -236,7 +235,7 @@ function diskCheckScripts() {
 
 function main(argv) {
   const args = argv.slice(2);
-  const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8'));
+  const manifest = loadManifest();
   const agents = readFileSync(AGENTS_PATH, 'utf8');
 
   if (args.includes('--write')) {

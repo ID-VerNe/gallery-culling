@@ -9,19 +9,13 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SettingsModal } from './SettingsModal';
 import { mockInvokeCommand, mockInvokeError } from '../test/setup';
+import { makeSettings } from '../test/settingsFactory';
 import type { AppSettings, LumenStatus } from '../types';
 
-const baseSettings: AppSettings = {
-  defaultJpgFolder: 'D:/shoot/JPG',
+const baseSettings: AppSettings = makeSettings({
   defaultRawFolder: 'D:/shoot/RAW',
   photoshopPath: 'C:/Program Files/Adobe/Photoshop.exe',
-  thumbnailWidth: 200,
-  sortOrder: 'time_filename',
-  lumenEnabled: false,
-  lumenCliPath: '',
-  lumenGridThumbnails: false,
-  lumenExpectAi: false,
-};
+});
 
 const okStatus: LumenStatus = {
   available: true,

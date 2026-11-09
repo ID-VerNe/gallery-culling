@@ -10,6 +10,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { invokeCount, lastInvokeArgs, mockInvokeCommand } from './test/setup';
+import { makeSettings } from './test/settingsFactory';
 
 const photo = (i: number, over: Record<string, unknown> = {}) => ({
   id: `p${i}`,
@@ -25,17 +26,7 @@ const photo = (i: number, over: Record<string, unknown> = {}) => ({
 });
 
 function mockStartup(groups: unknown[]) {
-  mockInvokeCommand('get_settings_cmd', {
-    defaultJpgFolder: 'D:/shoot/JPG',
-    defaultRawFolder: '',
-    photoshopPath: '',
-    thumbnailWidth: 200,
-    sortOrder: 'time_filename',
-    lumenEnabled: false,
-    lumenCliPath: '',
-    lumenGridThumbnails: false,
-    lumenExpectAi: false,
-  });
+  mockInvokeCommand('get_settings_cmd', makeSettings());
   mockInvokeCommand('save_settings_cmd', true);
   mockInvokeCommand('save_session_cmd', true);
   mockInvokeCommand('scan_folders_cmd', {

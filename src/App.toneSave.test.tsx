@@ -9,8 +9,9 @@ import { describe, it, expect } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { invokeCount, mockInvokeCommand } from './test/setup';
-import type { FolderScanResult, ToneState } from './types';
 import { makeGroup } from './test/factories';
+import { makeSettings } from './test/settingsFactory';
+import type { FolderScanResult, ToneState } from './types';
 import { DEFAULT_TONE } from './utils/autoTone';
 
 const group = makeGroup('g1', { baseName: 'IMG_0001' });
@@ -33,17 +34,7 @@ const toneState: ToneState = {
 
 /** 声明 App 启动 + 扫描 + 打开调色面板所触达的全部命令（未注册的命令会让测试炸出来）。 */
 function mockStartup() {
-  mockInvokeCommand('get_settings_cmd', {
-    defaultJpgFolder: 'D:/shoot/JPG',
-    defaultRawFolder: '',
-    photoshopPath: '',
-    thumbnailWidth: 200,
-    sortOrder: 'time_filename',
-    lumenEnabled: false,
-    lumenCliPath: '',
-    lumenGridThumbnails: false,
-    lumenExpectAi: false,
-  });
+  mockInvokeCommand('get_settings_cmd', makeSettings());
   mockInvokeCommand('save_settings_cmd', true);
   mockInvokeCommand('save_session_cmd', true);
   mockInvokeCommand('scan_folders_cmd', scanResult);
