@@ -24,7 +24,7 @@ import { PreviewViewport } from './PreviewViewport';
 import { SplitCompareViewport } from './SplitCompareViewport';
 import { BeforeAfterViewport } from './BeforeAfterViewport';
 import { resetInvokeMocks, mockInvokeCommand } from '../test/setup';
-import type { PhotoGroupInfo } from '../types';
+import { jpgFile, makeGroup } from '../test/factories';
 
 /** jsdom 不实现 Pointer Capture，三个视口的拖拽都依赖它。 */
 function stubPointerCapture() {
@@ -41,17 +41,7 @@ beforeEach(() => {
   mockInvokeCommand('probe_lumen_cmd', { available: false });
 });
 
-function jpgGroup(id: string): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
-    jpg: { name: `${id}.jpg`, extension: 'jpg', path: `D:/shoot/${id}.jpg`, size: 1, mtime: 0 },
-    status: 'JPG_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '', hasXmp: false,
-  };
-}
+const jpgGroup = (id: string) => makeGroup(id, { jpg: jpgFile(id, 'D:/shoot') });
 
 /** 从 `transform: translate(Xpx, Ypx) scale(...)` 里读出当前平移量。 */
 function readTranslate(el: HTMLElement): { x: number; y: number } {

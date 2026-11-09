@@ -9,25 +9,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { BottomBar, type StatusPane } from './BottomBar';
 import { BAR_SHORTCUT_IDS, findShortcut } from '../utils/shortcutCatalog';
-import type { PhotoGroupInfo, ToneAdjustments } from '../types';
+import { makeGroup, makeFile } from '../test/factories';
+import type { ToneAdjustments } from '../types';
 
-const group: PhotoGroupInfo = {
-  id: 'g1',
+const group = makeGroup('g1', {
   baseName: 'DSC_0001',
-  jpg: {
-    name: 'DSC_0001.JPG',
-    extension: 'jpg',
-    path: 'D:/shoot/DSC_0001.JPG',
-    size: 1_789_000,
-    mtime: 0,
-  },
-  raw: {
-    name: 'DSC_0001.NEF',
-    extension: 'NEF',
-    path: 'D:/shoot/DSC_0001.NEF',
-    size: 25_060_000,
-    mtime: 0,
-  },
+  jpg: makeFile('D:/shoot/DSC_0001.JPG', { size: 1_789_000 }),
+  raw: makeFile('D:/shoot/DSC_0001.NEF', { extension: 'NEF', size: 25_060_000 }),
   status: 'COMPLETE',
   rating: 3,
   flag: 'pick',
@@ -40,7 +28,7 @@ const group: PhotoGroupInfo = {
     iso: '800',
     lensModel: 'FE 50mm F1.8',
   },
-};
+});
 
 const tone: ToneAdjustments = {
   exposure: 0.3,

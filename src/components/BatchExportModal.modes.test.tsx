@@ -20,38 +20,17 @@ import {
   mockInvokeCommand,
   setInvokeHandler,
 } from '../test/setup';
-import type { PhotoGroupInfo } from '../types';
+import { makeGroup, rawFile } from '../test/factories';
 
-const group: PhotoGroupInfo = {
-  id: 'g1',
-  baseName: 'IMG_0001',
-  jpg: {
-    name: 'IMG_0001.jpg',
-    extension: 'jpg',
-    path: 'D:/shoot/JPG/IMG_0001.jpg',
-    size: 1024,
-    mtime: 0,
-  },
-  status: 'JPG_ONLY',
-  rating: 0,
-  flag: 'pick',
-  label: '', hasXmp: false,
-};
+const group = makeGroup('g1', { baseName: 'IMG_0001', flag: 'pick' });
 
 /** 带 RAW 的组（COMPLETE），用于验证「含 RAW」档与「无画质提示」。 */
-const groupWithRaw: PhotoGroupInfo = {
-  ...group,
-  id: 'g2',
+const groupWithRaw = makeGroup('g2', {
   baseName: 'IMG_0002',
-  raw: {
-    name: 'IMG_0002.NEF',
-    extension: 'nef',
-    path: 'D:/shoot/RAW/IMG_0002.NEF',
-    size: 4096,
-    mtime: 0,
-  },
+  flag: 'pick',
   status: 'COMPLETE',
-};
+  raw: { ...rawFile('IMG_0002', 'NEF'), extension: 'nef', size: 4096 },
+});
 
 /** 各命令的「全部成功」返回。 */
 const ok = { exported: 1, skipped: 0, failed: [] };

@@ -17,19 +17,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { ThumbnailGrid } from './ThumbnailGrid';
-import type { PhotoGroupInfo } from '../types';
+import { jpgFile, makeGroup } from '../test/factories';
 
-function g(id: string): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
-    jpg: { name: `${id}.jpg`, extension: 'jpg', path: `D:/shoot/${id}.jpg`, size: 1, mtime: 0 },
-    status: 'JPG_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '', hasXmp: false,
-  };
-}
+const g = (id: string) => makeGroup(id, { jpg: jpgFile(id, 'D:/shoot') });
 
 /** 12 张，按默认 3 列排布：0..2 / 3..5 / 6..8 / 9..11 */
 const GROUPS = Array.from({ length: 12 }, (_, i) => g('abcdefghijkl'[i]));

@@ -9,26 +9,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { resetThumbnailLoaderForTest, ThumbnailGrid } from './ThumbnailGrid';
 import { invokeCount, lastInvokeArgs, mockInvokeCommand, mockInvokeError } from '../test/setup';
+import { makeGroup, rawFile } from '../test/factories';
 import type { PhotoGroupInfo } from '../types';
 
-function group(id: string, overrides: Partial<PhotoGroupInfo> = {}): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
-    raw: {
-      name: `${id}.CR3`,
-      extension: 'CR3',
-      path: `D:/shoot/${id}.CR3`,
-      size: 1,
-      mtime: 0,
-    },
-    status: 'RAW_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '', hasXmp: false,
-    ...overrides,
-  };
-}
+const group = (id: string, overrides: Partial<PhotoGroupInfo> = {}) =>
+  makeGroup(id, { status: 'RAW_ONLY', raw: rawFile(id, 'CR3', 'D:/shoot'), jpg: undefined, ...overrides });
 
 function renderGrid(groups: PhotoGroupInfo[], lumenThumbnails: boolean) {
   return render(

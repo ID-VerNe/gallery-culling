@@ -10,19 +10,10 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { ThumbnailGrid } from './ThumbnailGrid';
 import { mockInvokeCommand, mockInvokeError } from '../test/setup';
-import type { PhotoGroupInfo } from '../types';
+import { makeGroup, rawFile } from '../test/factories';
 
-function group(id: string): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
-    raw: { name: `${id}.CR3`, extension: 'CR3', path: `D:/shoot/${id}.CR3`, size: 1, mtime: 0 },
-    status: 'RAW_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '', hasXmp: false,
-  } as unknown as PhotoGroupInfo;
-}
+const group = (id: string) =>
+  makeGroup(id, { status: 'RAW_ONLY', raw: rawFile(id, 'CR3', 'D:/shoot'), jpg: undefined });
 
 function renderGrid() {
   // @tanstack/react-virtual 在全 0 尺寸下渲染 0 行 —— 断言会假通过

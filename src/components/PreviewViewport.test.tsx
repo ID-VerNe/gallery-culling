@@ -19,16 +19,9 @@ import {
   setInvokeHandler,
 } from '../test/setup';
 import type { LumenStatus, PhotoGroupInfo } from '../types';
+import { jpgFile, makeGroup, rawFile } from '../test/factories';
 
-const group: PhotoGroupInfo = {
-  id: 'g1',
-  baseName: 'g1',
-  jpg: { name: 'g1.jpg', extension: 'jpg', path: 'D:/shoot/g1.jpg', size: 1, mtime: 0 },
-  status: 'JPG_ONLY',
-  rating: 0,
-  flag: 'none',
-  label: '', hasXmp: false,
-};
+const group = makeGroup('g1', { jpg: jpgFile('g1', 'D:/shoot') });
 
 function renderViewport() {
   const { container } = render(
@@ -85,15 +78,11 @@ describe('PreviewViewport —— RAW-only 图片解析（C2）', () => {
   };
   const UNAVAILABLE: LumenStatus = { ...AVAILABLE, available: false };
 
-  const rawGroup: PhotoGroupInfo = {
-    id: 'raw1',
-    baseName: 'raw1',
-    raw: { name: 'raw1.NEF', extension: 'NEF', path: 'D:/shoot/raw1.NEF', size: 1, mtime: 0 },
+  const rawGroup = makeGroup('raw1', {
     status: 'RAW_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '', hasXmp: false,
-  };
+    raw: rawFile('raw1', 'NEF', 'D:/shoot'),
+    jpg: undefined,
+  });
 
   function renderRaw(lumenStatus: LumenStatus) {
     const { container } = render(
@@ -210,27 +199,13 @@ describe('PreviewViewport —— 1:1 细节（FR-05）', () => {
     detail: 'ok',
   };
 
-  const jpgGroup: PhotoGroupInfo = {
-    id: 'jpg1',
-    baseName: 'jpg1',
-    jpg: { name: 'jpg1.jpg', extension: 'jpg', path: 'D:/shoot/jpg1.jpg', size: 1, mtime: 0 },
-    status: 'JPG_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '',
-    hasXmp: false,
-  };
+  const jpgGroup = makeGroup('jpg1', { jpg: jpgFile('jpg1', 'D:/shoot') });
 
-  const rawGroup: PhotoGroupInfo = {
-    id: 'raw1',
-    baseName: 'raw1',
-    raw: { name: 'raw1.ARW', extension: 'ARW', path: 'D:/shoot/raw1.ARW', size: 1, mtime: 0 },
+  const rawGroup = makeGroup('raw1', {
     status: 'RAW_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '',
-    hasXmp: false,
-  };
+    raw: rawFile('raw1', 'ARW', 'D:/shoot'),
+    jpg: undefined,
+  });
 
   /** jsdom 不布局：给元素补上真实像素与显示宽度。 */
   function stubMetrics(img: HTMLImageElement, naturalWidth: number, displayedWidth: number) {

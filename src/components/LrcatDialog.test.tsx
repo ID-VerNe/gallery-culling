@@ -12,20 +12,17 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { LrcatDialog } from './LrcatDialog';
 import { planLrcatImport } from '../utils/lrcatMatch';
+import { makeGroup, rawFile } from '../test/factories';
 import type { LrcatPhoto, LrcatReadResult, PhotoGroupInfo } from '../types';
 
 function group(base: string, over: Partial<PhotoGroupInfo> = {}): PhotoGroupInfo {
-  return {
-    id: `D:/shoot/${base}`,
+  return makeGroup(`D:/shoot/${base}`, {
     baseName: base,
-    raw: { name: `${base}.ARW`, extension: 'ARW', path: `D:/shoot/${base}.ARW`, size: 1, mtime: 0 },
     status: 'RAW_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '',
-    hasXmp: false,
+    raw: rawFile(base, 'ARW', 'D:/shoot'),
+    jpg: undefined,
     ...over,
-  } as PhotoGroupInfo;
+  });
 }
 
 function photo(over: Partial<LrcatPhoto> = {}): LrcatPhoto {
