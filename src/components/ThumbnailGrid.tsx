@@ -585,8 +585,15 @@ function makeOptionId(groupId: string): string {
 
 /* -------------------------------------------------------------------------- */
 
-/** 宫格缩略图统一按 200px 请求（与后端默认一致）。 */
-const THUMB_WIDTH = 200;
+/**
+ * 宫格缩略图请求宽度：**独立产品值**，恒为 200（issue #133 裁决）。
+ *
+ * 与后端/前端默认宽度（`DEFAULT_THUMBNAIL_WIDTH`）数值巧合一致，但语义独立：
+ * 宫格格高固定（`GRID_CELL_HEIGHT`），只关心「够小格看清」的固定下限，
+ * 不读设置页的缩略图宽度（100–600）。若将来要接跟随设置，须另提 feat issue
+ * 并显式拆除 `ThumbnailGrid.test.tsx` 的「恒为 200」墓碑，不得静默改值。
+ */
+export const GRID_THUMB_WIDTH = 200;
 
 /**
  * 缩略图请求的进程内「并发去重 + 结果缓存」。
@@ -729,7 +736,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
     // 兜住「回落也失败」的错误：磁盘/权限问题会让两条路同时失败，没有 catch 的话
     // 格子会永远停在"加载中"（这正是本模块要避免的整屏空洞）。失败态用 undefined。
     const loadFallback = () =>
-      thumbnail(targetPath, THUMB_WIDTH)
+      thumbnail(targetPath, GRID_THUMB_WIDTH)
         .then((url) => {
           if (active) setThumbSrc(url);
         })
@@ -740,7 +747,7 @@ const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
     if (lumenThumbnails && group.raw?.path) {
       // 引擎路径：RAW 由 LUMEN RAW 真实解码渲染（200px）。
       // 无预览或抛错都静默回落到内嵌缩略图 —— 引擎抖动不该让宫格出现空洞。
-      lumenPreview(group.raw.path, THUMB_WIDTH)
+      lumenPreview(group.raw.path, GRID_THUMB_WIDTH)
         .then((previewPath) => {
           if (active) setThumbSrc(api.toAssetUrl(previewPath));
         })

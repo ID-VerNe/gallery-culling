@@ -1,6 +1,7 @@
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { pickPathWithDialog } from '../utils/pickPath';
-import {
+import { DEFAULT_THUMBNAIL_WIDTH } from '../types';
+import type {
   AlbumItemInput,
   AlbumOpenResult,
   AlbumSaveResult,
@@ -62,7 +63,7 @@ export const api = {
   getThumbnail: async (filePath: string, width?: number): Promise<string> => {
     const localCachePath = await invoke<string>('get_thumbnail_cmd', {
       filePath,
-      width: width || 200,
+      width: width || DEFAULT_THUMBNAIL_WIDTH,
     });
     return convertFileSrc(localCachePath);
   },

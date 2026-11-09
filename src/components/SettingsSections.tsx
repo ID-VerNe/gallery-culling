@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { FolderOpen, Zap } from 'lucide-react';
 import { probeLumen, pickLumenCliPath } from '../services/lumenApi';
+import { DEFAULT_THUMBNAIL_WIDTH } from '../types';
 import type { AppSettings, LumenCapabilities, LumenStatus } from '../types';
 
 /**
@@ -93,7 +94,7 @@ export const ThumbnailSection: React.FC<{
               value={width}
               onChange={(e) => {
                 setHint(null);
-                onChange(parseInt(e.target.value, 10) || 200);
+                onChange(parseInt(e.target.value, 10) || DEFAULT_THUMBNAIL_WIDTH);
               }}
               onBlur={commit}
               className="focus-ring w-28 bg-background-base border border-border-default rounded-md px-3 py-1.5 text-white outline-none font-mono text-[11px] focus:border-white/40"
