@@ -20,7 +20,7 @@ use crate::syncqueue::{Intent, IntentSink};
 use crate::xmp as xmp;
 use crate::xmp::{update_xmp_metadata, write_xmp};
 
-use super::{blocking, AppState};
+use super::{blocking, lumen_exe, AppState};
 
 /// 真正的落盘动作：本地旗标存储 → XMP → 删除 pending 意图。
 pub struct DiskSink {
@@ -136,8 +136,8 @@ pub async fn update_rating_flag_cmd(
         // 宿主 XMP 已写成功，UI 不该因 sidecar 抖动而回退。
         if outcome.wrote {
             let intent = &outcome.intent;
-            if settings.lumen_enabled && lumen::should_push_rating(intent.rating, &intent.flag) {
-                if let Some(exe) = lumen::find_lumen_cli(&settings.lumen_cli_path) {
+            if lumen::should_push_rating(intent.rating, &intent.flag) {
+                if let Some(exe) = lumen_exe(&settings) {
                     match runtime.push_rating(
                         &exe,
                         &intent.photo_path,
@@ -329,5 +329,54 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// issue #141 墓碑：评级同步的推送门控必须先过 `lumen_enabled`，再看
+    /// `should_push_rating` —— 即便 exe 真实存在，引擎未启用时也不得推送。
+    ///
+    /// `lumen_exe` 是唯一真值（`commands.rs`），`update_rating_flag_cmd` 的
+    /// 评级同步段（`xmprw.rs`）收敛到它；本用例用真实存在的 fixture
+    /// 固定「禁用即挡」这一维，删掉 `lumen_exe` 里的 `lumen_enabled`
+    /// 检查（或反转条件）时本用例必须红。
+    #[test]
+    fn rating_push_gate_respects_lumen_enabled() {
+        use crate::models::AppSettings;
+
+        // 用真实存在的 fixture 指向 exe：禁用时若把 enabled 检查删掉，
+        // `find_lumen_cli` 会返回 Some，门控断言即红。
+        let fixture = std::path::Path::new("tests/fixtures/lumen_fixture_ok.cmd")
+            .canonicalize()
+            .expect("fixture 必须存在（cargo test 在 src-tauri 下运行）");
+        let disabled = AppSettings {
+            lumen_enabled: false,
+            lumen_cli_path: fixture.to_string_lossy().to_string(),
+            ..Default::default()
+        };
+        let mut enabled = disabled.clone();
+        enabled.lumen_enabled = true;
+
+        let push_gate = |settings: &AppSettings, rating: u8, flag: &str| {
+            super::super::lumen_exe(settings).is_some() && lumen::should_push_rating(rating, flag)
+        };
+
+        // 禁用 + 可推评级（3 星）→ 必须挡住
+        assert!(
+            !push_gate(&disabled, 3, "none"),
+            "lumen_enabled=false 时即便 exe 存在也不得推送评级"
+        );
+        assert!(
+            super::super::lumen_exe(&disabled).is_none(),
+            "lumen_enabled=false 时 lumen_exe 必须返回 None"
+        );
+        // 启用 + 可推评级 → 放行
+        assert!(
+            push_gate(&enabled, 3, "none"),
+            "启用且可推时评级同步门控必须放行"
+        );
+        // 启用 + 不可推评级（0 星无旗标）→ 仍挡住（should_push 维度）
+        assert!(
+            !push_gate(&enabled, 0, "none"),
+            "0 星无旗标按 should_push_rating 仍不得推送"
+        );
     }
 }

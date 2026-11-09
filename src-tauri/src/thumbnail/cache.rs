@@ -185,15 +185,13 @@ pub(super) fn file_fingerprint(file_path: &Path) -> (PathBuf, u128) {
 /// 「mtime == 0 就认为是最新的」这种写法。与 `lumen::cache::mtime_tag` 的
 /// `u128::MAX` 缺省不同：那是给键 payload 用的可区分哨兵，这里 0 沿用历史
 /// 语义（issue #142 只改精度，不改哨兵）。
+/// 实现收敛到 clock（issue #139）：哨兵 0 经参数传入。
 pub(super) fn file_mtime_nanos(file_path: &Path) -> u128 {
-    fs::metadata(file_path)
-        .and_then(|m| m.modified())
-        .map(|t| {
-            t.duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        })
-        .unwrap_or(0)
+    crate::clock::mtime_u128(
+        crate::clock::MtimeInput::Path(file_path),
+        crate::clock::MtimeUnit::Nanos,
+        0,
+    )
 }
 
 /// 用**已算好的**指纹拼出缓存文件路径（避免重复 `canonicalize`/`metadata`）。

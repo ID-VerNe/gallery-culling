@@ -528,10 +528,7 @@ impl Database {
         sort_order: &str,
     ) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = now_secs() as u64;
         // issue #108 PK：save/load 同一 canonical key（斜杠/大小写/末尾斜杠互通），
         // 与前端 `normalizeDir` 同口径。
         let key = normalize_session_key(jpg_folder);
@@ -715,32 +712,31 @@ fn resolve_db_path(data_dir: Option<PathBuf>, home_dir: Option<PathBuf>) -> Path
 }
 
 /// 当前 Unix 秒。写盘意图的时间戳与侧边栏 mtime 用同一把尺子。
+/// 哨兵 0（issue #139：实现收敛到 clock，哨兵由调用方传入）。
 pub fn now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    crate::clock::now_secs_i64()
 }
 
+/// 哨兵 -1（issue #139）：「取不到」与真实 epoch 0 必须可区分 —— syncqueue
+/// 回放靠 `> updated_at`、lumen 同步靠 `> 0`，改成 0 会破坏判据。
 pub fn file_mtime_secs(path: &Path) -> i64 {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(-1)
+    crate::clock::mtime_i64(
+        crate::clock::MtimeInput::Path(path),
+        crate::clock::MtimeUnit::Secs,
+        -1,
+    )
 }
 
 /// 毫秒级 mtime（FR-08 的增量游标用）。
 ///
 /// 秒级不够：同一秒内「外部写一次 → 我们刷新一次 → 外部再写一次」时，两次
 /// mtime 会被截断成同一个值，第二次改动就被静默跳过了。
+/// 哨兵 None（issue #139：实现收敛到 clock，哨兵即 None 本身）。
 pub fn file_mtime_ms(path: &Path) -> Option<i64> {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as i64)
+    crate::clock::mtime_opt_i64(
+        crate::clock::MtimeInput::Path(path),
+        crate::clock::MtimeUnit::Millis,
+    )
 }
 
 #[cfg(test)]
@@ -1500,5 +1496,44 @@ mod tests {
 
         assert_eq!(db.load_lens_presets().unwrap(), mine);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// issue #139：哨兵锁定 —— 文件不存在时 `file_mtime_secs` 必须返回 -1，
+    /// 不是 0。-1 是 syncqueue 回放 `> updated_at`（syncqueue.rs:249）与
+    /// lumen 同步 `> 0` 判据的区分器：「取不到」与真实 epoch 0 不可混同。
+    /// 把 -1 改成 0（变异）本用例必红。
+    #[test]
+    fn file_mtime_missing_sentinel_is_minus_one() {
+        let missing =
+            std::env::temp_dir().join(format!("gc_db_missing_{}_139.xmp", std::process::id()));
+        let _ = std::fs::remove_file(&missing);
+        assert_eq!(
+            file_mtime_secs(&missing),
+            -1,
+            "文件不存在时哨兵必须为 -1，不得退化为 0"
+        );
+        assert!(
+            file_mtime_secs(&missing) <= 0,
+            "哨兵必须非正：回放 `> updated_at` 不得误判为外部修改"
+        );
+    }
+
+    /// issue #139：毫秒哨兵是 None（FR-08 增量游标靠它区分「无文件」与 epoch 0）。
+    #[test]
+    fn file_mtime_ms_missing_sentinel_is_none() {
+        let missing =
+            std::env::temp_dir().join(format!("gc_db_missing_ms_{}_139.xmp", std::process::id()));
+        let _ = std::fs::remove_file(&missing);
+        assert_eq!(
+            file_mtime_ms(&missing),
+            None,
+            "文件不存在时毫秒哨兵必须为 None，不得退化为 0 秒"
+        );
+    }
+
+    /// issue #139：当前时间在 epoch 之后，`now_secs()` 必须为正。
+    #[test]
+    fn now_secs_is_positive() {
+        assert!(now_secs() > 0, "now_secs 应为当前 Unix 秒，必须 > 0");
     }
 }
