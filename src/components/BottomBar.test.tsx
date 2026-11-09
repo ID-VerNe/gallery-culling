@@ -215,6 +215,47 @@ describe('常驻状态栏（issue #62）', () => {
     expect(document.querySelectorAll('[data-status-group="params"]')).toHaveLength(0);
   });
 
+  /**
+   * issue #99 墓碑：左下角状态栏文字互相压盖、身份/体积/EXIF 叠成乱码。
+   *
+   * 根因是可压缩的身份组/参数组没有 overflow-hidden，STATUS_HINT 的
+   * whitespace-nowrap 文本在窄窗溢出自己的盒子，与相邻组文本堆到同一 x 区间。
+   * jsdom 无真实布局，这里锁 className 几何契约（不写 getBoundingClientRect）：
+   *  - 可变长文本组：min-w-0（可压缩）+ overflow-hidden（内部裁切，不溢出压盖相邻组）；
+   *  - 固定动作组：shrink-0（不参与收缩，星级/旗标/色标完整常驻）；
+   *  - pane 自身 overflow-hidden 兜底，且永不横滚；
+   *  - 参数/体积组带 hidden（窄窗整组隐藏，宁可少显示）；
+   *  - 文件名 truncate（过长截断而不是压到相邻组上）。
+   */
+  it('issue #99：窄窗不压盖——文本组可压缩且内部裁切，动作组不收缩，参数/体积组整组隐藏', () => {
+    renderBar({ panes: [makePane()] });
+    const pane = document.querySelector('[data-status-pane="single"]') as HTMLElement;
+    const group = (kind: string) =>
+      pane.querySelector(`[data-status-group="${kind}"]`) as HTMLElement;
+
+    // pane 级兜底：内容不再溢出到右侧动作区，也绝不横滚。
+    expect(pane.className).toContain('overflow-hidden');
+    expect(pane.className).not.toContain('overflow-x-auto');
+
+    // 可变长文本组：可压缩 + 内部裁切，nowrap 文本不溢出压到相邻组（根因所在）。
+    for (const kind of ['identity', 'params']) {
+      expect(group(kind).className, `${kind} 必须 min-w-0`).toContain('min-w-0');
+      expect(group(kind).className, `${kind} 必须 overflow-hidden`).toContain('overflow-hidden');
+    }
+
+    // 固定动作组：不参与收缩，星级/旗标/色标完整常驻。
+    for (const kind of ['rating', 'flag', 'label']) {
+      expect(group(kind).className, `${kind} 必须 shrink-0`).toContain('shrink-0');
+    }
+
+    // 文件名过长时截断，而不是压到相邻组上。
+    expect(group('identity').querySelector('span.font-mono')?.className).toContain('truncate');
+
+    // 窄窗按断点整组隐藏（宁可少显示）：参数组与体积组都带 hidden。
+    expect(group('params').className).toContain('hidden');
+    expect(screen.getByText(/^RAW \d/).parentElement?.className).toContain('hidden');
+  });
+
   it('禁用原因常驻屏幕，不只放 title：撤销/重做/缩放边界', () => {
     renderBar({
       panes: [makePane()],

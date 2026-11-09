@@ -41,8 +41,23 @@ export const STATUS_BAR =
   'border-t border-border-default bg-background-base ' +
   'text-[11px] leading-none text-white/70';
 
-/** 状态栏里的一个窗格组（单图只有一个；双图左右各一个）。 */
-export const STATUS_PANE = 'flex items-center gap-3 min-w-0';
+/**
+ * 状态栏里的一个窗格组（单图只有一个；双图左右各一个）。
+ *
+ * `overflow-hidden` 是 issue #99 的兜底：分组内部再怎么压缩，内容也不许溢出到
+ * 相邻区域 —— 文件头注释要求「不横向滚动」「宁可少显示」，宁可裁掉尾部也不叠字。
+ */
+export const STATUS_PANE = 'flex items-center gap-3 min-w-0 overflow-hidden';
+
+/**
+ * 承载可变长文本（文件名 / 状态 / 体积 / EXIF）的分组几何契约（issue #99）。
+ *
+ * `min-w-0` 允许它比内容窄（参与收缩），`overflow-hidden` 把超出的
+ * `whitespace-nowrap` 文本裁在自己盒子里 —— 这两条缺一不可：只有 `min-w-0`
+ * 而没有裁切时，被压扁的分组里 nowrap 文本会溢出盒子、与相邻组文本叠成一团
+ * （#99 的根因）。窄窗真正该少显示的组由调用点的断点类 `hidden lg:flex` 整组隐藏。
+ */
+export const STATUS_GROUP_TEXT = 'items-center gap-1.5 min-w-0 overflow-hidden';
 
 /** 组与组之间的 1px 竖线；纯装饰，调用点 `aria-hidden`。 */
 export const STATUS_DIVIDER = 'h-3.5 w-px shrink-0 bg-white/15';

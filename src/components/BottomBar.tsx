@@ -25,6 +25,7 @@ import {
   STATUS_BAR,
   STATUS_BUTTON,
   STATUS_DIVIDER,
+  STATUS_GROUP_TEXT,
   STATUS_HINT,
   STATUS_ICON_BUTTON,
   STATUS_PANE,
@@ -413,7 +414,7 @@ const StatusPaneView: React.FC<{ pane: StatusPane; twoPane: boolean }> = ({ pane
       aria-label={slot ? `${paneName} ${group.baseName}` : '当前照片'}
     >
       {/* A. 身份 */}
-      <div data-status-group="identity" className="flex items-center gap-1.5 min-w-0">
+      <div data-status-group="identity" className={`flex ${STATUS_GROUP_TEXT}`}>
         {slot && (
           <span className="shrink-0 rounded bg-white/10 px-1 py-0.5 text-[10px] font-semibold text-white/80">
             {slot}
@@ -440,7 +441,7 @@ const StatusPaneView: React.FC<{ pane: StatusPane; twoPane: boolean }> = ({ pane
           <span className={STATUS_DIVIDER} aria-hidden="true" />
           <div
             data-status-group="params"
-            className="hidden lg:flex items-center gap-1.5 whitespace-nowrap shrink-0"
+            className={`hidden lg:flex ${STATUS_GROUP_TEXT} whitespace-nowrap`}
           >
             <STATUS_TEXT>{exifParts.join(' · ')}</STATUS_TEXT>
             {exif?.lensModel && (
