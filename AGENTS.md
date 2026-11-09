@@ -46,10 +46,11 @@ npm run parity                             # CI 等价复跑：在被推送 sha 
 | 7 | `static` | `check-borders-emitted.mjs` | 扫 src 里所有描边颜色类，逐个去 Tailwind 产物里核对有没有规则（issue #18 · PD-1）。`border.default` 生成的是 `border-border-default`，写成 `border-default` 时一条规则都不产出、回落 currentColor（body 为 text-white，看起来是 100% 白线），只有这条能盯住 |
 | 8 | `static` | `check-sidecar-lock.mjs` | sidecar 锁文件与磁盘产物一致（issue #73）：锁文件字段齐全、`version` 与 `PINNED_LUMEN_VERSION` 一致；产物在盘时再核 exe 哈希、目录文件数与 contentSha256。锁文件入库而 181.6MB 产物不入库，换产物没人报警只能靠这条。干净检出恒无产物，此时打印「未取回」并放行——CI 上固定红就失去意义 |
 | 9 | `static` | `check-export-names.mjs` | 三处手写导出名一致性（issue #124）：解析 Rust 的 EXPORT_MANIFEST_NAME/EXPORT_TMP_PREFIX，与 TS exportMessages.ts 及 e2e 字面量逐个比对；改任一处后只有这条能变红 |
-| 10 | `unit` | `vitest` | 前端全量用例；--pool=vmForks 见 vitest.config.ts 的 pool 说明（Windows 上的既定跑法）。直指包内入口而非 `npx vitest`：本地缺席时 npx 会去 registry 装 vitest@5（另一个大版本，可能真报绿），绕过了 package-lock（issue #24） |
-| 11 | `rust` | `cargo test --lib` | 后端全量单测（真 tmpdir，不 mock fs）；7 例真机冒烟默认 ignored |
+| 10 | `static` | `check-watermark.mjs` | 水印预设名四份一致 + 尺寸 8/35/14（issue #126）：解析 Rust 的 PRESET_NAMES/parse 臂/SIZE_MIN·MAX，与 TS 的 WATERMARK_PRESETS/WatermarkPresetName/三尺寸常量逐字比对；前端多加一名后端未改即整批拒绝，只有这条能提前变红 |
+| 11 | `unit` | `vitest` | 前端全量用例；--pool=vmForks 见 vitest.config.ts 的 pool 说明（Windows 上的既定跑法）。直指包内入口而非 `npx vitest`：本地缺席时 npx 会去 registry 装 vitest@5（另一个大版本，可能真报绿），绕过了 package-lock（issue #24） |
+| 12 | `rust` | `cargo test --lib` | 后端全量单测（真 tmpdir，不 mock fs）；7 例真机冒烟默认 ignored |
 
-共 11 个 CI 门禁，分 3 个分片（static 9、unit 1、rust 1）；manual 2、support 1 见 `scripts/gates.json`。
+共 12 个 CI 门禁，分 3 个分片（static 10、unit 1、rust 1）；manual 2、support 1 见 `scripts/gates.json`。
 <!-- gates:ci:end -->
 
 ### 0.2 证据与验证纪律
