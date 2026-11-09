@@ -13,19 +13,13 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { SettingsModal } from './SettingsModal';
 import { probeLumen } from '../services/lumenApi';
 import { lastInvokeArgs, mockInvokeCommand, mockInvokeError } from '../test/setup';
+import { makeSettings } from '../test/settingsFactory';
 import type { AppSettings } from '../types';
 
-const baseSettings: AppSettings = {
-  defaultJpgFolder: 'D:/shoot/JPG',
+const baseSettings: AppSettings = makeSettings({
   defaultRawFolder: 'D:/shoot/RAW',
-  photoshopPath: '',
-  thumbnailWidth: 200,
-  sortOrder: 'time_filename',
   lumenEnabled: true,
-  lumenCliPath: '',
-  lumenGridThumbnails: false,
-  lumenExpectAi: false,
-};
+});
 
 function setup(overrides: Partial<AppSettings> = {}, user = userEvent.setup()) {
   mockInvokeCommand('get_settings_cmd', { ...baseSettings, ...overrides });

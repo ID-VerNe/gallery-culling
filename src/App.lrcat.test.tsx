@@ -11,6 +11,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import App from './App';
 import { invokeCalls, mockInvokeCommand } from './test/setup';
 import { makeGroup } from './test/factories';
+import { makeSettings } from './test/settingsFactory';
 import type { FolderScanResult, LrcatReadResult } from './types';
 
 const openMock = vi.mocked(openDialog);
@@ -37,17 +38,7 @@ const lrcatResult: LrcatReadResult = {
 };
 
 function mockStartup() {
-  mockInvokeCommand('get_settings_cmd', {
-    defaultJpgFolder: 'D:/shoot/JPG',
-    defaultRawFolder: '',
-    photoshopPath: '',
-    thumbnailWidth: 200,
-    sortOrder: 'time_filename',
-    lumenEnabled: false,
-    lumenCliPath: '',
-    lumenGridThumbnails: false,
-    lumenExpectAi: false,
-  });
+  mockInvokeCommand('get_settings_cmd', makeSettings());
   mockInvokeCommand('save_settings_cmd', true);
   mockInvokeCommand('save_session_cmd', true);
   mockInvokeCommand('scan_folders_cmd', scanResult);

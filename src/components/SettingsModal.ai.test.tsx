@@ -10,19 +10,14 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SettingsModal } from './SettingsModal';
 import { mockInvokeCommand } from '../test/setup';
+import { makeSettings } from '../test/settingsFactory';
 import type { AppSettings, LumenCapabilities } from '../types';
 
-const base: AppSettings = {
+const base: AppSettings = makeSettings({
   defaultJpgFolder: '',
-  defaultRawFolder: '',
-  photoshopPath: '',
-  thumbnailWidth: 200,
-  sortOrder: 'time_filename',
   lumenEnabled: true,
   lumenCliPath: 'C:/lumen/lumen-cli.exe',
-  lumenGridThumbnails: false,
-  lumenExpectAi: false,
-};
+});
 
 const caps = (aiMasks: boolean): LumenCapabilities => ({
   commands: ['edit.apply', 'render.preview'],

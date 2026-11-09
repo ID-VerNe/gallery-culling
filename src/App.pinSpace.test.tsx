@@ -9,6 +9,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import App from './App';
 import { mockInvokeCommand } from './test/setup';
+import { makeSettings } from './test/settingsFactory';
 
 // 用例间必须彻底卸载：焦点会残留在上一棵树的节点上，而空格快捷键要判断
 // `document.activeElement` 是否可激活，残留焦点会让断言互相干扰。
@@ -29,17 +30,7 @@ const photo = (i: number) => ({
 });
 
 function mockStartup(groups = [photo(1), photo(2), photo(3), photo(4)]) {
-  mockInvokeCommand('get_settings_cmd', {
-    defaultJpgFolder: 'D:/shoot/JPG',
-    defaultRawFolder: '',
-    photoshopPath: '',
-    thumbnailWidth: 200,
-    sortOrder: 'time_filename',
-    lumenEnabled: false,
-    lumenCliPath: '',
-    lumenGridThumbnails: false,
-    lumenExpectAi: false,
-  });
+  mockInvokeCommand('get_settings_cmd', makeSettings());
   mockInvokeCommand('save_settings_cmd', true);
   mockInvokeCommand('save_session_cmd', true);
   mockInvokeCommand('load_session_cmd', null);

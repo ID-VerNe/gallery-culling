@@ -12,8 +12,9 @@ import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import App from './App';
 import { mockInvokeCommand } from './test/setup';
-import type { FolderScanResult, ToneState } from './types';
 import { makeGroup } from './test/factories';
+import { makeSettings } from './test/settingsFactory';
+import type { FolderScanResult, ToneState } from './types';
 import { DEFAULT_TONE } from './utils/autoTone';
 
 // 5 张：3 星以上 3 张（A/B/D），Pick 2 张（A/D），淘汰 1 张（C）。
@@ -42,17 +43,7 @@ const toneState: ToneState = {
 };
 
 function mockStartup() {
-  mockInvokeCommand('get_settings_cmd', {
-    defaultJpgFolder: 'D:/shoot/JPG',
-    defaultRawFolder: '',
-    photoshopPath: '',
-    thumbnailWidth: 200,
-    sortOrder: 'time_filename',
-    lumenEnabled: false,
-    lumenCliPath: '',
-    lumenGridThumbnails: false,
-    lumenExpectAi: false,
-  });
+  mockInvokeCommand('get_settings_cmd', makeSettings());
   mockInvokeCommand('save_settings_cmd', true);
   mockInvokeCommand('save_session_cmd', true);
   mockInvokeCommand('scan_folders_cmd', scanResult);

@@ -13,6 +13,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
 import { mockInvokeCommand, mockInvokeError, resetInvokeMocks } from './test/setup';
+import { makeSettings } from './test/settingsFactory';
 import { TASK_CANCELLED_SENTINEL } from './services/taskApi';
 
 beforeEach(() => {
@@ -22,7 +23,7 @@ beforeEach(() => {
 
 /** App 启动时必然触发的一批只读命令，全部给无害返回值。 */
 function mockBaseline() {
-  mockInvokeCommand('get_settings_cmd', { defaultJpgFolder: '' });
+  mockInvokeCommand('get_settings_cmd', makeSettings({ defaultJpgFolder: '' }));
   mockInvokeCommand('load_session_cmd', null);
   mockInvokeCommand('save_settings_cmd', true);
   mockInvokeCommand('save_session_cmd', true);
