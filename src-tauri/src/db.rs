@@ -633,7 +633,7 @@ const APP_DATA_SUBDIR: &str = ".galleryculling";
 /// 「取不到」处理。刻意不引入 `dirs`：`Database::new()` 在 `.setup()` 之前调用
 /// （`lib.rs:29`），此刻没有 `AppHandle`，拿不到 Tauri `PathResolver`；沿用
 /// `lumen/engine.rs:184` 的环境变量口径即可。
-fn user_home_dir() -> Option<PathBuf> {
+pub(crate) fn user_home_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)

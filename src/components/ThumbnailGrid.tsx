@@ -150,11 +150,10 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
     onSearchOpenChange,
   });
 
-  // 每个宫格实例持有一份缩略图去重/缓存（滚动回来命中、并发共享），卸载即释放。
-  // 用惰性初始化的 ref 而不是 useState：不需要触发重渲染，且实例稳定。
-  const loaderRef = useRef<ThumbnailLoader | null>(null);
-  if (!loaderRef.current) loaderRef.current = createThumbnailLoader();
-  const loader = loaderRef.current;
+  // issue #107：缩略图去重/缓存是模块级单例（非实例级）。宫格在切调色面板时
+  // 整树卸载（useSidebarCrossFade），实例级缓存随卸载释放 — 切回后可见格子
+  // 全部重发 IPC。模块级让「同批不变再发」跨卸载存活；进程重启自然清零。
+  const loader = getSharedThumbnailLoader();
 
   // 面板互换（调色面板 → 宫格）时旧 DOM 被卸载，焦点会退回 body。
   // 与既有的"搜索打开时聚焦输入框"合成一个 effect：搜索框优先，否则在
@@ -598,7 +597,9 @@ const THUMB_WIDTH = 200;
  *  - **完成命中**：结果留在 cache，滚回来直接命中，不再发 IPC。
  *
  * 失败**不缓存**，并从 inflight 移除 —— 否则一次磁盘抖动会让该图永远空白、无法重试。
- * 作用域为 `ThumbnailGrid` 实例（useRef 持有），随组件卸载释放，避免跨会话陈旧。
+ * 作用域为模块级单例（issue #107）：跨 `ThumbnailGrid` 卸载存活，随进程结束释放。
+ * 陈旧风险由缓存键承担：同路径同宽度即同图，路径不变则缓存仍对（与实例级
+ * 「滚回来命中」同口径，只是命中的时间跨度从实例延长到进程）。
  *
  * 键用 `宽度|路径`：`group.jpg?.path` / `raw.path` 稳定，适合做键（见 §4 (b)）。
  */
@@ -634,6 +635,23 @@ function dedupeAsync<T>(
   );
   inflight.set(key, p);
   return p;
+}
+
+/** 模块级单例（issue #107）：懒初始化，进程内共享。 */
+let sharedLoader: ThumbnailLoader | null = null;
+
+function getSharedThumbnailLoader(): ThumbnailLoader {
+  if (!sharedLoader) sharedLoader = createThumbnailLoader();
+  return sharedLoader;
+}
+
+/**
+ * 仅测试用：清掉模块级缓存，让每个用例从空缓存起测（`invokeCount` 按用例
+ * 复位后，模块级缓存会跨用例残留 — 用唯一路径可避，但共用路径的用例需要它）。
+ * 生产代码不得调用。
+ */
+export function resetThumbnailLoaderForTest(): void {
+  sharedLoader = null;
 }
 
 function createThumbnailLoader(): ThumbnailLoader {
@@ -674,7 +692,7 @@ interface GridPhotoCellProps {
   onRetrySync?: (group: PhotoGroupInfo) => void;
   /** 见 ThumbnailGridProps.lumenThumbnails */
   lumenThumbnails?: boolean;
-  /** 缩略图加载器（去重 + 缓存），由 ThumbnailGrid 实例持有。 */
+  /** 缩略图加载器（去重 + 缓存），模块级单例（issue #107）。 */
   loader: ThumbnailLoader;
 }
 

@@ -11,9 +11,9 @@
  * 从而让 `measureElement` 拿到有意义的数字 —— **这是对浏览器测量的模拟，不是真实
  * 像素**；真实像素与掉帧仍需实机验证。
  */
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { ThumbnailGrid, gridRowHeight } from './ThumbnailGrid';
+import { gridRowHeight, resetThumbnailLoaderForTest, ThumbnailGrid } from './ThumbnailGrid';
 import {
   invokeCount,
   mockInvokeCommand,
@@ -40,6 +40,11 @@ function group(id: string, overrides: Partial<PhotoGroupInfo> = {}): PhotoGroupI
     ...overrides,
   };
 }
+
+// issue #107：loader 模块级跨用例存活 — 每用例从空缓存起测，避免互踩计数。
+beforeEach(() => {
+  resetThumbnailLoaderForTest();
+});
 
 const grid = (groups: PhotoGroupInfo[], lumenThumbnails = false) => (
   <ThumbnailGrid
@@ -161,6 +166,23 @@ describe('N-09 缩略图 IPC 去重与缓存', () => {
 
     resolveThumb('thumb-shared.jpg');
     await waitFor(() => expect(document.querySelectorAll('img').length).toBe(2));
+  });
+
+  it('issue #107：组件卸载后重挂同一批不变发 IPC（loader 模块级）', async () => {
+    mockInvokeCommand('get_thumbnail_cmd', (args) => `thumb-${String(args?.filePath)}`);
+    // 唯一路径前缀：模块级缓存跨用例存活，避免与同文件其它用例互踩。
+    const groups = [group('re107-x1'), group('re107-x2')];
+    const first = render(grid(groups));
+    await waitFor(() => expect(invokeCount('get_thumbnail_cmd')).toBe(2));
+
+    // 面板切走：宫格整树卸载（useSidebarCrossFade 语义）。
+    first.unmount();
+    // 切回：同一批重挂，不得再发 IPC（实例级 loader 回归前会发到 4）。
+    render(grid(groups));
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(2));
+    // 等待异步缩略图落定后再读数：若有重发，这里会先于断言爬到 4。
+    await waitFor(() => expect(document.querySelectorAll('img').length).toBe(2));
+    expect(invokeCount('get_thumbnail_cmd')).toBe(2);
   });
 
   it('失败不被缓存：重挂后可重试并成功', async () => {

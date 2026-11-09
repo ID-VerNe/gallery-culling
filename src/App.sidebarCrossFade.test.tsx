@@ -12,10 +12,11 @@
  * 轮询（那些内部也走 setTimeout）。退场延迟只有 200ms（`EXIT_MS`），直接用真实计时器 +
  * `waitFor`（默认 1s 足够覆盖）。
  */
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
-import { mockInvokeCommand } from './test/setup';
+import { invokeCount, mockInvokeCommand } from './test/setup';
+import { resetThumbnailLoaderForTest } from './components/ThumbnailGrid';
 import type { FolderScanResult, PhotoGroupInfo, ToneState } from './types';
 import { DEFAULT_TONE } from './utils/autoTone';
 
@@ -43,6 +44,11 @@ const scanResult: FolderScanResult = {
   rawFolder: '',
   isViewerMode: false,
 };
+
+// issue #107：模块级 loader 跨用例存活 — 每用例从空缓存起测。
+beforeEach(() => {
+  resetThumbnailLoaderForTest();
+});
 
 const toneState: ToneState = {
   tone: { ...DEFAULT_TONE },
@@ -113,6 +119,32 @@ describe('App 右侧栏交叉淡入（PB-13）', () => {
     gridPanel = document.querySelector('[data-testid="sidebar-grid"]');
     expect(gridPanel).not.toBeNull();
     expect(gridPanel!.getAttribute('data-exiting')).toBe('true');
+  });
+
+  it('issue #107：切回宫格不重发 get_thumbnail_cmd（模块级 loader）', async () => {
+    resetThumbnailLoaderForTest();
+    mockStartup();
+    await scanPhotos();
+    await waitFor(() => expect(invokeCount('get_thumbnail_cmd')).toBe(1));
+
+    // 切到调色面板：宫格退场卸载。
+    togglePanel();
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="sidebar-grid"]')).toBeNull();
+    });
+
+    // 切回宫格：模块级缓存命中，IPC 计数不变（实例级回归前会到 2）。
+    togglePanel();
+    await waitFor(() => {
+      expect(document.querySelector('[data-testid="sidebar-grid"]')).not.toBeNull();
+    });
+    // 等宫格缩略图落定后再读数：若重发，这里会先爬升。
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-testid="sidebar-grid"] img'),
+      ).not.toBeNull(),
+    );
+    expect(invokeCount('get_thumbnail_cmd')).toBe(1);
   });
 
   it('推进 EXIT_MS 后退场面板从 DOM 卸载', async () => {

@@ -9,11 +9,13 @@ use cache::{
 use fast_image_resize::images::Image as FirImage;
 use fast_image_resize::{PixelType, Resizer};
 use image::{DynamicImage, GenericImageView, ImageFormat, RgbImage};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
+use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
-use std::path::Path;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 /// Read orientation from EXIF (default 1)
 pub fn read_orientation(file_path: &Path) -> u32 {
@@ -106,6 +108,153 @@ pub fn resize_simd(img: &DynamicImage, target_width: u32) -> Result<RgbImage, St
         .ok_or_else(|| "Failed to construct RgbImage from resized bytes".to_string())
 }
 
+/* ------------------------------ issue #107 · PB：单飞 + 并发上限 ------------------------------ */
+
+/// 单飞键：规范化路径 + 宽度（Orientation 是缓存文件的一部分，但同一源文件
+/// 宽度固定时 Orientation 不变，故不进单飞键 —— 与索引键 `ThumbIndexKey` 同款）。
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+struct FlightKey {
+    path: std::path::PathBuf,
+    width: u32,
+}
+
+/// 解码并发上限（issue #107 · PB）：200px 缩略图解码是 CPU 密集，Tokio
+/// `spawn_blocking` 默认池很大，宫格快速滚动会起几十个并发解码。取 8 并发
+/// （超限排队而非拒绝）：远大于细节渲染的 1:1（761MB/张，`detail_busy = 1`）,
+/// 又不至于把核打满。磁盘/索引命中不占 permit。只有真生成才占。
+const THUMB_MAX_CONCURRENT: usize = 8;
+
+type ThumbResult = Result<String, String>;
+
+enum ThumbFlightStatus {
+    Running,
+    Done(Option<ThumbResult>),
+}
+
+struct ThumbFlight {
+    status: Mutex<ThumbFlightStatus>,
+    cvar: Condvar,
+}
+
+static THUMB_FLIGHT: OnceLock<Mutex<HashMap<FlightKey, Arc<ThumbFlight>>>> = OnceLock::new();
+
+fn flight_map() -> &'static Mutex<HashMap<FlightKey, Arc<ThumbFlight>>> {
+    THUMB_FLIGHT.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 按路径单飞：同 `(路径, 宽度)` 并发调用只执行一次 `gen`，其余等待并共享
+/// 领跑者的结果（语义与前端 `dedupeAsync` 的 inflight 去重同款）。
+///
+/// 失败也共享：并发等待者拿到同一个 `Err`，而不是排队逐个重试 —— 前端
+/// 「失败不缓存、重挂可重试」的下一轮 IPC 行为不变（flight 条目已移除）。
+fn run_thumbnail_flight(key: &FlightKey, gen: impl FnOnce() -> ThumbResult) -> ThumbResult {
+    let (slot, is_leader) = {
+        let mut map = flight_map().lock().unwrap_or_else(|e| e.into_inner());
+        match map.get(key) {
+            Some(existing) => (existing.clone(), false),
+            None => {
+                let slot = Arc::new(ThumbFlight {
+                    status: Mutex::new(ThumbFlightStatus::Running),
+                    cvar: Condvar::new(),
+                });
+                map.insert(key.clone(), slot.clone());
+                (slot, true)
+            }
+        }
+    };
+
+    // 领跑者守卫：`gen` panic / 提前 return 都必须放醒等待者，否则它们
+    // 永久等在 Condvar 上（比本功能更糟 —— 一次 panic 让该路径永久不可用）。
+    struct FlightLeaderGuard {
+        slot: Arc<ThumbFlight>,
+        key: FlightKey,
+    }
+    impl Drop for FlightLeaderGuard {
+        fn drop(&mut self) {
+            let mut status = self.slot.status.lock().unwrap_or_else(|e| e.into_inner());
+            if matches!(*status, ThumbFlightStatus::Running) {
+                *status = ThumbFlightStatus::Done(None);
+                self.slot.cvar.notify_all();
+                let mut map = flight_map().lock().unwrap_or_else(|e| e.into_inner());
+                if map
+                    .get(&self.key)
+                    .is_some_and(|a| Arc::ptr_eq(a, &self.slot))
+                {
+                    map.remove(&self.key);
+                }
+            }
+        }
+    }
+
+    if is_leader {
+        let _guard = FlightLeaderGuard {
+            slot: slot.clone(),
+            key: key.clone(),
+        };
+        let result = gen();
+        {
+            let mut status = slot.status.lock().unwrap_or_else(|e| e.into_inner());
+            *status = ThumbFlightStatus::Done(Some(result.clone()));
+        }
+        slot.cvar.notify_all();
+        {
+            let mut map = flight_map().lock().unwrap_or_else(|e| e.into_inner());
+            if map.get(key).is_some_and(|a| Arc::ptr_eq(a, &slot)) {
+                map.remove(key);
+            }
+        }
+        result
+    } else {
+        let mut status = slot.status.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            match &*status {
+                ThumbFlightStatus::Done(Some(r)) => return r.clone(),
+                ThumbFlightStatus::Done(None) => {
+                    // 永不写入的兜底：领跑者 panic 导致状态未置 Done 前已
+                    // 由 leader 的守卫置 Done(None)，等待者各自落到重跑。
+                    return gen();
+                }
+                ThumbFlightStatus::Running => {
+                    status = slot.cvar.wait(status).unwrap_or_else(|e| e.into_inner());
+                }
+            }
+        }
+    }
+}
+
+struct PermitPool {
+    available: Mutex<u32>,
+    cvar: Condvar,
+}
+
+static THUMB_POOL: OnceLock<PermitPool> = OnceLock::new();
+
+fn thumbnail_pool() -> &'static PermitPool {
+    THUMB_POOL.get_or_init(|| PermitPool {
+        available: Mutex::new(THUMB_MAX_CONCURRENT as u32),
+        cvar: Condvar::new(),
+    })
+}
+
+/// 拿一个解码 permit（不足则阻塞排队），运行 `gen`，离开时归还。
+fn with_thumbnail_permit<R>(gen: impl FnOnce() -> R) -> R {
+    let pool = thumbnail_pool();
+    {
+        let mut avail = pool.available.lock().unwrap_or_else(|e| e.into_inner());
+        while *avail == 0 {
+            avail = pool.cvar.wait(avail).unwrap_or_else(|e| e.into_inner());
+        }
+        *avail -= 1;
+    }
+    let result = gen();
+    {
+        let mut avail = pool.available.lock().unwrap_or_else(|e| e.into_inner());
+        *avail += 1;
+        pool.cvar.notify_one();
+    }
+    result
+}
+
 /// Generate or retrieve thumbnail path with automatic orientation correction
 pub fn get_or_create_thumbnail(file_path: &Path, target_width: u32) -> Result<String, String> {
     get_or_create_thumbnail_with(file_path, target_width, read_orientation)
@@ -127,8 +276,31 @@ fn get_or_create_thumbnail_with(
     }
 
     let (abs_path, mtime) = file_fingerprint(file_path);
-    let index_key = ThumbIndexKey {
+    let flight_key = FlightKey {
         path: abs_path.clone(),
+        width: target_width,
+    };
+    // 同路径并发只让一个线程真正生成，其余等待后复用内存索引/磁盘缓存。
+    run_thumbnail_flight(&flight_key, || {
+        get_or_create_thumbnail_single(
+            file_path,
+            target_width,
+            &abs_path,
+            mtime,
+            &read_orientation_fn,
+        )
+    })
+}
+
+fn get_or_create_thumbnail_single(
+    file_path: &Path,
+    target_width: u32,
+    abs_path: &Path,
+    mtime: u64,
+    read_orientation_fn: &impl Fn(&Path) -> u32,
+) -> Result<String, String> {
+    let index_key = ThumbIndexKey {
+        path: abs_path.to_path_buf(),
         mtime,
         width: target_width,
     };
@@ -144,7 +316,7 @@ fn get_or_create_thumbnail_with(
 
     // ② 未命中：才读 orientation（它是缓存键的一部分，旋转后会重存，不能省略）。
     let orientation = read_orientation_fn(file_path);
-    let cache_path = cache_path_for(&abs_path, mtime, file_path, target_width, orientation);
+    let cache_path = cache_path_for(abs_path, mtime, file_path, target_width, orientation);
 
     // ③ 磁盘命中（跨进程/重启后的首访）：严格校验后回写索引。
     if cache_file_fresh(&cache_path, file_path) {
@@ -152,15 +324,28 @@ fn get_or_create_thumbnail_with(
         return Ok(cache_path.to_string_lossy().to_string());
     }
 
-    // ④ 生成缩略图：优先相机内嵌缩略图，退回整图 SIMD 缩放。
+    // ④ 生成：真解码才占 permit（命中路径不占）。
+    with_thumbnail_permit(|| {
+        generate_thumbnail(file_path, target_width, orientation, &cache_path, index_key)
+    })
+}
+
+/// 真生成：优先相机内嵌缩略图，退回整图 SIMD 缩放（原 ④ 逐字）。
+fn generate_thumbnail(
+    file_path: &Path,
+    target_width: u32,
+    orientation: u32,
+    cache_path: &Path,
+    index_key: ThumbIndexKey,
+) -> Result<String, String> {
     if let Some(thumb_bytes) = try_extract_exif_thumbnail(file_path) {
         if let Ok(thumb_img) = image::load_from_memory(&thumb_bytes) {
             let oriented = apply_orientation(thumb_img, orientation);
             let resized = resize_simd(&oriented, target_width)?;
             resized
-                .save_with_format(&cache_path, ImageFormat::Jpeg)
+                .save_with_format(cache_path, ImageFormat::Jpeg)
                 .map_err(|e| format!("保存缩略图缓存失败: {}", e))?;
-            remember_index(index_key, &cache_path);
+            remember_index(index_key, cache_path);
             return Ok(cache_path.to_string_lossy().to_string());
         }
     }
@@ -172,10 +357,10 @@ fn get_or_create_thumbnail_with(
     let oriented = apply_orientation(img, orientation);
     let resized = resize_simd(&oriented, target_width)?;
     resized
-        .save_with_format(&cache_path, ImageFormat::Jpeg)
+        .save_with_format(cache_path, ImageFormat::Jpeg)
         .map_err(|e| format!("保存缩略图缓存失败: {}", e))?;
 
-    remember_index(index_key, &cache_path);
+    remember_index(index_key, cache_path);
     Ok(cache_path.to_string_lossy().to_string())
 }
 
@@ -332,6 +517,183 @@ mod tests {
         // 同一输入可复现（含 mtime/orientation 的确定性）。
         assert_eq!(p, cache_path_for(&abs, mtime, &src, 200, 6));
         cleanup_temp(&src);
+    }
+
+    /* -------------------- issue #107 · PB：单飞 + 并发上限 -------------------- */
+
+    /// issue #107 PB 墓碑：同路径并发只生成一次，其余共享结果。
+    /// 变异：去掉单飞（每次都直接跑 `gen`）必须红（计数会 > 1）。
+    #[test]
+    fn thumbnail_singleflight_same_path_shares_one_generation() {
+        use std::sync::atomic::AtomicUsize as AUsize;
+        let counter = std::sync::Arc::new(AUsize::new(0));
+        let key = FlightKey {
+            path: PathBuf::from("D:/shoot/shared.CR3"),
+            width: 200,
+        };
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let c = counter.clone();
+            let k = key.clone();
+            handles.push(std::thread::spawn(move || {
+                run_thumbnail_flight(&k, || {
+                    let n = c.fetch_add(1, Ordering::SeqCst) + 1;
+                    std::thread::sleep(std::time::Duration::from_millis(150));
+                    Ok(format!("thumb-{n}"))
+                })
+            }));
+        }
+        let results: Vec<String> = handles
+            .into_iter()
+            .map(|h| h.join().expect("thread").expect("flight result"))
+            .collect();
+        assert_eq!(counter.load(Ordering::SeqCst), 1, "同路径只应生成一次");
+        assert!(
+            results.iter().all(|v| v == "thumb-1"),
+            "并发调用必须共享同一结果"
+        );
+    }
+
+    /// 不同路径不得互相串扰（单飞是路径级，不是全局单飞）。
+    #[test]
+    fn thumbnail_singleflight_different_paths_run_independently() {
+        use std::sync::atomic::AtomicUsize as AUsize;
+        let counter = std::sync::Arc::new(AUsize::new(0));
+        let keys = vec![
+            FlightKey {
+                path: PathBuf::from("D:/shoot/a.CR3"),
+                width: 200,
+            },
+            FlightKey {
+                path: PathBuf::from("D:/shoot/b.CR3"),
+                width: 200,
+            },
+        ];
+        let mut handles = Vec::new();
+        for k in keys {
+            let c = counter.clone();
+            handles.push(std::thread::spawn(move || {
+                run_thumbnail_flight(&k, || {
+                    let n = c.fetch_add(1, Ordering::SeqCst) + 1;
+                    std::thread::sleep(std::time::Duration::from_millis(80));
+                    Ok(format!("thumb-{n}"))
+                })
+            }));
+        }
+        for h in handles {
+            let _ = h.join().expect("thread");
+        }
+        assert_eq!(counter.load(Ordering::SeqCst), 2, "不同路径各生成一次");
+    }
+
+    /// issue #107 PB 墓碑：解码并发上限为 8（超限排队，不拒绝）。
+    /// 变异：把上限改成无上限必须红（观测到的最大并发会 > 8）。
+    #[test]
+    fn thumbnail_decode_concurrency_is_capped() {
+        use std::sync::atomic::{AtomicUsize as AUsize, Ordering as O};
+        let current = std::sync::Arc::new(AUsize::new(0));
+        let max_seen = std::sync::Arc::new(AUsize::new(0));
+        let mut handles = Vec::new();
+        for _ in 0..16 {
+            let cur = current.clone();
+            let max = max_seen.clone();
+            handles.push(std::thread::spawn(move || {
+                with_thumbnail_permit(|| {
+                    let n = cur.fetch_add(1, O::SeqCst) + 1;
+                    loop {
+                        let m = max.load(O::SeqCst);
+                        if n > m && max.compare_exchange(m, n, O::SeqCst, O::SeqCst).is_ok() {
+                            break;
+                        }
+                        if n <= m {
+                            break;
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(90));
+                    cur.fetch_sub(1, O::SeqCst);
+                });
+            }));
+        }
+        for h in handles {
+            h.join().expect("thread");
+        }
+        let peak = max_seen.load(O::SeqCst);
+        // 硬编码 8 而非 `THUMB_MAX_CONCURRENT`：变异放大常量时断言必须红，
+        // 否则测试会跟着常量一起放宽（无效变异）。
+        assert!(peak <= 8, "并发峰值 {peak} 必须 ≤ 8");
+        assert!(peak > 1, "上限应允许真实并发，而非串行");
+        assert_eq!(current.load(O::SeqCst), 0, "permit 必须全部归还");
+    }
+
+    /* -------------------- issue #107 · PA：跨进程磁盘命中不重生成 -------------------- */
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// issue #107 PA 墓碑：进程内索引清空（模拟重启）后，磁盘命中不得重解码/重写盘。
+    /// 用真 JPEG + 隔离目录（`GALLERY_DATA_DIR`）验证：两次结果同路径、文件 mtime 不变。
+    #[test]
+    fn thumbnail_disk_hit_after_restart_does_not_regenerate() {
+        use std::sync::Mutex as StdMutex;
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = TEMP_SEQ.fetch_add(1, Ordering::SeqCst);
+        let root =
+            std::env::temp_dir().join(format!("gfx_diskhit107_{}_{}", std::process::id(), seq));
+        let data_dir = root.join("data");
+        let src_dir = root.join("src");
+        std::fs::create_dir_all(&src_dir).expect("create src dir");
+        // 真 JPEG 源（placeholder 字节解不出图，走不完缓存路径）。
+        let src = src_dir.join("photo107.jpg");
+        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(400, 300, image::Rgb([12, 34, 56])));
+        img.save(&src).expect("save source jpg");
+
+        let prev = std::env::var_os(crate::db::DATA_DIR_ENV);
+        std::env::set_var(crate::db::DATA_DIR_ENV, &data_dir);
+        // 计数闭包只为守卫：根守卫在作用域内恢复 env（panic 也恢复）。
+        struct EnvGuard(Option<std::ffi::OsString>);
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match &self.0 {
+                    Some(v) => std::env::set_var(crate::db::DATA_DIR_ENV, v),
+                    None => std::env::remove_var(crate::db::DATA_DIR_ENV),
+                }
+            }
+        }
+        let _guard = EnvGuard(prev);
+
+        let first = get_or_create_thumbnail(&src, 200).expect("首次生成");
+        let cache_path = PathBuf::from(&first);
+        assert!(
+            cache_path.starts_with(&data_dir),
+            "缓存必须落在隔离目录 {}，实际 {}",
+            data_dir.display(),
+            cache_path.display()
+        );
+        let meta0 = std::fs::metadata(&cache_path).expect("cache meta");
+        let mtime0 = meta0.modified().expect("cache mtime");
+        let len0 = meta0.len();
+
+        // 模拟进程重启：清掉内存索引，只剩磁盘。
+        let (abs, mtime) = file_fingerprint(&src);
+        drop_index(&ThumbIndexKey {
+            path: abs.clone(),
+            mtime,
+            width: 200,
+        });
+        // 等跨过文件系统 mtime 粒度（秒级）：若第二次真重写，mtime 必前进。
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+
+        let second = get_or_create_thumbnail(&src, 200).expect("磁盘命中");
+        assert_eq!(first, second, "磁盘命中必须返回同一缓存路径");
+        let meta1 = std::fs::metadata(&cache_path).expect("cache meta after");
+        assert_eq!(len0, meta1.len(), "磁盘命中不得重写文件");
+        assert_eq!(
+            mtime0,
+            meta1.modified().expect("mtime"),
+            "磁盘命中不得重生成（mtime 变了说明重写盘了）"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _: StdMutex<()> = StdMutex::new(());
     }
 
     /// 存量缓存兼容性的硬证明：用**旧算法**（重构前逐字）复算缓存文件名，断言与
