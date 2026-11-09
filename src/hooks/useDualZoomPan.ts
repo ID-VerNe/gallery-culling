@@ -9,25 +9,17 @@ import {
   clampScale,
   clampToPane,
   clampToPanePair,
-  clampToTrail,
   dampToPane,
   dampToPanePair,
   dragGrab,
   dragTarget,
   isFitScale,
-  isFlingVelocity,
-  nowMs,
   paneMaxPan,
   paneMaxPanPair,
-  pointerVelocity,
-  projectFling,
-  pushPointerSample,
-  runInertia,
-  type InertiaRun,
-  type PointerSample,
   type Vec2,
 } from '../utils/viewportZoom';
 import { GESTURE, SETTLE } from '../utils/viewportMotion';
+import { useInertiaGesture } from './useInertiaGesture';
 
 const ORIGIN: Vec2 = { x: 0, y: 0 };
 
@@ -107,27 +99,6 @@ export function useDualZoomPan<P extends string>(
   const imgEls = useRef<Record<P, HTMLImageElement | null>>(
     {} as Record<P, HTMLImageElement | null>,
   );
-  // 收尾采样与在飞的收尾（issue #22），口径与 useZoomPan 一致：数学在 viewportZoom.ts。
-  const samplesRef = useRef<PointerSample[]>([]);
-  const inertiaRef = useRef<InertiaRun | null>(null);
-
-  /** 停掉在飞的收尾：任何「新意图」（按下 / 滚轮 / ± / 复位 / 换图）都优先。 */
-  const cancelInertia = useCallback(() => {
-    inertiaRef.current?.stop();
-    inertiaRef.current = null;
-  }, []);
-
-  // 卸载时不能留 rAF：否则收尾会在组件消失后继续 setState。
-  useEffect(() => cancelInertia, [cancelInertia]);
-
-  useEffect(() => {
-    // 换图即取消在飞的收尾：惯性属于上一张照片的位移，带进新图会把它推出画面。
-    inertiaRef.current?.stop();
-    inertiaRef.current = null;
-    samplesRef.current = [];
-    setFirst(INIT_PANE);
-    setSecond(INIT_PANE);
-  }, [resetKey]);
 
   const isFirst = (p: P) => panes[0] === p;
   const get = (p: P): PaneState => (isFirst(p) ? first : second);
@@ -138,6 +109,50 @@ export function useDualZoomPan<P extends string>(
     },
     [panes],
   );
+
+  // 惯性骨架（issue #123）：双栏注入 sync 分叉（联动写两栏 / 独立写 activePane），
+  // 抬手编排在工厂里，口径与单栏一致：数学在 viewportZoom.ts。
+  const { cancelInertia, clearSamples, clearForNewImage, sampleDrag, finishPointerUp } =
+    useInertiaGesture({
+      clampPos: (p) =>
+        sync
+          ? clampToPanePair(
+              paneEls.current[panes[0]],
+              imgEls.current[panes[0]],
+              first.scale,
+              paneEls.current[panes[1]],
+              imgEls.current[panes[1]],
+              second.scale,
+              p,
+            )
+          : clampToPane(paneEls.current[activePane], imgEls.current[activePane], p, get(activePane).scale),
+      writePos: (p) => {
+        if (sync) {
+          setFirst((prev) => ({ ...prev, pos: p }));
+          setSecond((prev) => ({ ...prev, pos: p }));
+        } else {
+          setPane(activePane, (prev) => ({ ...prev, pos: p }));
+        }
+      },
+      getMaxPan: () =>
+        sync
+          ? paneMaxPanPair(
+              paneEls.current[panes[0]],
+              imgEls.current[panes[0]],
+              first.scale,
+              paneEls.current[panes[1]],
+              imgEls.current[panes[1]],
+              second.scale,
+            )
+          : paneMaxPan(paneEls.current[activePane], imgEls.current[activePane], get(activePane).scale),
+      setTransition,
+    });
+
+  useEffect(() => {
+    clearForNewImage();
+    setFirst(INIT_PANE);
+    setSecond(INIT_PANE);
+  }, [resetKey, clearForNewImage]);
 
   const zoomBy = useCallback(
     (factor: number) => {
@@ -156,12 +171,11 @@ export function useDualZoomPan<P extends string>(
   );
 
   const reset = useCallback(() => {
-    cancelInertia();
-    samplesRef.current = [];
+    clearForNewImage();
     setTransition(SETTLE);
     setFirst(INIT_PANE);
     setSecond(INIT_PANE);
-  }, [cancelInertia]);
+  }, [clearForNewImage]);
 
   const toggleSync = useCallback(() => {
     // 收尾写哪几栏由抬手那一刻的 sync 决定，中途换模式会让两栏分叉：直接停。
@@ -194,7 +208,7 @@ export function useDualZoomPan<P extends string>(
     // 覆盖层交互元素（设为基准、评分等）不进入拖拽。
     if (e.target !== e.currentTarget) return;
     cancelInertia();
-    samplesRef.current = [];
+    clearSamples();
     setTransition(GESTURE);
     setIsDragging(true);
     setActivePane(p);
@@ -207,11 +221,7 @@ export function useDualZoomPan<P extends string>(
     // 绝对系：由客户端坐标与抓取偏移反解目标平移量，与 grab 是否已提交无关。
     const target = dragTarget(e.clientX, e.clientY, grabRef.current);
     // 速度采样（issue #22）：只留最近 100ms，抬手前停一下速度自然归零。
-    samplesRef.current = pushPointerSample(samplesRef.current, {
-      t: nowMs(),
-      x: e.clientX,
-      y: e.clientY,
-    });
+    sampleDrag(e.clientX, e.clientY);
     if (sync) {
       // 联动平移两栏：越界段按公共边界乘阻尼（PB-8），抬手后再收回界内。
       const damped = dampToPanePair(
@@ -239,79 +249,9 @@ export function useDualZoomPan<P extends string>(
     const host = e.currentTarget as HTMLElement;
     if (host.hasPointerCapture(e.pointerId)) host.releasePointerCapture(e.pointerId);
 
-    // PB-6：把手上的速度交出去。写哪几栏由抬手这一刻的 sync 决定，落点先过
-    // clampToPane / clampToPanePair —— 惯性再大也不会让任一栏露空。
-    // 松手点本身必须入样：停手再松手时窗口里只剩它一个点，速度归零。
-    const velocity = pointerVelocity(
-      pushPointerSample(samplesRef.current, { t: nowMs(), x: e.clientX, y: e.clientY }),
-    );
-    samplesRef.current = [];
-    const projection = projectFling(velocity);
+    // 抬手编排在工厂里（PB-6/PB-8，写哪几栏由注入的 sync 分叉决定）。
     const current: Vec2 = sync ? first.pos : get(activePane).pos;
-    const clampPos = (p: Vec2): Vec2 =>
-      sync
-        ? clampToPanePair(
-            paneEls.current[panes[0]],
-            imgEls.current[panes[0]],
-            first.scale,
-            paneEls.current[panes[1]],
-            imgEls.current[panes[1]],
-            second.scale,
-            p,
-          )
-        : clampToPane(paneEls.current[activePane], imgEls.current[activePane], p, get(activePane).scale);
-    const writePos = (p: Vec2) => {
-      if (sync) {
-        setFirst((prev) => ({ ...prev, pos: p }));
-        setSecond((prev) => ({ ...prev, pos: p }));
-      } else {
-        setPane(activePane, (prev) => ({ ...prev, pos: p }));
-      }
-    };
-
-    const target = clampPos({ x: current.x + projection.x, y: current.y + projection.y });
-    const settled = clampPos(current);
-    // 抬手瞬间的越界量：收尾时按 remain 逐帧收敛到 0（回弹曲线），而不是被剪掉。
-    const overflow = { x: current.x - settled.x, y: current.y - settled.y };
-    const outOfBounds = settled.x !== current.x || settled.y !== current.y;
-    if (!isFlingVelocity(velocity) && !outOfBounds) {
-      setTransition(SETTLE);
-      return;
-    }
-
-    // 收尾期间是手势通道：逐帧写 transform，不能再让 CSS 补一次间。
-    setTransition(GESTURE);
-    inertiaRef.current?.stop();
-    inertiaRef.current = runInertia(
-      current,
-      target,
-      // 每帧按「当前边界 + 尚未衰减的越界量」夹紧：回弹逐帧收敛，边界中途
-      // 收紧时新边界立刻生效（不能等落定才跳回去）。
-      (next, remain) =>
-        writePos(
-          clampToTrail(
-            next,
-            sync
-              ? paneMaxPanPair(
-                  paneEls.current[panes[0]],
-                  imgEls.current[panes[0]],
-                  first.scale,
-                  paneEls.current[panes[1]],
-                  imgEls.current[panes[1]],
-                  second.scale,
-                )
-              : paneMaxPan(paneEls.current[activePane], imgEls.current[activePane], get(activePane).scale),
-            overflow,
-            remain,
-          ),
-        ),
-      () => {
-        inertiaRef.current = null;
-        // 落定这一帧按当前几何再夹一次：收尾途中改窗口 / 换图也不会留在界外。
-        writePos(clampPos(target));
-        setTransition(SETTLE);
-      },
-    );
+    finishPointerUp(e.clientX, e.clientY, current);
   };
 
   const handleDoubleClick = (p: P) => {
