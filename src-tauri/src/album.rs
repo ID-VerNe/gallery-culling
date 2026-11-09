@@ -266,12 +266,11 @@ pub fn resolve_documents(album_path: &Path, docs: &[AlbumDoc]) -> Vec<ResolvedDo
             exists: meta.is_some(),
             is_raw: is_raw_path(&resolved),
             size: meta.as_ref().map(|m| m.len()).unwrap_or(0),
-            mtime: meta
-                .as_ref()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
+            mtime: crate::clock::mtime_u64(
+                crate::clock::MtimeInput::Metadata(meta.as_ref()),
+                crate::clock::MtimeUnit::Secs,
+                0,
+            ),
             path: resolved.to_string_lossy().to_string(),
             // 配对 JPG 只有**真的在磁盘上**才算数：记着路径但文件已被删，
             // 前端拿到一个不存在的 jpg 会渲染成破图，比没有更糟。
@@ -280,12 +279,11 @@ pub fn resolve_documents(album_path: &Path, docs: &[AlbumDoc]) -> Vec<ResolvedDo
                 .map(|p| p.to_string_lossy().to_string()),
             jpg_exists: jpg_meta.is_some(),
             jpg_size: jpg_meta.as_ref().map(|m| m.len()).unwrap_or(0),
-            jpg_mtime: jpg_meta
-                .as_ref()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
+            jpg_mtime: crate::clock::mtime_u64(
+                crate::clock::MtimeInput::Metadata(jpg_meta.as_ref()),
+                crate::clock::MtimeUnit::Secs,
+                0,
+            ),
             // 命令层读完 XMP 再填（本模块不碰 XMP）。
             has_xmp: false,
             tone: None,

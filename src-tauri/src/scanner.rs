@@ -115,14 +115,14 @@ pub(crate) fn extract_tone_from_xmp(meta: &XmpMetadata) -> Option<ToneAdjustment
 ///
 /// 缺省取 0 而非别的值：mtime 在本文件里只用于「同一目录内排序的次级键」，
 /// 0 表示"没有时间信息"，与真实的 epoch 0 在排序上等价。
-/// 注意 `db::file_mtime_secs` 用的是 **-1** 缺省且语义不同（那边判 `> 0`），
-/// 两者不可合并。
+/// 实现收敛到 clock（issue #139）：哨兵经参数传入，仍为 0 —— 与
+/// `db::file_mtime_secs` 的 **-1** 区分（那边判 `> 0`，语义不同，不可换哨兵）。
 fn secs_from_meta(metadata: Option<&std::fs::Metadata>) -> u64 {
-    metadata
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    crate::clock::mtime_u64(
+        crate::clock::MtimeInput::Metadata(metadata),
+        crate::clock::MtimeUnit::Secs,
+        0,
+    )
 }
 
 /// 求 JPG / RAW 词干并集。
