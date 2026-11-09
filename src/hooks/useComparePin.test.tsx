@@ -12,17 +12,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { useComparePin } from './useComparePin';
+import { makeGroup } from '../test/factories';
 import type { PhotoGroupInfo } from '../types';
 
-const photo = (id: string): PhotoGroupInfo => ({
-  id,
-  baseName: `IMG_${id}`,
-  status: 'COMPLETE',
-  rating: 0,
-  flag: 'none',
-  label: '',
-  hasXmp: false,
-});
+const photo = (id: string) =>
+  makeGroup(id, { baseName: `IMG_${id}`, status: 'COMPLETE', jpg: undefined });
 
 function setup(currentGroup: PhotoGroupInfo | undefined, groups: PhotoGroupInfo[] = []) {
   return renderHook(() =>

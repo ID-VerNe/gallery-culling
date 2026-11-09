@@ -20,26 +20,11 @@ import {
   mockInvokeError,
   setInvokeHandler,
 } from '../test/setup';
+import { makeGroup, rawFile } from '../test/factories';
 import type { PhotoGroupInfo } from '../types';
 
-function group(id: string, overrides: Partial<PhotoGroupInfo> = {}): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
-    raw: {
-      name: `${id}.CR3`,
-      extension: 'CR3',
-      path: `D:/shoot/${id}.CR3`,
-      size: 1,
-      mtime: 0,
-    },
-    status: 'RAW_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '', hasXmp: false,
-    ...overrides,
-  };
-}
+const group = (id: string, overrides: Partial<PhotoGroupInfo> = {}) =>
+  makeGroup(id, { status: 'RAW_ONLY', raw: rawFile(id, 'CR3', 'D:/shoot'), jpg: undefined, ...overrides });
 
 // issue #107：loader 模块级跨用例存活 — 每用例从空缓存起测，避免互踩计数。
 beforeEach(() => {

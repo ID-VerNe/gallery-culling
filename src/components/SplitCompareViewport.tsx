@@ -16,6 +16,8 @@ import { useDualZoomPan } from '../hooks/useDualZoomPan';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
 import { ViewportZoomBar } from './ViewportZoomBar';
+import { RawRenderingBanner } from './RawRenderingBanner';
+import { rawOnlyEmptyState } from '../utils/viewportRawCopy';
 
 interface SplitCompareViewportProps {
   leftGroup?: PhotoGroupInfo;
@@ -94,15 +96,13 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
 
     // RAW-only：解码中 → 渲染窗格并显示横幅；失败/未启用 → 明确占位而非破图（C2）。
     if (!image.src && !(image.rawOnly && image.loading)) {
+      const engineAvailable = lumenStatus?.available === true;
       return (
         <ViewportEmptyStateView
           variant="pane"
           emptyState={
             image.rawOnly
-              ? {
-                  title: '该 RAW 需启用 LUMEN RAW 引擎',
-                  description: '启用 LUMEN RAW 引擎后即可在此实时预览。',
-                }
+              ? rawOnlyEmptyState({ engineAvailable })
               : {
                   title: isLeft ? '左侧未选择' : '右侧未选择',
                   description: isLeft
@@ -167,14 +167,7 @@ export const SplitCompareViewport: React.FC<SplitCompareViewportProps> = ({
         )}
 
         {/* RAW-only 首次进入时的轻提示（与单图视图一致，不弹窗） */}
-        {image.loading && (
-          <div
-            role="status"
-            className="absolute top-3 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3 py-1 rounded-md text-[11px] font-semibold text-white/80 border border-border-default pointer-events-none"
-          >
-            正在渲染 RAW…
-          </div>
-        )}
+        {image.loading && <RawRenderingBanner />}
 
 
         {/* 含成品提示：该分组存在 edited（Luminar 成果）。

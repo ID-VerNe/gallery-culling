@@ -24,7 +24,7 @@ import { PreviewViewport } from './PreviewViewport';
 import { SplitCompareViewport } from './SplitCompareViewport';
 import { BeforeAfterViewport } from './BeforeAfterViewport';
 import { resetInvokeMocks, mockInvokeCommand } from '../test/setup';
-import type { PhotoGroupInfo } from '../types';
+import { jpgFile, makeGroup } from '../test/factories';
 
 /** jsdom 不实现 Pointer Capture，三个视口的拖拽都依赖它。 */
 function stubPointerCapture() {
@@ -41,17 +41,7 @@ beforeEach(() => {
   mockInvokeCommand('probe_lumen_cmd', { available: false });
 });
 
-function jpgGroup(id: string): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
-    jpg: { name: `${id}.jpg`, extension: 'jpg', path: `D:/shoot/${id}.jpg`, size: 1, mtime: 0 },
-    status: 'JPG_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '', hasXmp: false,
-  };
-}
+const jpgGroup = (id: string) => makeGroup(id, { jpg: jpgFile(id, 'D:/shoot') });
 
 /** 从 `transform: translate(Xpx, Ypx) scale(...)` 里读出当前平移量。 */
 function readTranslate(el: HTMLElement): { x: number; y: number } {
@@ -274,5 +264,127 @@ describe('issue #22 · 双栏视口的收尾口径', () => {
     });
     expect(readTranslate(imgs[0]).x).toBe(600); // 左栏甩到底
     expect(readTranslate(imgs[1])).toEqual({ x: 0, y: 0 }); // 右栏不动
+  });
+});
+
+// ---------------------------------------------------------------------------
+// issue #123 · 手感数值锁（逐帧精确断言，防 FLING_TAU_MS 漂移）
+//
+// 背景：`ViewportPanConsistency` 以前的惯性断言只用区间（`>200 && <600`），
+// `FLING_TAU_MS` 一动投影与曲线同时变，落定仍被边界夹到 `600`，中间仍在
+// 区间内——用例不红。#123 要把 `useZoomPan` / `useDualZoomPan` 的手势骨架
+// 收敛为 `useInertiaGesture` 工厂，收敛前先把手感钉成硬编码数值。
+//
+// 推导（不读 `FLING_TAU_MS` 常量，改常量就该红）：
+//   flick `100→200→300`，每段 16ms → 速度 `100/16 = 6.25 px/ms`，命中
+//   `FLING_MAX_SPEED = 6` 封顶 → 投影 `6 * 250 = 1500px`，落点 `200+1500=1700`
+//   被 `clampToPane` 夹到上限 `600`（setup 桩：`img 1200×800, pane 0` →
+//   `(1200-0)/2=600`）。`runInertia` 的 `inertiaAt` 为
+//   `to + (from-to) * exp(-elapsed / 250)`；`flick` 后 `advance(16)` 是首帧
+//   （`elapsed 0 → 200`），再 `advance(96)` 时 `elapsed 96ms`：
+//   `600 + (200-600) * exp(-96/250) = 600 - 400 * 0.681136 ≈ 327.55`。
+//   越界回弹：双击 `2.5` → 上限 `1500`，拖到 `3000` 得 `1500+1400*0.4=2060`，
+//   `elapsed 96` 时 `1500 + 560 * 0.681136 ≈ 1881.43`。
+// ---------------------------------------------------------------------------
+describe('issue #123 · 手感数值锁（逐帧）', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function flick(host: HTMLElement) {
+    fireEvent.pointerDown(host, { button: 0, clientX: 100, clientY: 400, pointerId: 1 });
+    vi.advanceTimersByTime(16);
+    fireEvent.pointerMove(host, { clientX: 200, clientY: 400, pointerId: 1 });
+    vi.advanceTimersByTime(16);
+    fireEvent.pointerMove(host, { clientX: 300, clientY: 400, pointerId: 1 });
+    fireEvent.pointerUp(host, { clientX: 300, clientY: 400, pointerId: 1 });
+  }
+
+  it('Preview 甩动：中间帧精确卡在 TAU=250 的曲线上', () => {
+    render(
+      <PreviewViewport
+        group={GROUP}
+        onPrev={vi.fn()}
+        onNext={vi.fn()}
+      />,
+    );
+    const img = screen.getByAltText(GROUP.baseName) as HTMLImageElement;
+    const host = img.parentElement as HTMLElement;
+    flick(host);
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+    expect(readTranslate(img).x).toBe(200);
+    act(() => {
+      vi.advanceTimersByTime(96);
+    });
+    expect(Math.abs(readTranslate(img).x - 327.55)).toBeLessThan(1);
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(readTranslate(img).x).toBe(600);
+  });
+
+  it('Split 联动甩动：两栏中间帧同值且精确', () => {
+    render(
+      <SplitCompareViewport
+        leftGroup={GROUP}
+        rightGroup={jpgGroup('b')}
+        isLeftPinned={false}
+        isRightPinned={false}
+        onTogglePinLeft={vi.fn()}
+        onTogglePinRight={vi.fn()}
+        onSwap={vi.fn()}
+      />,
+    );
+    const imgs = viewportImages();
+    flick(imgs[0].parentElement as HTMLElement);
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+    expect(readTranslate(imgs[0]).x).toBe(200);
+    act(() => {
+      vi.advanceTimersByTime(96);
+    });
+    expect(Math.abs(readTranslate(imgs[0]).x - 327.55)).toBeLessThan(1);
+    expect(readTranslate(imgs[1])).toEqual(readTranslate(imgs[0]));
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(readTranslate(imgs[0]).x).toBe(600);
+    expect(readTranslate(imgs[1]).x).toBe(600);
+  });
+
+  it('Preview 越界回弹：中间帧精确卡在回弹曲线上', () => {
+    render(
+      <PreviewViewport
+        group={GROUP}
+        onPrev={vi.fn()}
+        onNext={vi.fn()}
+      />,
+    );
+    const img = screen.getByAltText(GROUP.baseName) as HTMLImageElement;
+    const host = img.parentElement as HTMLElement;
+    fireEvent.doubleClick(host); // scale 2.5 → 上限 ±1500
+    fireEvent.pointerDown(host, { button: 0, clientX: 100, clientY: 400, pointerId: 1 });
+    vi.advanceTimersByTime(16);
+    fireEvent.pointerMove(host, { clientX: 3000, clientY: 400, pointerId: 1 });
+    expect(readTranslate(img).x).toBeCloseTo(2060, 5);
+    fireEvent.pointerUp(host, { clientX: 3000, clientY: 400, pointerId: 1 });
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+    expect(readTranslate(img).x).toBeCloseTo(2060, 5);
+    act(() => {
+      vi.advanceTimersByTime(96);
+    });
+    expect(Math.abs(readTranslate(img).x - 1881.43)).toBeLessThan(1);
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(readTranslate(img).x).toBe(1500);
   });
 });

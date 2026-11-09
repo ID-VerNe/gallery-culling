@@ -7,16 +7,9 @@
  */
 import { describe, it, expect } from 'vitest';
 import { deriveCompareGroups } from './compareGroups';
-import type { PhotoGroupInfo } from '../types';
+import { makeGroup } from '../test/factories';
 
-const g = (id: string, baseName: string): PhotoGroupInfo => ({
-  id,
-  baseName,
-  status: 'JPG_ONLY',
-  rating: 0,
-  flag: 'none',
-  label: '', hasXmp: false,
-});
+const g = (id: string, baseName: string) => makeGroup(id, { baseName, jpg: undefined });
 
 const three = [g('a', 'IMG_0001'), g('b', 'IMG_0002'), g('c', 'IMG_0003')];
 

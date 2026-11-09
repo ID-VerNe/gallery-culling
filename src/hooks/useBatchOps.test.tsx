@@ -9,23 +9,10 @@ import { act, renderHook } from '@testing-library/react';
 import { useBatchOps } from './useBatchOps';
 import { invokeCalls, mockInvokeCommand, setInvokeHandler } from '../test/setup';
 import type { CullCommand } from '../utils/cullCommand';
-import type { PhotoGroupInfo } from '../types';
+import { makeGroup, rawFile } from '../test/factories';
 
-const group = (id: string): PhotoGroupInfo => ({
-  id,
-  baseName: id,
-  raw: {
-    name: `${id}.ARW`,
-    extension: 'ARW',
-    path: `D:/shoot/${id}.ARW`,
-    size: 1,
-    mtime: 1,
-  },
-  status: 'RAW_ONLY',
-  rating: 0,
-  flag: 'none',
-  label: '', hasXmp: false,
-});
+const group = (id: string) =>
+  makeGroup(id, { status: 'RAW_ONLY', raw: rawFile(id, 'ARW', 'D:/shoot'), jpg: undefined });
 
 const setup = (ids: string[], pushCommand: (c: CullCommand) => void = () => {}) => {
   mockInvokeCommand('update_rating_flag_cmd', true);

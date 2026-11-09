@@ -11,35 +11,29 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useExportForm } from './useExportForm';
+import { makeFile, makeGroup } from '../test/factories';
 import type { CullFlag, FilterMode, PhotoGroupInfo } from '../types';
 import { parseQuery } from '../utils/queryMatch';
 
-const file = (path: string) => ({
-  name: path.split('/').pop() ?? '',
-  extension: (path.split('.').pop() ?? '').toLowerCase(),
-  path,
-  size: 1024,
-  mtime: 0,
-});
-
+// E-07 守护：`opts.xmp ?? false` 是变异锚点（issue #117 重构后仍需红）。
+// 工厂默认 `hasXmp: false`，这里显式透传 opts.xmp 保证
+// `mk('X', { xmp: true }) -> 3` 的断言能抓 XMP 分支。
 const mk = (
   baseName: string,
   opts: { flag?: CullFlag; rating?: number; dir?: string; raw?: boolean; xmp?: boolean } = {},
 ): PhotoGroupInfo => {
   const dir = opts.dir ?? 'D:/shoot/JPG';
   const hasRaw = opts.raw !== false;
-  return {
-    id: baseName,
-    baseName,
-    jpg: file(`${dir}/${baseName}.jpg`),
-    // raw 是**可选**字段：没有 RAW 的组必须真的不带这个键（而不是 null），
-    // 否则 `g.raw ? …` 的判断与真实扫描结果不一致，「仅含 RAW」档会误收。
-    ...(hasRaw ? { raw: file(`D:/shoot/RAW/${baseName}.NEF`) } : {}),
-    status: hasRaw ? 'COMPLETE' : 'JPG_ONLY',
+  return makeGroup(baseName, {
     rating: opts.rating ?? 0,
     flag: opts.flag ?? 'none',
-    label: '', hasXmp: opts.xmp ?? false,
-  };
+    hasXmp: opts.xmp ?? false,
+    status: hasRaw ? 'COMPLETE' : 'JPG_ONLY',
+    jpg: makeFile(`${dir}/${baseName}.jpg`),
+    // raw 是**可选**字段：没有 RAW 的组必须真的不带这个键（而不是 null），
+    // 否则 `g.raw ? …` 的判断与真实扫描结果不一致，「仅含 RAW」档会误收。
+    ...(hasRaw ? { raw: makeFile(`D:/shoot/RAW/${baseName}.NEF`) } : {}),
+  });
 };
 
 /**
@@ -358,6 +352,44 @@ describe('expectedFileCount（组 ≠ 文件）', () => {
     const { result } = setup();
     act(() => result.current.setMode('render'));
     expect(result.current.expectedFileCount).toBe(result.current.candidates.length);
+  });
+});
+
+describe('expectedFileCount 跨语言契约（#132）', () => {
+  // 与后端 export.rs 的 `export_expected_file_count_contract_table` 同一张表，
+  // 两边各自断言同一组期望数（不做跨语言代码生成）。 steady 下扫描快照
+  // `hasXmp` == 落盘 `exists()` 时，前端预测必须等于后端 `exported`。
+  // 期望数 = useExportForm.ts:273-275 规则：
+  // raw=includeRaw&&hasRaw?1:0, xmp=includeRaw&&hasRaw&&hasXmp?1:0,
+  // jpg=includeJpg&&hasJpg?1:0，三者相加（hasJpg 在 mk 夹具里恒真）。
+  const cases = [
+    { name: '有 XMP、全勾 → 3', xmp: true, filter: 'all', includeRaw: true, includeJpg: true, expected: 3 },
+    { name: '无 XMP、全勾 → 2', xmp: false, filter: 'all', includeRaw: true, includeJpg: true, expected: 2 },
+    { name: '不勾 RAW 时 XMP 跟 RAW 一起消失 → 1', xmp: true, filter: 'all', includeRaw: false, includeJpg: true, expected: 1 },
+    { name: '不勾 JPG → RAW + XMP = 2', xmp: true, filter: 'all', includeRaw: true, includeJpg: false, expected: 2 },
+  ] as const;
+
+  it.each(cases)('$name', ({ xmp, filter, includeRaw, includeJpg, expected }) => {
+    const withCase = [mk('K', { rating: 5, xmp })];
+    const { result } = renderHook(() =>
+      useExportForm({ groups: withCase, lumenAvailable: true }),
+    );
+    act(() => result.current.setFilter(filter as never));
+    act(() => result.current.setIncludeRaw(includeRaw));
+    act(() => result.current.setIncludeJpg(includeJpg));
+    expect(result.current.expectedFileCount).toBe(expected);
+  });
+
+  // 分叉裁决 pin（前端侧）：扫描快照 hasXmp=false 但盘上有 .xmp 时，
+  // 前端预测是 2，而后端 export.rs `export_xmp_divergence_prefers_disk_exists`
+  // 以 `exists()` 为准导出 3。**以后端为准**，前端少算等重扫收敛。
+  // 这行 pin 住分叉已知且已裁决，不是任一侧计数写错。
+  it('分叉：快照 hasXmp=false 时前端预测 2（后端以盘为准导出 3）', () => {
+    const noXmpSnapshot = [mk('S', { rating: 5, xmp: false })];
+    const { result } = renderHook(() =>
+      useExportForm({ groups: noXmpSnapshot, lumenAvailable: true }),
+    );
+    expect(result.current.expectedFileCount).toBe(2);
   });
 });
 

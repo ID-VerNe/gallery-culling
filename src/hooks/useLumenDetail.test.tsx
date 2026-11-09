@@ -20,6 +20,7 @@ import {
   mockInvokeError,
   setInvokeHandler,
 } from '../test/setup';
+import { makeGroup, rawFile } from '../test/factories';
 import type { LumenStatus, PhotoGroupInfo } from '../types';
 
 const available: LumenStatus = {
@@ -30,25 +31,13 @@ const available: LumenStatus = {
   detail: 'ok',
 };
 
-function photo(id: string, overrides: Partial<PhotoGroupInfo> = {}): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
-    raw: {
-      name: `${id}.ARW`,
-      extension: 'ARW',
-      path: `D:/shoot/${id}.ARW`,
-      size: 1,
-      mtime: 0,
-    },
+const photo = (id: string, overrides: Partial<PhotoGroupInfo> = {}) =>
+  makeGroup(id, {
     status: 'RAW_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '',
-    hasXmp: false,
+    raw: rawFile(id, 'ARW', 'D:/shoot'),
+    jpg: undefined,
     ...overrides,
-  };
-}
+  });
 
 const detailOk = {
   detailPath: 'D:/cache/gallery/lumen/abc_detail_lumen.jpg',

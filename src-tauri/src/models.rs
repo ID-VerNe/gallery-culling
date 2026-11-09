@@ -120,6 +120,14 @@ pub struct FolderProbe {
     pub subdir_count: usize,
 }
 
+/// 后端默认的缩略图宽度（issue #133 的唯一真值）。
+///
+/// `AppSettings::default` 与 `get_thumbnail_cmd` 的 IPC 回落共用同一常量；
+/// 前端默认在 `src/types/index.ts` 的 `DEFAULT_THUMBNAIL_WIDTH`，**数值必须同为 200**，
+/// 两边由墓碑用例（`models::thumbnail_width_tests` 与 `api.test.ts`）各自锁字面量 200。
+/// 宫格宽度是独立产品值（`ThumbnailGrid` 的 `GRID_THUMB_WIDTH`），数值巧合一致但不引用本常量。
+pub const DEFAULT_THUMBNAIL_WIDTH: u32 = 200;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -154,7 +162,7 @@ impl Default for AppSettings {
             default_raw_folder: String::new(),
             photoshop_path: r"C:\Program Files\Adobe\Adobe Photoshop 2025\Photoshop.exe"
                 .to_string(),
-            thumbnail_width: 200,
+            thumbnail_width: DEFAULT_THUMBNAIL_WIDTH,
             sort_order: "time_filename".to_string(),
             lumen_enabled: true,
             lumen_cli_path: String::new(),
@@ -308,4 +316,17 @@ pub struct LumenMaskResult {
     pub masks: Vec<serde_json::Value>,
     /// 实测耗时（AI 蒙版约 4s，UI 需要进度反馈）
     pub elapsed_ms: u64,
+}
+
+#[cfg(test)]
+mod thumbnail_width_tests {
+    use super::*;
+
+    /// issue #133 墓碑：后端默认权威只出现在常量定义处；
+    /// `Default` 与回落的 IPC 语义共用同一常量。改常量值必红（200→201）。
+    #[test]
+    fn default_thumbnail_width_is_the_constant() {
+        assert_eq!(DEFAULT_THUMBNAIL_WIDTH, 200);
+        assert_eq!(AppSettings::default().thumbnail_width, 200);
+    }
 }

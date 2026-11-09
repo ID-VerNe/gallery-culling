@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { useToneBatch, type ToneBatchFailure } from './useToneBatch';
 import { invokeCalls, mockInvokeCommand, setInvokeHandler } from '../test/setup';
+import { makeGroup, rawFile } from '../test/factories';
 import type { PhotoGroupInfo, ToneAdjustments } from '../types';
 
 const TONE: ToneAdjustments = {
@@ -27,17 +28,13 @@ const group = (
   id: string,
   path = `D:/shoot/RAW/${id}.ARW`,
   extra: Partial<PhotoGroupInfo> = {},
-): PhotoGroupInfo => ({
-  id,
-  baseName: id,
-  raw: { name: `${id}.ARW`, extension: 'ARW', path, size: 1, mtime: 1 },
-  status: 'RAW_ONLY',
-  rating: 0,
-  flag: 'none',
-  label: '',
-  hasXmp: false,
-  ...extra,
-});
+) =>
+  makeGroup(id, {
+    status: 'RAW_ONLY',
+    raw: { ...rawFile(id), path },
+    jpg: undefined,
+    ...extra,
+  });
 
 const okReport = {
   xmpWritten: true,
@@ -198,15 +195,7 @@ describe('useToneBatch —— 失败隔离与报告', () => {
   });
 
   it('没有可写路径的目标计为失败，且不占用一次 IPC', async () => {
-    const noPath: PhotoGroupInfo = {
-      id: 'X',
-      baseName: 'X',
-      status: 'RAW_ONLY',
-      rating: 0,
-      flag: 'none',
-      label: '',
-      hasXmp: false,
-    };
+    const noPath = makeGroup('X', { status: 'RAW_ONLY', raw: undefined, jpg: undefined });
     const { result } = setup({
       groups: [group('S'), noPath, group('C')],
       selectedIds: ['X', 'C'],

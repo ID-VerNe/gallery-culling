@@ -10,7 +10,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { SplitCompareViewport } from './SplitCompareViewport';
 import { invokeCount, mockInvokeCommand } from '../test/setup';
-import type { LumenStatus, PhotoGroupInfo, ToneAdjustments } from '../types';
+import { makeGroup, rawFile, jpgFile } from '../test/factories';
+import type { LumenStatus, ToneAdjustments } from '../types';
 
 const AVAILABLE: LumenStatus = {
   available: true,
@@ -20,29 +21,10 @@ const AVAILABLE: LumenStatus = {
   detail: 'ok',
 };
 
-function rawOnly(id: string): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
-    raw: { name: `${id}.NEF`, extension: 'NEF', path: `D:/shoot/${id}.NEF`, size: 1, mtime: 0 },
-    status: 'RAW_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '', hasXmp: false,
-  };
-}
+const rawOnly = (id: string) =>
+  makeGroup(id, { status: 'RAW_ONLY', raw: rawFile(id, 'NEF', 'D:/shoot'), jpg: undefined });
 
-function withJpg(id: string): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
-    jpg: { name: `${id}.jpg`, extension: 'jpg', path: `D:/shoot/${id}.jpg`, size: 1, mtime: 0 },
-    status: 'JPG_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '', hasXmp: false,
-  };
-}
+const withJpg = (id: string) => makeGroup(id, { jpg: jpgFile(id, 'D:/shoot') });
 
 function renderSplit(props: Partial<ComponentProps<typeof SplitCompareViewport>> = {}) {
   return render(

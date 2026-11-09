@@ -13,20 +13,11 @@ import userEvent from '@testing-library/user-event';
 import { ThumbnailGrid } from './ThumbnailGrid';
 import { mockInvokeCommand } from '../test/setup';
 import { parseQuery } from '../utils/queryMatch';
+import { makeGroup, rawFile } from '../test/factories';
 import type { PhotoGroupInfo } from '../types';
 
-function group(id: string, over: Partial<PhotoGroupInfo> = {}): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
-    raw: { name: `${id}.CR3`, extension: 'CR3', path: `D:/s/${id}.CR3`, size: 1, mtime: 0 },
-    status: 'RAW_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '', hasXmp: false,
-    ...over,
-  } as PhotoGroupInfo;
-}
+const group = (id: string, over: Partial<PhotoGroupInfo> = {}) =>
+  makeGroup(id, { status: 'RAW_ONLY', raw: rawFile(id, 'CR3', 'D:/s'), jpg: undefined, ...over });
 
 const GROUPS = ['a', 'b', 'c'].map((id) => group(id));
 

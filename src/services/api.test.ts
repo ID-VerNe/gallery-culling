@@ -16,6 +16,7 @@ import {
   mockInvokeCommand,
   resetInvokeMocks,
 } from '../test/setup';
+import { DEFAULT_THUMBNAIL_WIDTH } from '../types';
 import type { ExportItem, WatermarkOptions } from '../types';
 
 const items: ExportItem[] = [{ baseName: 'IMG_0001', jpgPath: 'D:/s/IMG_0001.jpg' }];
@@ -64,5 +65,26 @@ describe('batchRenderExport 载荷', () => {
   it('返回后端的 outcome（不含水印计数 —— 那在清单文件里）', async () => {
     await expect(call(null)).resolves.toEqual(ok);
     expect(invokeCount('batch_render_export_cmd')).toBe(1);
+  });
+});
+
+describe('getThumbnail 宽度回落（issue #133 墓碑）', () => {
+  beforeEach(() => {
+    resetInvokeMocks();
+    mockInvokeCommand('get_thumbnail_cmd', 'D:/cache/thumb.jpg');
+  });
+
+  it('前端默认宽度常量值就是 200，与后端 Default 同口径', () => {
+    expect(DEFAULT_THUMBNAIL_WIDTH).toBe(200);
+  });
+
+  it('未传宽时 IPC 按默认宽度 200 请求', async () => {
+    await api.getThumbnail('D:/s/a.jpg');
+    expect(lastInvokeArgs('get_thumbnail_cmd')).toMatchObject({ width: 200 });
+  });
+
+  it('传宽时原样透传，不被回落覆盖', async () => {
+    await api.getThumbnail('D:/s/a.jpg', 300);
+    expect(lastInvokeArgs('get_thumbnail_cmd')).toMatchObject({ width: 300 });
   });
 });

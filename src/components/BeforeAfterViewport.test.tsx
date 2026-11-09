@@ -20,19 +20,9 @@ import viewportSource from './BeforeAfterViewport.tsx?raw';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { BeforeAfterViewport } from './BeforeAfterViewport';
-import type { PhotoGroupInfo } from '../types';
+import { jpgFile, makeGroup } from '../test/factories';
 
-function withJpg(id: string): PhotoGroupInfo {
-  return {
-    id,
-    baseName: id,
-    jpg: { name: `${id}.jpg`, extension: 'jpg', path: `D:/shoot/${id}.jpg`, size: 1, mtime: 0 },
-    status: 'JPG_ONLY',
-    rating: 0,
-    flag: 'none',
-    label: '', hasXmp: false,
-  };
-}
+const withJpg = (id: string) => makeGroup(id, { jpg: jpgFile(id, 'D:/shoot') });
 
 function renderBA(props: Partial<ComponentProps<typeof BeforeAfterViewport>> = {}) {
   const { container } = render(

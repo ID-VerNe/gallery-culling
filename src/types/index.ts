@@ -6,6 +6,15 @@ export interface PhotoFileInfo {
   mtime: number;
 }
 
+/**
+ * 前端默认的缩略图宽度（issue #133 的唯一真值）。
+ *
+ * 后端真值在 `src-tauri/src/models.rs` 的 `DEFAULT_THUMBNAIL_WIDTH`，数值必须同为 200；
+ * 两边一致性由墓碑用例各自锁字面量 200（`api.test.ts`、`models::thumbnail_width_tests`）。
+ * 宫格宽度是独立产品值（`ThumbnailGrid` 的 `GRID_THUMB_WIDTH`），数值巧合一致但不引用本常量。
+ */
+export const DEFAULT_THUMBNAIL_WIDTH = 200;
+
 export interface ExifData {
   shutterSpeed?: string;
   aperture?: string;

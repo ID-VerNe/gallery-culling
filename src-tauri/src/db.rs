@@ -528,10 +528,7 @@ impl Database {
         sort_order: &str,
     ) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = now_secs() as u64;
         // issue #108 PK：save/load 同一 canonical key（斜杠/大小写/末尾斜杠互通），
         // 与前端 `normalizeDir` 同口径。
         let key = normalize_session_key(jpg_folder);
@@ -715,32 +712,31 @@ fn resolve_db_path(data_dir: Option<PathBuf>, home_dir: Option<PathBuf>) -> Path
 }
 
 /// 当前 Unix 秒。写盘意图的时间戳与侧边栏 mtime 用同一把尺子。
+/// 哨兵 0（issue #139：实现收敛到 clock，哨兵由调用方传入）。
 pub fn now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    crate::clock::now_secs_i64()
 }
 
+/// 哨兵 -1（issue #139）：「取不到」与真实 epoch 0 必须可区分 —— syncqueue
+/// 回放靠 `> updated_at`、lumen 同步靠 `> 0`，改成 0 会破坏判据。
 pub fn file_mtime_secs(path: &Path) -> i64 {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(-1)
+    crate::clock::mtime_i64(
+        crate::clock::MtimeInput::Path(path),
+        crate::clock::MtimeUnit::Secs,
+        -1,
+    )
 }
 
 /// 毫秒级 mtime（FR-08 的增量游标用）。
 ///
 /// 秒级不够：同一秒内「外部写一次 → 我们刷新一次 → 外部再写一次」时，两次
 /// mtime 会被截断成同一个值，第二次改动就被静默跳过了。
+/// 哨兵 None（issue #139：实现收敛到 clock，哨兵即 None 本身）。
 pub fn file_mtime_ms(path: &Path) -> Option<i64> {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as i64)
+    crate::clock::mtime_opt_i64(
+        crate::clock::MtimeInput::Path(path),
+        crate::clock::MtimeUnit::Millis,
+    )
 }
 
 #[cfg(test)]
@@ -895,6 +891,146 @@ mod tests {
 
         migrate_legacy_db(&target, &legacy);
         assert!(!target.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// issue #103 PA：`get_db_path` 门控用例共享的串行锁（沿用
+    /// `thumbnail.rs:630` 的 `ENV_LOCK` 范式）。测试并行跑，改 env 与 cwd 的
+    /// 用例必须互斥。
+    static GATE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// 改 env 与 cwd 的用例的还原守卫：`Drop` 时恢复三件套与 cwd（panic 也恢复）。
+    struct EnvCwdGuard {
+        data: Option<std::ffi::OsString>,
+        profile: Option<std::ffi::OsString>,
+        home: Option<std::ffi::OsString>,
+        cwd: PathBuf,
+    }
+
+    impl Drop for EnvCwdGuard {
+        fn drop(&mut self) {
+            match &self.data {
+                Some(v) => std::env::set_var(DATA_DIR_ENV, v),
+                None => std::env::remove_var(DATA_DIR_ENV),
+            }
+            match &self.profile {
+                Some(v) => std::env::set_var("USERPROFILE", v),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+            match &self.home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            let _ = std::env::set_current_dir(&self.cwd);
+        }
+    }
+
+    fn capture_env_cwd() -> EnvCwdGuard {
+        EnvCwdGuard {
+            data: std::env::var_os(DATA_DIR_ENV),
+            profile: std::env::var_os("USERPROFILE"),
+            home: std::env::var_os("HOME"),
+            cwd: std::env::current_dir().unwrap(),
+        }
+    }
+
+    /// issue #103 PA 墓碑：设 `GALLERY_DATA_DIR` 时绝不迁移 —— 否则会把用户
+    /// 真实库灌进 e2e 隔离目录（issue #81 数据隔离契约）。
+    ///
+    /// 用真 tmpdir + 真 env：`cwd` 里放一份「用户旧库」，`GALLERY_DATA_DIR` 指向
+    /// 隔离目录，调 `get_db_path()` 后隔离目录里绝不能出现库文件，旧库字节不变，
+    /// 且 home 不被碰。
+    ///
+    /// 变异墓碑：把 `get_db_path` 的门控 `data_dir.is_none()` 改宽（恒迁移），
+    /// 这条必须红。
+    #[test]
+    fn get_db_path_override_never_migrates_legacy_db() {
+        let _lock = GATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("gc_gate_override_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let cwd = base.join("cwd");
+        let override_dir = base.join("override");
+        let home = base.join("home");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let legacy = cwd.join("gallery_culling.db");
+        std::fs::write(&legacy, b"user-real-db-bytes").unwrap();
+
+        let _guard = capture_env_cwd();
+        std::env::set_var(DATA_DIR_ENV, &override_dir);
+        std::env::set_var("USERPROFILE", &home);
+        std::env::set_var("HOME", &home);
+        std::env::set_current_dir(&cwd).unwrap();
+
+        let path = get_db_path();
+        assert_eq!(path, override_dir.join("gallery_culling.db"));
+        assert!(
+            !override_dir.join("gallery_culling.db").exists(),
+            "设 GALLERY_DATA_DIR 时绝不迁移旧库到覆盖目录，否则会把用户真实库灌进e2e隔离目录"
+        );
+        assert_eq!(
+            std::fs::read(&legacy).unwrap(),
+            b"user-real-db-bytes",
+            "源必须保留（不移动）"
+        );
+        assert!(!home.exists(), "覆盖优先时不能碰用户 home 目录");
+
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// issue #103 PA 墓碑：默认分支（未设覆盖、home 可用）跑一次性迁移，且绝不
+    /// 在 cwd 产生 0 字节 `gallery_culling.db`（issue #81 的教训）。
+    ///
+    /// 两段同锁内：先空 `cwd` 调 `get_db_path()` 断言 `cwd` 无文件；再写入旧库后
+    /// 再次调用，断言 home 库被复制、源保留。变异（门控改窄为永不迁移，或把旧的
+    /// `OpenOptions::create` 可写性探测加回来）必须让这条红。
+    #[test]
+    fn get_db_path_default_migrates_once_and_never_touches_cwd() {
+        let _lock = GATE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("gc_gate_default_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let cwd = base.join("cwd");
+        let home = base.join("home");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let legacy = cwd.join("gallery_culling.db");
+
+        let _guard = capture_env_cwd();
+        std::env::remove_var(DATA_DIR_ENV);
+        std::env::set_var("USERPROFILE", &home);
+        std::env::set_var("HOME", &home);
+        std::env::set_current_dir(&cwd).unwrap();
+
+        // 空 cwd：默认分支绝不能在 cwd 产生 0 字节库（旧 `OpenOptions` 探测的教训）。
+        let path = get_db_path();
+        assert_eq!(path, home.join(".galleryculling").join("gallery_culling.db"));
+        assert!(
+            !legacy.exists(),
+            "默认分支绝不能在 cwd 产生 0 字节 gallery_culling.db"
+        );
+        assert!(
+            !home
+                .join(".galleryculling")
+                .join("gallery_culling.db")
+                .exists(),
+            "无旧库时首次启动不凭空造库文件"
+        );
+
+        // 写入旧库后再次调用：默认分支必须一次性迁移到 home，源保留。
+        std::fs::write(&legacy, b"legacy-settings").unwrap();
+        let path2 = get_db_path();
+        assert_eq!(path2, home.join(".galleryculling").join("gallery_culling.db"));
+        assert_eq!(
+            std::fs::read(home.join(".galleryculling").join("gallery_culling.db")).unwrap(),
+            b"legacy-settings",
+            "默认分支必须把 cwd 旧库复制到 home"
+        );
+        assert_eq!(
+            std::fs::read(&legacy).unwrap(),
+            b"legacy-settings",
+            "迁移只复制不移动，cwd 源必须保留"
+        );
+
+        drop(_guard);
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -1360,5 +1496,44 @@ mod tests {
 
         assert_eq!(db.load_lens_presets().unwrap(), mine);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// issue #139：哨兵锁定 —— 文件不存在时 `file_mtime_secs` 必须返回 -1，
+    /// 不是 0。-1 是 syncqueue 回放 `> updated_at`（syncqueue.rs:249）与
+    /// lumen 同步 `> 0` 判据的区分器：「取不到」与真实 epoch 0 不可混同。
+    /// 把 -1 改成 0（变异）本用例必红。
+    #[test]
+    fn file_mtime_missing_sentinel_is_minus_one() {
+        let missing =
+            std::env::temp_dir().join(format!("gc_db_missing_{}_139.xmp", std::process::id()));
+        let _ = std::fs::remove_file(&missing);
+        assert_eq!(
+            file_mtime_secs(&missing),
+            -1,
+            "文件不存在时哨兵必须为 -1，不得退化为 0"
+        );
+        assert!(
+            file_mtime_secs(&missing) <= 0,
+            "哨兵必须非正：回放 `> updated_at` 不得误判为外部修改"
+        );
+    }
+
+    /// issue #139：毫秒哨兵是 None（FR-08 增量游标靠它区分「无文件」与 epoch 0）。
+    #[test]
+    fn file_mtime_ms_missing_sentinel_is_none() {
+        let missing =
+            std::env::temp_dir().join(format!("gc_db_missing_ms_{}_139.xmp", std::process::id()));
+        let _ = std::fs::remove_file(&missing);
+        assert_eq!(
+            file_mtime_ms(&missing),
+            None,
+            "文件不存在时毫秒哨兵必须为 None，不得退化为 0 秒"
+        );
+    }
+
+    /// issue #139：当前时间在 epoch 之后，`now_secs()` 必须为正。
+    #[test]
+    fn now_secs_is_positive() {
+        assert!(now_secs() > 0, "now_secs 应为当前 Unix 秒，必须 > 0");
     }
 }

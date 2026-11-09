@@ -4,10 +4,11 @@
 //! 少一个都会让改了参数的用户看到上一次的旧预览。
 
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use serde_json::Value;
-use sha2::{Digest, Sha256};
+
+use crate::cachekey::sha256_hex16;
 
 use super::LumenError;
 use super::PreviewVariant;
@@ -15,16 +16,15 @@ use super::PINNED_LUMEN_VERSION;
 use super::recipe_hash;
 
 /// 把可选时间戳编码进缓存键：None 与 Some(UNIX_EPOCH) 也必须可区分。
+/// 实现收敛到 clock（issue #139）：哨兵 MAX 经参数传入，让 None 与 epoch 0 可区分。
 ///
 /// `pub(super)` 而非 `pub`：`detail` 模块复用它，但这不是对外 API。
 pub(super) fn mtime_tag(mtime: Option<SystemTime>) -> u128 {
-    match mtime {
-        Some(t) => t
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(u128::MAX),
-        None => u128::MAX,
-    }
+    crate::clock::mtime_u128(
+        crate::clock::MtimeInput::Time(mtime),
+        crate::clock::MtimeUnit::Nanos,
+        u128::MAX,
+    )
 }
 
 /// 计算预览缓存键：16 位小写 hex。
@@ -78,13 +78,8 @@ pub fn lumen_cache_key_with_recipe(
         variant_tag,
         recipe_tag
     );
-    let digest = Sha256::digest(payload.as_bytes());
-    // 16 位小写 hex = 前 8 字节。
-    digest
-        .iter()
-        .take(8)
-        .map(|b| format!("{:02x}", b))
-        .collect()
+    // 16 位小写 hex = SHA256 前 8 字节（`cachekey::sha256_hex16`，issue #142）。
+    sha256_hex16(&payload)
 }
 
 /// 预览产物落盘路径：`<cache_root>/lumen/<key>_<width>[_orig]_lumen.jpg`。

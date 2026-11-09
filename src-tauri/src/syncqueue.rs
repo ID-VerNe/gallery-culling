@@ -580,4 +580,73 @@ mod tests {
         assert_eq!(sink.count(), 2);
         assert_eq!(sink.last().unwrap().rating, 2);
     }
+
+    /// issue #139：回放判据锁在 `file_mtime_secs(sidecar) > updated_at`（本文件 :249）。
+    /// 每个用例独立临时库 + 独立照片名：测试并行跑，互不踩。
+    fn temp_db(tag: &str) -> (Database, PathBuf) {
+        let path = std::env::temp_dir().join(format!("gc_sq_{}_{}.db", tag, std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        (Database::open(&path).expect("建临时库"), path)
+    }
+
+    /// 侧边栏缺失（哨兵 -1）→ 不算「外部改过」→ 回放写入。
+    #[test]
+    fn replay_writes_when_sidecar_missing() {
+        let (db, db_path) = temp_db("replay_missing");
+        let photo = std::env::temp_dir().join(format!("gc_sq_missing_{}.JPG", std::process::id()));
+        let _ = std::fs::remove_file(xmp::get_xmp_path(&photo));
+        db.enqueue_pending(&photo.to_string_lossy(), 5, "pick", "", 0)
+            .unwrap();
+
+        let sink = Arc::new(CountingSink::ok());
+        let coalescer = Coalescer::with_debounce(sink.clone(), Duration::ZERO);
+        let written = replay_pending(&db, &coalescer).unwrap();
+
+        assert_eq!(written, 1, "侧边栏缺失时必须回放写入，不得跳过");
+        assert_eq!(sink.count(), 1);
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    /// 变异靶点（issue #139）：updated_at = -1 的边界。正确哨兵 -1：
+    /// `-1 > -1` 为假 → 回放写入；变异成 0：`0 > -1` 为真 → 误判外部修改而跳过。
+    /// 把 db.rs 的 -1 改 0，本用例必红（以及 db.rs 的哨兵锁定用例）。
+    #[test]
+    fn replay_boundary_missing_sidecar_sentinel() {
+        let (db, db_path) = temp_db("replay_boundary");
+        let photo = std::env::temp_dir().join(format!("gc_sq_boundary_{}.JPG", std::process::id()));
+        let _ = std::fs::remove_file(xmp::get_xmp_path(&photo));
+        db.enqueue_pending(&photo.to_string_lossy(), 5, "pick", "", -1)
+            .unwrap();
+
+        let sink = Arc::new(CountingSink::ok());
+        let coalescer = Coalescer::with_debounce(sink.clone(), Duration::ZERO);
+        let written = replay_pending(&db, &coalescer).unwrap();
+
+        assert_eq!(
+            written, 1,
+            "哨兵 -1 不得被 `> updated_at` 误读为外部修改；改 0 必红"
+        );
+        assert_eq!(sink.count(), 1);
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    /// 侧边栏在记录之后被外部改过（真实 mtime > updated_at）→ 不覆盖，只删意图。
+    #[test]
+    fn replay_skips_when_sidecar_modified_after() {
+        let (db, db_path) = temp_db("replay_skip");
+        let photo = std::env::temp_dir().join(format!("gc_sq_skip_{}.JPG", std::process::id()));
+        let sidecar = xmp::get_xmp_path(&photo);
+        std::fs::write(&sidecar, b"<x:xmpmeta/>").expect("建侧边栏");
+        db.enqueue_pending(&photo.to_string_lossy(), 5, "pick", "", 0)
+            .unwrap();
+
+        let sink = Arc::new(CountingSink::ok());
+        let coalescer = Coalescer::with_debounce(sink.clone(), Duration::ZERO);
+        let written = replay_pending(&db, &coalescer).unwrap();
+
+        assert_eq!(written, 0, "侧边栏晚于记录时不得覆盖，written 必须为 0");
+        assert_eq!(sink.count(), 0);
+        let _ = std::fs::remove_file(&sidecar);
+        let _ = std::fs::remove_file(&db_path);
+    }
 }
