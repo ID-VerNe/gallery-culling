@@ -53,12 +53,15 @@ export function useFolderScan(opts: {
    * `selectedIndexAtStart` = 扫描**启动那一刻**的选中索引（由 `getSelectedIndex`
    * 提供；调用方未提供则为 null）。完成回调里若它与「当前值」不同，说明用户在
    * 扫描窗口内改过选中 —— 上层必须优先尊重用户操作，而不是恢复会话位置。
+   * `scannedJpgFolder` = 扫描启动那一刻的 JPG 目录（issue #108：PA 门控的
+   * “当前目录已扫描”快照；完成时才读 state 会被用户中途改输入框带偏）。
    */
   onScanned: (
     groups: ScanResult['groups'],
     initialTones: Record<string, ToneAdjustments>,
     historyIndex: number | null,
     selectedIndexAtStart: number | null,
+    scannedJpgFolder: string,
   ) => void;
   /** 重新扫描前清空撤销栈：旧快照可能已指向不存在的照片。 */
   beforeScan?: () => void;
@@ -99,11 +102,12 @@ export function useFolderScan(opts: {
 
   const handleScan = useCallback(async () => {
     if (!jpgFolder.trim()) return;
-    // 扫描是异步的（几百 ms 到几秒）：在**任何 await 之前**快照选中索引，
-    // 完成时交给 onScanned 判定「用户在扫描窗口内是否动过选中」。
+    // 扫描是异步的（几百 ms 到几秒）：在**任何 await 之前**快照选中索引与目录，
+    // 完成时交给 onScanned 判定「用户在扫描窗口内是否动过选中」与「哪目录已扫描」。
     // 没有这一步，扫描完成会用会话 lastIndex 无条件覆盖用户的点击
     // （2026-10-15 e2e run5 实锤：点击 IMG_010 被翻回 IMG_011，apply 写错文件）。
     const selectedIndexAtStart = getSelectedIndex?.() ?? null;
+    const scannedJpgFolder = jpgFolder;
     setIsLoading(true);
     // 每次重新扫描都先清掉上一轮的错误，避免旧故障文案挂在新扫描上。
     setScanError(null);
@@ -120,9 +124,15 @@ export function useFolderScan(opts: {
       });
 
       // Check session history for this folder
-      const history = await api.loadSession(jpgFolder);
+      const history = await api.loadSession(scannedJpgFolder);
 
-      onScanned(res.groups, initialTones, history ? history[0] : null, selectedIndexAtStart);
+      onScanned(
+        res.groups,
+        initialTones,
+        history ? history[0] : null,
+        selectedIndexAtStart,
+        scannedJpgFolder,
+      );
 
       // Save as default in settings
       persistFolders(jpgFolder, rawFolder, sortOrder);

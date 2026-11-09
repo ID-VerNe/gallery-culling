@@ -4,7 +4,8 @@
  * 契约：
  *  - 500ms 窗口内的连续选中变化**合并为一次** `save_session_cmd`，且写的是**最新值**；
  *  - 卸载 / 目录切换 / 窗口关闭请求三处必须 flush 未落盘的那一次；
- *  - `jpgFolder` 为空或 `lastIndex < 0` 时不写。
+ *  - `jpgFolder` 为空或 `lastIndex < 0` 时不写；
+ *  - issue #108 PA：`hasScanned` 为 false（未扫描）时不写——启动初值 0 不能覆盖历史断点。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
@@ -26,15 +27,17 @@ const drainMicrotasks = async () => {
 interface Props {
   folder?: string;
   idx?: number;
+  hasScanned?: boolean;
 }
 
-const useIt = ({ folder = 'D:/shoot', idx = 0 }: Props, flushOnClose = false) =>
+const useIt = ({ folder = 'D:/shoot', idx = 0, hasScanned = true }: Props, flushOnClose = false) =>
   useSessionDebounce(
     {
       jpgFolder: folder,
       rawFolder: 'D:/raw',
       lastIndex: idx,
       sortOrder: 'time_filename',
+      hasScanned,
     },
     { delayMs: 500, flushOnClose },
   );
@@ -168,5 +171,18 @@ describe('useSessionDebounce —— M-17', () => {
     renderHook(() => useIt({ folder: '', idx: 0 }));
     act(() => vi.advanceTimersByTime(2000));
     expect(invokeCount('save_session_cmd')).toBe(0);
+  });
+
+  it('未扫描（hasScanned=false）时不写 session（issue #108 PA）', () => {
+    renderHook(() => useIt({ folder: 'D:/shoot', idx: 0, hasScanned: false }));
+    act(() => vi.advanceTimersByTime(2000));
+    expect(invokeCount('save_session_cmd')).toBe(0);
+  });
+
+  it('已扫描且停在第 1 张（lastIndex=0）时可写（门控看“已扫描”非“非零”）', () => {
+    renderHook(() => useIt({ folder: 'D:/shoot', idx: 0, hasScanned: true }));
+    act(() => vi.advanceTimersByTime(500));
+    expect(invokeCount('save_session_cmd')).toBe(1);
+    expect(lastInvokeArgs('save_session_cmd')).toMatchObject({ lastIndex: 0 });
   });
 });

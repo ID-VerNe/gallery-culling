@@ -25,9 +25,9 @@
  *  2. 这里记住 `destroy` 失败，**下一次关闭请求直接放行**原生关闭，任何权限/
  *     环境异常都不会再把窗口拦死（宁可少一次会话写盘，也不能关不掉）。
  *
- * 接入是"一行"：
+ * 接入是"一行"（issue #108 起带 `hasScanned` 门控，扫描前不写盘）：
  * ```tsx
- * useSessionDebounce({ jpgFolder, rawFolder, lastIndex: selectedIndex, sortOrder });
+ * useSessionDebounce({ jpgFolder, rawFolder, lastIndex: selectedIndex, sortOrder, hasScanned });
  * ```
  * 返回的 `flush()` 也可由调用方在自定义时机手动调用。
  */
@@ -43,6 +43,13 @@ export interface SessionSnapshot {
   /** 选中索引；< 0 视为无效、不写。 */
   lastIndex: number;
   sortOrder: string;
+  /**
+   * issue #108 PA：当前 `jpgFolder` 是否至少完成过一次成功扫描。
+   * 启动时 `selectedIndex` 初值 0 若在扫描前写盘，会把历史 `last_index` 覆盖成 0
+   * （`db.rs` 无条件 UPSERT），下次扫描只能恢复到第一张。门控看“已扫描”而非
+   * “非零”：扫描后真实停在第 1 张（0）仍合法写入。
+   */
+  hasScanned: boolean;
 }
 
 export interface UseSessionDebounceOptions {
@@ -92,7 +99,9 @@ export const useSessionDebounce = (
   const flush = useCallback(
     async (s: SessionSnapshot = sessionRef.current) => {
       clearTimer();
-      if (!s.jpgFolder || s.lastIndex < 0) return;
+      // issue #108 PA：未扫描不写——启动初值 0 在扫描前写盘会覆盖历史断点。
+      // 目录切换 flush(prev)：prev.hasScanned 为旧目录已扫描为 true，仍落地。
+      if (!s.jpgFolder || s.lastIndex < 0 || !s.hasScanned) return;
       try {
         await api.saveSession(s.jpgFolder, s.rawFolder, s.lastIndex, s.sortOrder);
         // 写盘恢复成功 → 允许下一次失败再次提醒（而非整个会话只提醒一次）。
@@ -121,19 +130,20 @@ export const useSessionDebounce = (
     }
 
     clearTimer();
-    if (!snapshot.jpgFolder) return;
+    if (!snapshot.jpgFolder || !snapshot.hasScanned) return;
     timerRef.current = window.setTimeout(() => {
       void flush();
     }, delayMs);
 
     return clearTimer;
-    // 依赖用四个原始值：`snapshot` 对象每次渲染都是新引用，不能进依赖数组。
+    // 依赖用原始值：`snapshot` 对象每次渲染都是新引用，不能进依赖数组。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     snapshot.jpgFolder,
     snapshot.rawFolder,
     snapshot.lastIndex,
     snapshot.sortOrder,
+    snapshot.hasScanned,
     delayMs,
     flush,
     clearTimer,
