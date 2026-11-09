@@ -61,4 +61,28 @@ describe('LabelDots —— 色点鼠标入口（SH-01）', () => {
       expect(button).toHaveAttribute('aria-pressed', 'false');
     }
   });
+
+  /**
+   * 防 issue #100 复发：选中白环（ring-*）按按钮盒绘制，按钮是 tap-target
+   * 24px，内部色点只有 12px。若按钮没有 flex 双向居中，`min-width/height`
+   * 多出的 4px 全落在内容一侧，色点中心相对环中心偏 2px（截图里红点偏左上）。
+   * jsdom 无真实布局，这里锁住「按钮带居中契约」的类名，而不是用
+   * getBoundingClientRect 做脆弱断言。
+   */
+  it('色点按钮带 flex 居中契约，选中白环与色点同心（issue #100）', () => {
+    render(<LabelDots label="Red" onSelect={vi.fn()} />);
+
+    const buttons = screen.getAllByRole('button');
+    expect(buttons).toHaveLength(5);
+    for (const button of buttons) {
+      expect(button.className).toContain('inline-flex');
+      expect(button.className).toContain('items-center');
+      expect(button.className).toContain('justify-center');
+    }
+
+    // 选中态白环仍挂在按钮盒子上（修复不得改点击 / aria 契约，也不得删环）。
+    expect(screen.getByRole('button', { name: '红色标（快捷 Shift+1）' }).className).toContain(
+      'ring-2 ring-white/80',
+    );
+  });
 });
