@@ -169,3 +169,89 @@ describe('B6 · PB-3：按下即时反馈', () => {
     expect(cell.className).toContain('scale-[0.985]');
   });
 });
+
+describe('issue #105 墓碑：格头单行不折行（flex 收缩竖排回归）', () => {
+  function renderHeader() {
+    return renderGrid({
+      selectedIds: new Set(['a']),
+      onSelectionChange: () => {},
+      onSearchOpenChange: () => {},
+      searchOpen: false,
+    });
+  }
+
+  it('格头容器带 min-w-0（给 flex 链收缩位，与底部工具条 :903 范式一致）', () => {
+    renderHeader();
+    const status = screen.getByText(/宫格列表/);
+    const header = status.parentElement!;
+    expect(header.className).toContain('min-w-0');
+  });
+
+  it('状态侧带 min-w-0 truncate 而非 whitespace-nowrap（超长省略不撑爆控件）', () => {
+    renderHeader();
+    const status = screen.getByText(/宫格列表/);
+    expect(status.className).toContain('min-w-0');
+    expect(status.className).toContain('truncate');
+    expect(status.className).not.toContain('whitespace-nowrap');
+  });
+
+  it('右侧控件组带 shrink-0（按钮组整体不可收缩）', () => {
+    renderHeader();
+    const status = screen.getByText(/宫格列表/);
+    const header = status.parentElement!;
+    const controls = header.children[1] as HTMLElement;
+    expect(controls.className).toContain('shrink-0');
+  });
+
+  it('5 个按钮按钮体都带 shrink-0 whitespace-nowrap（删任一即竖排）', () => {
+    renderHeader();
+    const names = [
+      '全选宫格照片',
+      '清除宫格多选',
+      '按条件筛选照片',
+      '切换为一行 3 张缩略图',
+      '切换为一行 4 张缩略图',
+    ];
+    for (const name of names) {
+      const btn = screen.getByRole('button', { name });
+      expect(btn.className, name).toContain('shrink-0');
+      expect(btn.className, name).toContain('whitespace-nowrap');
+    }
+  });
+
+  it('全选/清除文字节点带 whitespace-nowrap（#79 常驻入口保留文字）', () => {
+    renderHeader();
+    expect(screen.getByText('全选').className).toContain('whitespace-nowrap');
+    expect(screen.getByText('清除').className).toContain('whitespace-nowrap');
+    // 常驻可见：不得收进菜单、不得仅多选态显示
+    expect(screen.getByRole('button', { name: '全选宫格照片' })).toBeDefined();
+    expect(screen.getByRole('button', { name: '清除宫格多选' })).toBeDefined();
+  });
+
+  it('3列/4列/搜索已图标化：文字 span 消失但 aria-label/title/aria-pressed 保留', () => {
+    renderHeader();
+    expect(screen.queryByText('3列')).toBeNull();
+    expect(screen.queryByText('4列')).toBeNull();
+    expect(screen.queryByText('搜索')).toBeNull();
+    const c3 = screen.getByRole('button', { name: '切换为一行 3 张缩略图' });
+    const c4 = screen.getByRole('button', { name: '切换为一行 4 张缩略图' });
+    const search = screen.getByRole('button', { name: '按条件筛选照片' });
+    expect(c3.getAttribute('title')).toBe('一行 3 张缩略图');
+    expect(c4.getAttribute('title')).toBe('一行 4 张缩略图');
+    expect(search.getAttribute('title')).toBe('按条件筛选 (快捷键 Ctrl+F)');
+    expect(c3.getAttribute('aria-pressed')).not.toBeNull();
+    expect(c4.getAttribute('aria-pressed')).not.toBeNull();
+    expect(search.getAttribute('aria-pressed')).not.toBeNull();
+    expect(c3.getAttribute('aria-label')).toBe('切换为一行 3 张缩略图');
+    expect(c4.getAttribute('aria-label')).toBe('切换为一行 4 张缩略图');
+    expect(search.getAttribute('aria-label')).toBe('按条件筛选照片');
+  });
+
+  it('全选按钮的 aria-pressed / aria-keyshortcuts 与 title 保留（图标化不回退 #79）', () => {
+    renderHeader();
+    const all = screen.getByRole('button', { name: '全选宫格照片' });
+    expect(all.getAttribute('aria-pressed')).not.toBeNull();
+    expect(all.getAttribute('aria-keyshortcuts')).toBe('Control+A');
+    expect(all.getAttribute('title')).toBe('全选当前宫格（Ctrl+A）');
+  });
+});
