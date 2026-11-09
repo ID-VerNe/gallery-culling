@@ -8,7 +8,7 @@
  *   - 11px → `leading-snug`（1.375 → 15.125px）
  *   - 12px+ 正文层保持 `leading-relaxed`；单行截断标签可 `leading-tight` 或省略
  *
- * 为什么按字号而不按用途：同一字号在这 8 个面板里既出现在多行说明
+ * 为什么按字号而不按用途：同一字号在这 9 个面板里既出现在多行说明
  * （SettingsSections:50）也出现在密集列表（ShortcutHelpModal:99），按用途定会
  * 产出「同字号两种行高」，反而分叉口径。绝对行高 15px 也不是新造一套——
  * ThumbnailGrid:365 的查询状态行早已是 `text-[10px] leading-[15px]`。
@@ -21,11 +21,12 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SRC = join(ROOT, 'src');
 
-/** 本单逐处核过的 8 个面板文件（issue #39 改动范围）。 */
+/** 本单逐处核过的 9 个面板文件（issue #39 改动范围，issue #114 拆出 LensPresetPanel）。 */
 const PANEL_FILES = [
   'src/components/SettingsSections.tsx',
   'src/components/TonalAdjuster.tsx',
   'src/components/MetadataEditorModal.tsx',
+  'src/components/LensPresetPanel.tsx',
   'src/components/export/RenderOptions.tsx',
   'src/components/export/WatermarkOptions.tsx',
   'src/components/Modal.tsx',
@@ -115,21 +116,21 @@ describe('小字行高口径（issue #39 · PC-8）', () => {
     expect(relaxedViolations(allSourceFiles(), 'text-[11px]')).toEqual([]);
   });
 
-  it('8 个面板文件：10px 只配 leading-[1.5] / leading-[15px] / leading-tight 或省略', () => {
+  it('9 个面板文件：10px 只配 leading-[1.5] / leading-[15px] / leading-tight 或省略', () => {
     expect(
       leadingViolations(PANEL_FILES, 'text-[10px]', LEADING_10PX_ALLOWED),
     ).toEqual([]);
   });
 
-  it('8 个面板文件：11px 只配 leading-snug 或省略（不许 relaxed / tight / none）', () => {
+  it('9 个面板文件：11px 只配 leading-snug 或省略（不许 relaxed / tight / none）', () => {
     expect(leadingViolations(PANEL_FILES, 'text-[11px]', ['leading-snug'])).toEqual([]);
   });
 
-  it('迁移台账：8 个面板文件里 10px + leading-[1.5] 不少于 26 处（防批量回退）', () => {
+  it('迁移台账：9 个面板文件里 10px + leading-[1.5] 不少于 26 处（防批量回退）', () => {
     expect(countPairs(PANEL_FILES, 'text-[10px]', 'leading-[1.5]')).toBeGreaterThanOrEqual(26);
   });
 
-  it('迁移台账：8 个面板文件里 11px + leading-snug 不少于 10 处（防批量回退）', () => {
+  it('迁移台账：9 个面板文件里 11px + leading-snug 不少于 10 处（防批量回退）', () => {
     expect(countPairs(PANEL_FILES, 'text-[11px]', 'leading-snug')).toBeGreaterThanOrEqual(10);
   });
 });
