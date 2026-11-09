@@ -47,7 +47,7 @@ const NO_PUBLIC_SOURCE =
   '主安装包构建**不需要**本地产物；只有本地测试 / 对照时才需要放一份。\n' +
   '下一步（任选其一）：\n' +
   '  1) 从 release 下载 zip 并解压到 src-tauri/binaries/lumen-cli/（整目录，含 _internal/）：\n' +
-  '     https://github.com/ID-VerNe/gallery-culling/releases/download/lumen-cli-v1.6.0/lumen-cli-1.6.0-win-x64.zip\n' +
+  `     ${DEFAULT_SOURCE.url}\n` +
   '  2) $env:LUMEN_SIDECAR_SRC="<产物目录>"; node scripts/prepare-sidecar.mjs\n' +
   '  3) 若确实要有意更换引擎：先核对来源，再 --update-lock\n' +
   '产物只用于本地对照，不得提交进 git（也不引入 LFS）。';
