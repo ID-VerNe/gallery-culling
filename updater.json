@@ -1,11 +1,11 @@
 {
-  "version": "v2.0.9",
-  "notes": "v2.0.9\n\n- 单图与前后对照模式下，状态栏新增「设为基准」按钮，鼠标点一下就能钉住当前照片为对比基准；双图模式不显示该按钮。\n- 状态栏新增「按住看原片」按钮，按住即可查看原片、松开恢复，和按住 V 键是同一个功能，不再只有键盘才能用。\n- 快捷键帮助补齐此前漏写的入口：Ctrl/⌘+A 全选、Esc 取消、宫格模式上下键翻动、Ctrl/Shift+点击的框选用法；撤销、重做、导出按钮现在会直接在提示里显示自己的快捷键。\n- 工具条上一处按钮按下时的动画与其余按钮不一致，已统一，按下反馈更整齐。",
-  "pub_date": "2026-11-07T23:43:25.687Z",
+  "version": "v2.0.10",
+  "notes": "v2.0.10\n\n- 配置统一存放到用户主目录（%USERPROFILE%\\.galleryculling\\）：重装、升级或换安装目录后，设置、镜头快捷预设与上次会话都会自动保留；首次升级会复制旧配置，原文件不动。\n- 修复窄窗口下左下角状态栏文字互相压盖：身份、体积与拍摄参数不再叠成一团，空间不足时整组隐藏，不再横向滚动。\n- 修复色标选中白环与色点不同心：红/黄/绿/蓝/紫五个色点现在均匀居中，选中反馈更准确。",
+  "pub_date": "2026-11-09T03:52:41.816Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNGtvZlI3OWo2em5rUTMvMWwrRk9aSG5zVjlHdWdrdmx2ZWx1YzF1dzlyNFBPeWlUaHQvYXR3a0xKaHM5ZFVaVjZ6MklNek5BMjVWZldpOU00UzVtSkFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MDk1MDA0CWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC45X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjAuOQptOXBQME5XbHZKd0pqZ3dheWRHNzg2L1JVWjFOaGVROUlFQ21tNTVDZXRCc01rakl4S1lHeWswaXR4Qk80L2pMS1d0SFJKd05JYlRZMWZheFRPMWpEZz09Cg==",
-      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.9/gallery-culling_2.0.9_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNGl3bWxzR0FzQXVBbHoweDdxNFZsL3FPTklOVkZSaXdxc25YZCtaSVFtOFAzRmNVbG40bHh5YitBRWJlNHBzR3BGWEpCOHJZSDcyVjgwRVhoNHFKVFFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MTk2MzYxCWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC4xMF94NjQtc2V0dXAuZXhlCXZlcnNpb246Mi4wLjEwClRmMXh0WkZxYjZDMjZmK1dhY0gwall3N3V3ZTEwSGoycnlOZ0VyWXJiZHAyeC8rMWdkMEtRWmRUSzZ0MHJ0d29RM0lxQm5PaFhTZkE3SnNmMDltTUFRPT0K",
+      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.10/gallery-culling_2.0.10_x64-setup.exe"
     }
   }
 }
