@@ -79,4 +79,4 @@ export const STATUS_STAR_BUTTON = 'focus-ring tap-target p-0.5 lg:p-1 rounded-sm
 
 /** 色点按钮（色点本身仍用 `LABEL_DOT_CLASS` 真值）。 */
 export const STATUS_DOT_BUTTON =
-  'focus-ring tap-target p-1 rounded-full transition-colors ring-offset-0';
+  'focus-ring tap-target p-1 rounded-full inline-flex items-center justify-center transition-colors ring-offset-0';
