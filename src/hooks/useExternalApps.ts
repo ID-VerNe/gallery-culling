@@ -36,7 +36,7 @@ export interface UseExternalAppsResult {
  * 建一个回调桥，反而多一层间接。
  *
  * 口径（与抽取前的 App.tsx 逐一核对）：
- *  - 外部打开：PS 失败 → 静默回落默认程序 → 再失败才 toast（带设置指引）；
+ *  - 外部打开：PS 失败/回落 → 默认程序并 toast（带设置指引，issue #106 非静默）；
  *  - 往返：全程 try/catch/finally，`isLuminarRunning` 保证不重入；
  *    edited 信息（路径/名/扩展/大小/时间）按原样构造后走 onGroupPatched；
  *  - 视图切换：toggle 类在 single 与目标模式间互切，不做三态轮转。
@@ -56,11 +56,19 @@ export function useExternalApps({
     if (!targetPath) return;
 
     try {
-      await api.openInPhotoshop(targetPath, photoshopPath);
+      const openedInPhotoshop = await api.openInPhotoshop(targetPath, photoshopPath);
+      if (openedInPhotoshop === false) {
+        toast.info(
+          'Photoshop 路径未配置或不存在，已改用默认程序打开。\n请在「设置」中确认 Photoshop 路径。',
+        );
+      }
     } catch (e) {
       console.warn('Photoshop failed, falling back to default:', e);
       try {
         await api.openInDefaultApp(targetPath);
+        toast.info(
+          'Photoshop 打开失败，已改用默认程序打开。\n请在「设置」中确认 Photoshop 路径。',
+        );
       } catch (fallbackErr) {
         toast.error(
           `无法打开该照片：${String(fallbackErr)}\n请在「设置」中确认 Photoshop 路径，或安装一个能打开此格式的程序。`,
