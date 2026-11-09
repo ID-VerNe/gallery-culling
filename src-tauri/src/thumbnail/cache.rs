@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 
-use sha2::{Digest, Sha256};
+use crate::cachekey::sha256_hex16;
 
 use crate::db::{user_home_dir, DATA_DIR_ENV};
 
@@ -169,67 +169,70 @@ fn copy_jpgs_recursive(src_dir: &Path, target_root: &Path, src_root: &Path, copi
 }
 
 /// 因此索引键与缓存文件名同源 —— 文件一变，键与文件名同步失效。
-pub(super) fn file_fingerprint(file_path: &Path) -> (PathBuf, u64) {
+/// mtime 用纳秒（`u128`，与 `lumen::cache::mtime_tag` 同口径）：秒级会在
+/// 同秒覆写时让键与文件名都不变，进程内索引命中直接返回旧图（issue #142）。
+pub(super) fn file_fingerprint(file_path: &Path) -> (PathBuf, u128) {
     let abs_path = fs::canonicalize(file_path).unwrap_or_else(|_| file_path.to_path_buf());
-    let mtime = file_mtime_secs(file_path);
+    let mtime = file_mtime_nanos(file_path);
     (abs_path, mtime)
 }
 
-/// 取文件 mtime 的 Unix 秒数（缺省 0）。
+/// 取文件 mtime 的 Unix 纳秒数（缺省 0）。
 ///
 /// 缓存新鲜度判定的输入。**必须与 `scanner::secs_from_meta` 分开**：那边收
 /// 已经取好的 metadata，这边自己 stat；更重要的是缺省值语义不同 —— 这里 0
 /// 表示「取不到时间戳」，与真实的 epoch 0 无法区分，因此缓存判定逻辑不接受
-/// 「mtime == 0 就认为是最新的」这种写法。
-pub(super) fn file_mtime_secs(file_path: &Path) -> u64 {
+/// 「mtime == 0 就认为是最新的」这种写法。与 `lumen::cache::mtime_tag` 的
+/// `u128::MAX` 缺省不同：那是给键 payload 用的可区分哨兵，这里 0 沿用历史
+/// 语义（issue #142 只改精度，不改哨兵）。
+pub(super) fn file_mtime_nanos(file_path: &Path) -> u128 {
     fs::metadata(file_path)
         .and_then(|m| m.modified())
         .map(|t| {
             t.duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
-                .as_secs()
+                .as_nanos()
         })
         .unwrap_or(0)
 }
 
 /// 用**已算好的**指纹拼出缓存文件路径（避免重复 `canonicalize`/`metadata`）。
 /// 文件名格式与历史版本逐字一致（`{hash16}_{stem}_{width}_rot{orientation}.jpg`），
-/// 因此不会让任何存量缓存失效。
+/// 但哈希输入改纳秒并升 `thumb-v3`（issue #142）：存量 `thumb-v2` 秒级缓存
+/// 有意一次性失效，下次查看时懒重生成（论证见 plan/PR）。
 pub(super) fn cache_path_for(
     abs_path: &Path,
-    mtime: u64,
+    mtime: u128,
     file_path: &Path,
     width: u32,
     orientation: u32,
 ) -> PathBuf {
     let key = format!(
-        "{}-{}-{}-{}-thumb-v2",
+        "{}-{}-{}-{}-thumb-v3",
         abs_path.to_string_lossy(),
         mtime,
         width,
         orientation
     );
-    let mut hasher = Sha256::new();
-    hasher.update(key.as_bytes());
-    let hash = format!("{:x}", hasher.finalize());
+    let hash = sha256_hex16(&key);
 
     let stem = file_path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("image");
-    let filename = format!("{}_{}_{}_rot{}.jpg", &hash[..16], stem, width, orientation);
+    let filename = format!("{}_{}_{}_rot{}.jpg", hash, stem, width, orientation);
     get_cache_dir().join(filename)
 }
 
 /* ------------------------------ 进程内间接索引 ------------------------------ */
 
-/// 间接索引键：(规范化路径, mtime, 宽度)。**刻意不含 orientation** —— 缓存文件名
+/// 间接索引键：(规范化路径, mtime 纳秒, 宽度)。**刻意不含 orientation** —— 缓存文件名
 /// 里仍带 orientation（旋转后会重存，不能从键里去掉），但在文件内容不变（mtime 不变）
 /// 时 orientation 是常量，所以用这个轻量键先查一次即可直接拿到上次算好的缓存路径。
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub(super) struct ThumbIndexKey {
     pub(super) path: PathBuf,
-    pub(super) mtime: u64,
+    pub(super) mtime: u128,
     pub(super) width: u32,
 }
 
@@ -426,4 +429,40 @@ mod tests {
     }
 
     fn cleanup_target_note(_p: &Path) {}
+
+    /// issue #142 墓碑：同秒内 mtime 只差亚秒（+500ms）时指纹必须不同，
+    /// 否则索引键与缓存文件名都不变，同秒覆写会命中旧缓存（stale）。
+    /// 基线（`as_secs`）下两路指纹相同，本测试必红。
+    #[test]
+    fn fingerprint_distinguishes_same_second_mtimes() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let dir = unique_dir("same-second");
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let src = dir.join("photo.jpg");
+        std::fs::write(&src, b"v1").expect("write v1");
+
+        // 固定同一秒内的两个时刻：+100ms 与 +600ms，秒数相同、纳秒不同。
+        let base = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let set_mtime = |t: std::time::SystemTime| {
+            std::fs::File::options()
+                .write(true)
+                .open(&src)
+                .expect("open for set_modified")
+                .set_modified(t)
+                .expect("set mtime");
+        };
+
+        set_mtime(base + Duration::from_millis(100));
+        let fp1 = file_fingerprint(&src);
+        let p1 = cache_path_for(&fp1.0, fp1.1, &src, 200, 1);
+
+        set_mtime(base + Duration::from_millis(600));
+        let fp2 = file_fingerprint(&src);
+        let p2 = cache_path_for(&fp2.0, fp2.1, &src, 200, 1);
+
+        assert_ne!(fp1, fp2, "同秒只差 500ms 的两次指纹必须不同");
+        assert_ne!(p1, p2, "同秒覆写必须换缓存文件名，否则磁盘命中旧图");
+
+        cleanup(&dir);
+    }
 }
