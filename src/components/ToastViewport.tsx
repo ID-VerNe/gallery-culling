@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { VARIANT_STYLES } from './Toast';
 import type { Toast } from './Toast';
+import { prefersReducedMotion } from '../utils/reducedMotion';
 
 /**
  * 纯展示层（FE-04）：两个 live region + 单条 toast 的渲染。
@@ -23,12 +24,6 @@ import type { Toast } from './Toast';
 
 /** 退场淡出窗口（ms）。与 CSS `duration-150` 配对。 */
 export const TOAST_EXIT_MS = 150;
-
-/** 系统偏好降级时要**直接跳过**退场窗口，而不是挂 150ms 空等（CSS 已把时长压到 0.01ms）。 */
-const prefersReducedMotion = () =>
-  typeof window !== 'undefined' &&
-  typeof window.matchMedia === 'function' &&
-  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const ToastRow: React.FC<{
   toast: Toast;

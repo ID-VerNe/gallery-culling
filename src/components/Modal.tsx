@@ -1,5 +1,6 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { X } from 'lucide-react';
+import { prefersReducedMotion } from '../utils/reducedMotion';
 
 interface ModalProps {
   isOpen: boolean;
@@ -38,11 +39,6 @@ export const MODAL_EXIT_MS = 150;
 
 /** 进场从「挂载帧」切到「在场帧」的延迟：0ms 只为让浏览器先画一帧 opacity-0。 */
 const ENTER_TICK_MS = 0;
-
-const prefersReducedMotion = () =>
-  typeof window !== 'undefined' &&
-  typeof window.matchMedia === 'function' &&
-  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /**
  * D1：模块级弹窗栈 —— 按挂载顺序记录当前打开的 Modal 实例。
