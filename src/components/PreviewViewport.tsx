@@ -10,6 +10,8 @@ import { useLumenDetail } from '../hooks/useLumenDetail';
 import { LUMEN_UNAVAILABLE } from '../hooks/useLumenStatus';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
 import { ExifCapsule } from './ExifCapsule';
+import { RawRenderingBanner } from './RawRenderingBanner';
+import { rawOnlyEmptyState } from '../utils/viewportRawCopy';
 
 /**
  * 单图视口上交给宿主状态栏的缩放面（issue #62）。
@@ -299,16 +301,7 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
       <ViewportEmptyStateView
         emptyState={
           image.rawOnly
-            ? engineAvailable
-              ? {
-                  title: 'RAW 预览暂不可用',
-                  description: 'LUMEN RAW 引擎未能解码该照片，请稍后重试或改用其它视图。',
-                }
-              : {
-                  title: '该 RAW 需启用 LUMEN RAW 引擎',
-                  description:
-                    '当前为 RAW-only 照片，启用 LUMEN RAW 引擎后即可实时预览；JPG 照片不受影响。',
-                }
+            ? rawOnlyEmptyState({ engineAvailable })
             : emptyState
         }
       />
@@ -330,14 +323,8 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
       }`}
     >
       {/* Zoomable Image */}
-      {image.loading && !image.lumenActive && (
-        <div
-          role="status"
-          className="absolute top-4 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3.5 py-1.5 rounded-md text-xs font-semibold text-white/80 border border-border-default pointer-events-none"
-        >
-          正在渲染 RAW…
-        </div>
-      )}
+      {/* 可见性留调用侧：Preview 保留 !lumenActive（LUMEN 命中后不再提示）。 */}
+      {image.loading && !image.lumenActive && <RawRenderingBanner />}
 
       {/* FR-05：1:1 细节是 6–8 秒的操作，必须说清楚在做什么（不能只有转圈）。 */}
       {detail.loading && (
