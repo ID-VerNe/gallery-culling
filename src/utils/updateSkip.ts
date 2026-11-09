@@ -7,9 +7,10 @@
  * - **`endpoint` 只做来源隔离**：换更新地址时旧记录不许抑制新来源。
  * - **坏数据当「没跳过」**：宁可多弹一次，也不许把用户永久静音。
  *
- * 存 `localStorage` 而不是进 SQLite：`Database` 用的是当前工作目录相对路径
- * （`src-tauri/src/db.rs:590-605`），安装器重启后的 cwd 不由我们控制，跳过标记
- * 落进那里会出现「A 目录生效、B 目录失效」的幽灵行为。
+ * 存 `localStorage` 而不是进 SQLite（issue #98 #103）：默认库已固定在用户 home
+ * （`src-tauri/src/db.rs:620-659`，`%USERPROFILE%\.galleryculling\`，换安装目录
+ * 本就不丢）；但迁进 SQLite 要新增 Tauri 命令并把本模块的纯函数改成异步 IPC，
+ * 会破坏「纯函数 + Storage 注入」结构，收益为零，故保持现状（理论可重评估）。
  */
 
 export interface UpdateSkipRecord {

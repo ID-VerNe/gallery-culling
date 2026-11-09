@@ -8,8 +8,9 @@
  * - 当前版本已是目标版本 → 升级成功，给用户一个确认；
  * - 仍是旧版本 → 上次升级没完成，给一条可操作（且不自动消失）的提示。
  *
- * 与 `gc:update:skip` 同一存储层（`localStorage`）与同一理由：放进 SQLite 会受
- * 安装器重启后的 cwd 影响（见 `src/utils/updateSkip.ts` 顶部说明）。
+ * 与 `gc:update:skip` 同一存储层（`localStorage`）与同一理由（见 `src/utils/updateSkip.ts`
+ * 顶部说明，issue #98 #103）：默认库已固定在用户 home，故本模块仍保持纯函数 +
+ * Storage 注入，不迁 SQLite。
  */
 
 export interface UpdatePendingRecord {

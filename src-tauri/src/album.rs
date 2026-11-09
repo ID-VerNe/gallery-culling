@@ -28,12 +28,18 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 pub const ALBUM_APPLICATION: &str = "Gallery Culling album";
 pub const ALBUM_VERSION: u32 = 1;
 pub const ALBUM_MAX_DOCUMENTS: usize = 2000;
 pub const ALBUM_MAX_BYTES: u64 = 128 * 1024 * 1024;
+
+/// 临时文件名的进程内自增序号：保证并发写同一选片集时每个线程持有**各自**的
+/// 临时文件（避免互相 clobber），与 `xmp.rs` / `cullstore.rs` 的 `TMP_SEQ` 同口径；
+/// 另带 pid，多进程同 target 亦不撞名（issue #135）。
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// 选片集里的一条：`source` 是相对（或绝对）路径，其余是当时记下的状态。
 ///
@@ -178,7 +184,7 @@ pub fn check_file_size(bytes: u64) -> Result<(), String> {
     Ok(())
 }
 
-/// 原子写：先写 `<name>.tmp` 再 rename 覆盖。
+/// 原子写：先写 `<name>.tmp<pid>_<seq>` 再 rename 覆盖。
 ///
 /// 不建父目录：路径来自「另存为」对话框，目录一定已存在；悄悄建目录会让
 /// 「保存到不存在的盘」变成静默成功。
@@ -196,8 +202,14 @@ pub fn write_album(path: &Path, docs: &[AlbumDoc]) -> Result<(), String> {
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .ok_or_else(|| format!("选片集路径非法: {}", path.display()))?;
-    let tmp = path.with_file_name(format!("{file_name}.tmp"));
-    fs::write(&tmp, json.as_bytes()).map_err(|e| format!("写入临时文件失败: {e}"))?;
+    // 临时名带 `.tmp<pid>_<seq>` 后缀：既不会被选片集文件选择框误认，
+    // 也不会在同进程多线程/多进程并发保存同一 target 时互相覆盖（issue #135）。
+    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_file_name(format!("{file_name}.tmp{}_{}", std::process::id(), seq));
+    fs::write(&tmp, json.as_bytes()).map_err(|e| {
+        let _ = fs::remove_file(&tmp); // 尽力清理残留
+        format!("写入临时文件失败: {e}")
+    })?;
     fs::rename(&tmp, path).map_err(|e| {
         let _ = fs::remove_file(&tmp); // 别把半成品留在用户目录里
         format!("替换选片集失败: {e}")
@@ -418,6 +430,53 @@ mod tests {
         let back = read_album(&album).unwrap();
         assert_eq!(back.len(), 1, "覆盖写必须整份替换，不是追加");
         assert_eq!(back[0].source, "two.ARW");
+    }
+
+    /// issue #135 墓碑：同 target 多线程并发写不得互覆 tmp。
+    /// 固定 `{file_name}.tmp` 时 N 个线程抢同一 tmp → 只有一次 rename 能
+    /// 成功，其余 rename 抢不到文件返回 Err（或终值是交错的混合/截断内容）；
+    /// pid_seq 命名下每次写均 Ok，终值必为一整份载荷（后落地 rename 原子替换）。
+    #[test]
+    fn concurrent_write_same_target_never_interleaves() {
+        use std::sync::{Arc, Barrier};
+        const THREADS: usize = 8;
+        // 大载荷：拉长写入窗口、放大交错概率；条数卡在 2000 上限内。
+        let big = |tag: char| -> Vec<AlbumDoc> {
+            (0..1500)
+                .map(|i| {
+                    doc(
+                        &format!("{tag}/{i:04}.ARW"),
+                        5,
+                        "pick",
+                        &tag.to_string().repeat(300),
+                    )
+                })
+                .collect()
+        };
+        let payloads: Vec<Arc<Vec<AlbumDoc>>> = ('a'..='h').map(|t| Arc::new(big(t))).collect();
+        let dir = scratch("conc");
+        let album = dir.join("c.galleryalbum");
+        for _round in 0..10 {
+            let barrier = Arc::new(Barrier::new(THREADS));
+            let mut handles = Vec::new();
+            for payload in &payloads {
+                let payload = Arc::clone(payload);
+                let barrier = Arc::clone(&barrier);
+                let album = album.clone();
+                handles.push(std::thread::spawn(move || {
+                    barrier.wait();
+                    write_album(&album, &payload)
+                }));
+            }
+            for h in handles {
+                h.join().expect("写线程不应 panic").expect("并发写均应成功");
+            }
+            let back = read_album(&album).expect("终值必须是完整可读的选片集，不得是混合/截断内容");
+            assert!(
+                payloads.iter().any(|p| back == **p),
+                "终值必须恰为一整份载荷（后落地 rename 原子替换），不得是多份交错的混合物"
+            );
+        }
     }
 
     #[test]

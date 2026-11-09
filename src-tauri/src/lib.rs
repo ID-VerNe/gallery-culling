@@ -1,4 +1,5 @@
 mod album;
+mod cachekey;
 mod clock;
 mod commands;
 mod cullstore;

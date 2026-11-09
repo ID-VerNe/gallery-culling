@@ -16,6 +16,8 @@ import type { ViewportEmptyState } from './PreviewViewport';
 import { ViewportEmptyStateView } from './ViewportEmptyState';
 import { ViewportZoomBar } from './ViewportZoomBar';
 import { ExifCapsule } from './ExifCapsule';
+import { RawRenderingBanner } from './RawRenderingBanner';
+import { rawOnlyEmptyState } from '../utils/viewportRawCopy';
 
 interface BeforeAfterViewportProps {
   group?: PhotoGroupInfo;
@@ -78,15 +80,12 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
 
   // RAW-only：解码中 → 渲染主视图并显示横幅；失败/未启用 → 明确占位而非破图（C2）。
   if (!beforeImage.src && !(beforeImage.rawOnly && beforeImage.loading)) {
+    const engineAvailable = lumenStatus?.available === true;
     return (
       <ViewportEmptyStateView
         emptyState={
           beforeImage.rawOnly
-            ? {
-                title: '该 RAW 需启用 LUMEN RAW 引擎',
-                description:
-                  '当前为 RAW-only 照片，启用 LUMEN RAW 引擎后即可在此对照预览；JPG 照片不受影响。',
-              }
+            ? rawOnlyEmptyState({ engineAvailable })
             : emptyState
         }
       />
@@ -226,14 +225,7 @@ export const BeforeAfterViewport: React.FC<BeforeAfterViewportProps> = ({
             />
           )}
 
-          {beforeImage.loading && (
-            <div
-              role="status"
-              className="absolute top-3 left-1/2 -translate-x-1/2 bg-background-base/90 backdrop-blur-md px-3 py-1 rounded-md text-[11px] font-semibold text-white/80 border border-border-default pointer-events-none"
-            >
-              正在渲染 RAW…
-            </div>
-          )}
+          {beforeImage.loading && <RawRenderingBanner />}
 
           {/* V-07：与 Preview 视口对齐的 EXIF 胶囊（原先只有 Preview 有）。 */}
           <ExifCapsule exif={group.exif} />
