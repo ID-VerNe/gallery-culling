@@ -23,8 +23,9 @@ import {
   readSessionMemory,
   seedSession,
 } from './test/setup';
-import type { FolderScanResult, ToneState } from './types';
 import { makeGroup } from './test/factories';
+import { makeSettings } from './test/settingsFactory';
+import type { FolderScanResult, ToneState } from './types';
 import { DEFAULT_TONE } from './utils/autoTone';
 
 const allGroups = ['DSC_1001', 'DSC_1002', 'DSC_1003', 'DSC_1004', 'DSC_1005'].map((b) => makeGroup(b.toLowerCase(), { baseName: b }));
@@ -46,17 +47,7 @@ const toneState: ToneState = {
 };
 
 function mockStartup(history: [number, string] | null = null) {
-  mockInvokeCommand('get_settings_cmd', {
-    defaultJpgFolder: 'D:/shoot/JPG',
-    defaultRawFolder: '',
-    photoshopPath: '',
-    thumbnailWidth: 200,
-    sortOrder: 'time_filename',
-    lumenEnabled: false,
-    lumenCliPath: '',
-    lumenGridThumbnails: false,
-    lumenExpectAi: false,
-  });
+  mockInvokeCommand('get_settings_cmd', makeSettings());
   mockInvokeCommand('save_settings_cmd', true);
   mockInvokeCommand('save_session_cmd', true);
   mockInvokeCommand('scan_folders_cmd', scanResult);

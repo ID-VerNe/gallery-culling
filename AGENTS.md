@@ -87,7 +87,7 @@ npm run parity                             # CI 等价复跑：在被推送 sha 
 6. **测试方法论（先写测试，后改代码）**：
    - 先写测试 → 故意改坏关键逻辑（**变异**）验证测试网能抓到 → 还原 → 才准动实现；
    - **变异必须替换断言瞄准的子串**，在前面加无意义前缀是无效变异，测试不红不代表网有效；
-   - E-07 教训：注释里描述的口径 ≠ 测试锁住的口径。`expectedFileCount` 注释写了「RAW + XMP + JPG」，但 fixture 全 `hasXmp: false`，XMP 分支零覆盖、变异存活。凡新增分支，必配能被变异打红的用例；
+   - E-07 教训：注释里描述的口径 ≠ 测试锁住的口径。`expectedFileCount` 注释写了「RAW + XMP + JPG」，但 fixture 全 `hasXmp: false`，XMP 分支零覆盖、变异存活。前端已在 1dc6373 补 XMP 用例（hasXmp: opts.xmp ?? false + useExportForm.test.ts XMP 分支用例），后端 XMP 覆盖已在 #132 补齐（export_copies_xmp_sidecar_alongside_raw + 跨语言契约表）。凡新增分支，必配能被变异打红的用例；
    - **变异还原不许用 `git checkout --`**（2026-10-19 事故）：对**未提交的跟踪文件** checkout 会把本轮全部接线冲回 HEAD，且 `git diff --stat` 输出为空、看不出异常。协议：先 `cp file /tmp/x.bak` 再变异，还原用 `cp` 回写；untracked 新文件 checkout 会直接报错（反而安全）。
 
 ## 3. 架构现状（SRP remediation 之后，别再往门面里塞东西）
