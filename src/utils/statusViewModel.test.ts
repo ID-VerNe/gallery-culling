@@ -4,20 +4,13 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { selectStatusPanes, selectStatusZoom } from './statusViewModel';
+import { makeGroup } from '../test/factories';
 import type { PhotoGroupInfo } from '../types';
 import type { PreviewZoomApi } from '../components/PreviewViewport';
 import { DEFAULT_TONE } from './autoTone';
 
-const g = (id: string): PhotoGroupInfo => ({
-  id,
-  baseName: id.toUpperCase(),
-  status: 'JPG_ONLY',
-  rating: 0,
-  flag: 'none',
-  label: '',
-  hasXmp: false,
-  tone: { ...DEFAULT_TONE },
-});
+const g = (id: string): PhotoGroupInfo =>
+  makeGroup(id, { baseName: id.toUpperCase(), tone: { ...DEFAULT_TONE } });
 
 const zoom = (scale: number): PreviewZoomApi => ({
   scale,
