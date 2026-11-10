@@ -34,6 +34,7 @@ if (import.meta.env.DEV) {
         jpg?: string;
         raw?: string;
         mixed?: string;
+        wide?: string;
         out?: string;
         names?: string;
         /** 重启套件：当前是第几段（'1' 首启 / '2' 重启后）。 */
@@ -53,6 +54,7 @@ if (import.meta.env.DEV) {
       await mod.runE2E(cfg.scenario, cfg.jpg || '', {
         raw: cfg.raw || '',
         mixed: cfg.mixed || '',
+        wide: cfg.wide || '',
         out: cfg.out || '',
         names: cfg.names || '',
         phase: cfg.phase || '1',

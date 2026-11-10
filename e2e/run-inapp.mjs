@@ -550,6 +550,8 @@ async function main() {
     VITE_E2E_JPG: JPG,
     VITE_E2E_RAW: scenario === 'detail-1to1' ? detailRaw : RAW,
     VITE_E2E_MIXED: fx.mixedDir,
+    // #105：格头拥挤夹具（107 张）。只有 ui-contract 场景的几何断言读它。
+    VITE_E2E_WIDE: fx.wideDir,
     VITE_E2E_OUT: OUT,
     VITE_E2E_NAMES: detailNames,
     // issue #75：只有 engine-download 场景才覆盖下载源与缓存根目录；
@@ -577,7 +579,13 @@ async function main() {
     if (log === null) return 2;
   } else {
     console.log('--- 启动应用（首次/改动 Rust 要编译，耐心等）---');
-    await spawnDevTree({ logFile: DEV_LOG, extraEnv: commonEnv });
+    await spawnDevTree({
+      logFile: DEV_LOG,
+      // #99：状态栏窄窗几何要 1280 宽的真窗（tauri.conf.json 默认 1400），
+      // 其余场景保持原窗宽，避免改动已调校过的断言环境。
+      windowWidth: scenario === 'ui-contract' ? 1280 : 0,
+      extraEnv: commonEnv,
+    });
 
     console.log('--- 等待场景跑完（e2e/.tmp/e2e-app.log）---');
     const hit = await waitForLog(LOG_FILE, (c) => /=== e2e done \(/.test(c), { timeoutMs });

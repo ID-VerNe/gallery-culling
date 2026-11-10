@@ -96,6 +96,27 @@ Tauri 的 WebView2 不把 DOM 暴露给 Windows UI Automation，所以界面断�
 
 底栏的几类契约只有真实浏览器能证伪，vitest（jsdom）只能看 `className`：
 
+`ui-contract` 启动时经 `tauri dev --config e2e/.tmp/window-1280.json` 把窗宽
+合入 1280（`e2e/lib/app.mjs` 的 `windowWidth` 参数；其余场景仍用
+`tauri.conf.json` 的 1400），为 #99 的窄窗几何提供真窗条件。
+
+### 几何三件（#100 · #105 · #99，真窗 `getBoundingClientRect` 实测）
+
+- **#100 色点同心**：`Shift+1` 设红标后，白色选中环（按钮盒）与色点
+  （内部 span）中心差 `|dx|,|dy| ≤ 1px`；五个色点 `top` 极差 ≤1px（基线
+  同 y）、每个 12x12（±0.5px）。
+- **#99 窄窗状态栏**：先自报 `innerWidth` 落带（1024≤w<1300，窄窗没真生效
+  即红）；`[data-status-group]` 全部 rect 两两不相交（容差 0.5px）；
+  状态栏与窗格的 `scrollWidth ≤ clientWidth`（不横滚）；组盒子不逃出 pane；
+  断点组 visible 与 `matchMedia` 一致（2xl 体积组在窄窗必须 hidden、lg
+  参数组必须 visible）；身份/参数组 `overflow-x=hidden`（漆面不越盒，
+  computed style 补齐——纯几何量不出「裁掉」与「画过去」的区别）。
+- **#105 格头控件**：`WIDE` 夹具（107 张 JPG，`VITE_E2E_WIDE`）扫出
+  「宫格列表 (107) · 已选 1」最宽左状态后，格头右侧 5 个控件
+  （全选/清除/搜索/3列/4列）单行（top 极差 ≤1px、高 ≤32px、各自
+  `scrollWidth ≤ clientWidth`）、控件组总宽 ≤370px（390 侧栏 − px-2.5×2）、
+  不越格头内右缘、左状态不压控件组、格头行与 390px 侧栏都无横向溢出。
+
 - **常驻与占位**（#62 替代 #47 的「静息整条移出视口」）：`[data-status-bar]` 必须是
   文档流元素，`top >= [data-viewport-photo] 的 bottom - 1`，`opacity >= 0.95`，
   且落在窗口底部之内；旧的 `[data-bar-handle]` **必须不存在**（旧方案被加回来就红）。
@@ -136,6 +157,8 @@ e2e/
 
 - JPG：内嵌的 480×360 真 JPEG（base64）。尺寸是刻意的 —— 缩略图管线要走
   「取内嵌预览 → 否则按宽度缩放」，用 64×48 的迷你图会让缩放路径失去意义。
+- WIDE：107 张同名规律 JPG（#105 格头夹具，只有 JPG 无 sidecar），只在
+  `ui-contract` 场景的几何断言里扫描；其余场景不读它，素材体积可忽略。
 - XMP：7 个真 sidecar，覆盖 pick / reject（`Rating=-1` 与 `Label=Red` 两种约定）/
   普通星级 / 带 tone / `Label=None` 边界。
 - RAW：**合成**（JPEG 字节 + `.ARW` 扩展名）。e2e 关心的是**配对与占位规则**
