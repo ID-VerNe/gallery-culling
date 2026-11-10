@@ -4,9 +4,11 @@
  * 重点是造数据把每条判定分支打红：解析、字段漂移、顺序漂移、条数漂移、
  * 定义消失、解析失败不判绿。以及拿仓库现状跑一遍必须绿（门禁已落地后）。
  */
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   checkLensParity,
+  findRustLensPresetsPaths,
   judgeLensParity,
   parseRustLensPresets,
   parseTsLensPresets,
@@ -181,5 +183,46 @@ describe('仓库现状（真文件比对）', () => {
   it('TS / Rust 两处一致', () => {
     const verdict = checkLensParity();
     expect(verdict.ok, verdict.message).toBe(true);
+  });
+});
+
+describe('findRustLensPresetsPaths —— issue #145 拆分后不再硬编码 models.rs', () => {
+  const list = () => ['photo.rs', 'settings.rs', 'lumen.rs'];
+  const readSplitLayout = (path) => {
+    if (path.endsWith('models.rs')) return '//! façade\npub use settings::*;\n';
+    if (path.endsWith('settings.rs'))
+      return 'pub fn builtin_lens_presets() -> Vec<LensPreset> { vec![] }\n';
+    if (path.endsWith('photo.rs')) return 'pub struct PhotoFileInfo {}\n';
+    throw new Error('unexpected ' + path);
+  };
+
+  it('定义只在 models/settings.rs 时也能定位到（façade 只 re-export）', () => {
+    const found = findRustLensPresetsPaths({ root: '/x', read: readSplitLayout, list });
+    expect(found).toHaveLength(1);
+    expect(found[0].endsWith(join('models', 'settings.rs'))).toBe(true);
+  });
+
+  it('façade 与域文件同时定义 → 命中 2 处，交由调用方判红', () => {
+    const readBoth = (path) =>
+      path.endsWith('models.rs') || path.endsWith('settings.rs')
+        ? 'pub fn builtin_lens_presets() {}\n'
+        : 'pub struct X {}\n';
+    expect(findRustLensPresetsPaths({ root: '/x', read: readBoth, list })).toHaveLength(2);
+  });
+
+  it('任何文件都没有定义 → 空数组，交由调用方判红', () => {
+    expect(
+      findRustLensPresetsPaths({ root: '/x', read: () => 'fn main() {}\n', list }),
+    ).toEqual([]);
+  });
+
+  it('checkLensParity 层：Rust 侧 0 命中判红，不拿半份数据判绿', () => {
+    const verdict = checkLensParity({
+      root: '/x',
+      read: (path) => (path.endsWith('lensPresets.ts') ? TS_OK : 'fn main() {}\n'),
+      list: () => ['photo.rs'],
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.message).toContain('命中 0 处');
   });
 });
