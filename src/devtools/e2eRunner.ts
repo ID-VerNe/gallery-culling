@@ -996,7 +996,7 @@ async function scenarioUiContract(
     // 断点组 visible 与 matchMedia 一致（断点类失效 / 窄窗不隐藏会红）。
     // 定位禁止用断点类本身（类被删后选择器查不到元素＝空过，变异实证过），
     // 一律用结构：体积组是 identity 组最后一个 span 子盒，色名 span 是 label
-    // 组里唯一的 span（LabelDots 渲染 div>button，不占 span）。
+    // 组最后一个 span（5 个 dot span 在 LabelDots 按钮内，均排在它前面）。
     const mm = (q: string) => window.matchMedia(q).matches;
     const vis99 = (n: HTMLElement | null) => {
       if (!n) return false;
@@ -1007,7 +1007,9 @@ async function scenarioUiContract(
       '[data-status-group="identity"] > span:last-of-type',
     );
     const paramsGroup = paneEl99.querySelector<HTMLElement>('[data-status-group="params"]');
-    const labelName = paneEl99.querySelector<HTMLElement>('[data-status-group="label"] span');
+    const labelName = paneEl99.querySelector<HTMLElement>(
+      '[data-status-group="label"] > span:last-of-type',
+    );
     const sizeVis = vis99(sizeSpan);
     const sizeMm = mm('(min-width: 1536px)');
     const paramsVis = vis99(paramsGroup);
