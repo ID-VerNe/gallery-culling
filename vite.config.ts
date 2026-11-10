@@ -80,8 +80,10 @@ const e2eLogEndpoint = (): Plugin => ({
 
     // 场景配置端点：从 Node 侧（process.env）读，避免依赖前端 import.meta.env 注入。
     //
-    // 四个字段而不是一个 JSON blob：启动命令里逐个 env 传参最不容易出错，
+    // 逐字段而不是一个 JSON blob：启动命令里逐个 env 传参最不容易出错，
     // 且缺省为空串（场景代码据此判断「这条素材没配」而不是收到 undefined）。
+    // 重启套件（issue #108 / #107）多带三个字段：phase / expectIndex / expectBase，
+    // 由编排器在两段 spawn 之间改写，phase 2 的进程据此知道自己是「重启后」。
     server.middlewares.use('/__e2e_scenario', (_req, res) => {
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       res.end(
@@ -93,6 +95,10 @@ const e2eLogEndpoint = (): Plugin => ({
           wide: process.env.VITE_E2E_WIDE || '',
           out: process.env.VITE_E2E_OUT || '',
           names: process.env.VITE_E2E_NAMES || '',
+          // 重启套件用：编排器在两段 spawn 之间改写，phase 2 的进程据此知道自己是「重启后」。
+          phase: process.env.VITE_E2E_PHASE || '1',
+          expectIndex: process.env.VITE_E2E_EXPECT_INDEX || '',
+          expectBase: process.env.VITE_E2E_EXPECT_BASE || '',
         }),
       );
     });
