@@ -34,6 +34,7 @@ if (import.meta.env.DEV) {
         jpg?: string;
         raw?: string;
         mixed?: string;
+        wide?: string;
         out?: string;
         names?: string;
       };
@@ -47,6 +48,7 @@ if (import.meta.env.DEV) {
       await mod.runE2E(cfg.scenario, cfg.jpg || '', {
         raw: cfg.raw || '',
         mixed: cfg.mixed || '',
+        wide: cfg.wide || '',
         out: cfg.out || '',
         names: cfg.names || '',
       });

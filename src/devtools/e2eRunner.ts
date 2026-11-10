@@ -16,6 +16,7 @@
  *   - `detail-1to1`：RAW-only 1:1 细节（`VITE_E2E_RAW` 必须是**真实 ARW**，
  *     `VITE_E2E_NAMES` 给两张的 baseName）
  *   - `ui-contract`：主视口底栏的命中 / 静息收起 / 左手别名真窗口契约（issue #53）
+ *     + 几何三件真窗断言（#100 色点白环同心 / #105 格头 5 控件单行 / #99 窄窗状态栏不压盖）
  *   - `engine-download`：引擎缓存缺失 + 下载失败时，主界面可用并给出中文失败与重试（issue #75）
  *
  * 触发：`npm run e2e:render` / `npm run e2e:preset` / `npm run e2e:ui`（见 `e2e/run-inapp.mjs`），
@@ -264,12 +265,13 @@ async function ensureLumenEnabled(el: () => string) {
  * `minCells` 由调用方给：只填 JPG 是 12 组；JPG + RAW 时 RAW-only 分组会多
  * 出一组（13）。给下限而不是精确值，是为了不被夹具微调绑死。
  */
-async function scanFolders(
-  jpgFolder: string,
-  rawFolder: string,
-  minCells: number,
-  el: () => string,
-): Promise<boolean> {
+/**
+ * 填两个路径框 + 点扫描；返回扫描按钮（调用方等自己的完成信号）。
+ *
+ * 从 scanFolders 抽出：#105 的 wide 夹具（107 组）等的是格头计数，
+ * 与 12 组夹具等 `[role="option"]` 数不同源，但「填路径 + 点扫描」相同。
+ */
+async function fillPathsAndScan(jpgFolder: string, rawFolder: string, el: () => string) {
   const jpgInput = await waitFor(
     () => document.querySelector<HTMLInputElement>('input[aria-label="JPG 照片文件夹路径"]'),
     20_000,
@@ -281,7 +283,7 @@ async function scanFolders(
   raw(`[${el()}] 路径输入框：JPG=${!!jpgInput} RAW=${!!rawInput}`);
   if (!jpgInput) {
     raw(`[${el()}] FATAL: 找不到 JPG 路径输入框`);
-    return false;
+    return null;
   }
   setControlValue(jpgInput, jpgFolder);
   if (rawInput) setControlValue(rawInput, rawFolder);
@@ -290,8 +292,19 @@ async function scanFolders(
 
   const scanBtn = findButton('扫描照片目录');
   raw(`[${el()}] 「扫描照片目录」按钮 = ${!!scanBtn}`);
-  if (!scanBtn) return false;
+  if (!scanBtn) return null;
   scanBtn.click();
+  return scanBtn;
+}
+
+async function scanFolders(
+  jpgFolder: string,
+  rawFolder: string,
+  minCells: number,
+  el: () => string,
+): Promise<boolean> {
+  const scanBtn = await fillPathsAndScan(jpgFolder, rawFolder, el);
+  if (!scanBtn) return false;
 
   const counted = await waitFor(
     () => {
@@ -518,6 +531,15 @@ const BEFORE_AFTER_BTN = 'button[aria-label="本张照片前后对照 (快捷键
  *   U7–U8  命中：每个按钮中心 `elementFromPoint` 命中按钮自身（#46）
  *   U9–U14 左手别名与旧键在同一张照片上产生同一状态（#61，原 #45）
  *
+ * 几何三件（真窗 getBoundingClientRect / getClientRects，jsdom 无布局，
+ * 只能在这里证伪；issue 口径「宁可少显示，不横滚不重叠」）：
+ *   G100  Shift+1 设红标后白环与色点同心 |dx|,|dy|≤1px、五 dot 基线同 y
+ *   G99   1280 窄窗（启动时经 tauri --config 合入）状态栏分组 rect 两两
+ *         不相交、scrollWidth≤clientWidth 无横滚、断点组 hidden 与
+ *         matchMedia 一致
+ *   G105  107 张夹具下格头 5 控件单行横排、总宽 ≤370px（390 侧栏 −
+ *         px-2.5×2）、无逐字竖排、无 overflow-hidden 静默裁切
+ *
  * 明确不做：#49 更新装完不自动重启依赖 NSIS 安装器与提权进程，应用内 e2e
  * 驱动不到，继续留人工回签。
  */
@@ -525,6 +547,7 @@ async function scenarioUiContract(
   jpgFolder: string,
   el: () => string,
   mixedFolder = '',
+  wideFolder = '',
 ) {
   // 只填 JPG（12 组）；RAW 留空，避免 RAW-only 分组干扰宫格下限。
   if (!(await scanFolders(jpgFolder, '', 12, el))) return;
@@ -850,6 +873,53 @@ async function scenarioUiContract(
     }`,
   );
 
+  // ── issue #100：色点白环同心 + 五 dot 基线 ─────────────────
+  // 根因（修复前）：ring 按按钮盒子画、色点 inline 左对齐，12px 色点在
+  // 24px 命中盒里偏左约 2px。这里量真窗矩形：白环（按钮盒）与色点（span）
+  // 的中心差 |dx|,|dy| 必须 ≤1px；五个色点 top 极差 ≤1px（基线同 y）。
+  raw(`===== #100 色点白环同心几何 =====`);
+  pressKey('!', 'Digit1', true); // Shift+1 设红标
+  await sleep(500);
+  const dotBtns = Array.from(
+    document.querySelectorAll<HTMLButtonElement>('[data-status-group="label"] button'),
+  );
+  const dotSpans = dotBtns.map((b) => b.querySelector<HTMLSpanElement>('span'));
+  if (dotBtns.length !== 5 || dotSpans.some((s) => !s)) {
+    raw(`[${el()}] >>> 断言G100-0 五色点按钮齐全 = false（按钮 ${dotBtns.length} 个）`);
+  } else {
+    const pressedIdx = dotBtns.findIndex((b) => b.getAttribute('aria-pressed') === 'true');
+    raw(
+      `[${el()}] 读数 Shift+1 后 pressed 索引=${pressedIdx}（期望 0 红；其余四个 aria-pressed 全 0）`,
+    );
+    const btnRect = dotBtns[0].getBoundingClientRect();
+    const dotRect = dotSpans[0]!.getBoundingClientRect();
+    const dx = Math.abs(btnRect.left + btnRect.width / 2 - (dotRect.left + dotRect.width / 2));
+    const dy = Math.abs(btnRect.top + btnRect.height / 2 - (dotRect.top + dotRect.height / 2));
+    raw(
+      `[${el()}] 读数 红点按钮盒=${btnRect.width.toFixed(1)}x${btnRect.height.toFixed(1)} ` +
+        `色点=${dotRect.width.toFixed(1)}x${dotRect.height.toFixed(1)} dx=${dx.toFixed(2)} dy=${dy.toFixed(2)}`,
+    );
+    raw(
+      `[${el()}] >>> 断言G100-1 白环与色点同心（|dx|≤1 且 |dy|≤1）且红标生效 = ${
+        dx <= 1 && dy <= 1 && pressedIdx === 0
+      }`,
+    );
+    const tops = dotSpans.map((s) => s!.getBoundingClientRect().top);
+    const widths = dotSpans.map((s) => s!.getBoundingClientRect().width);
+    const heights = dotSpans.map((s) => s!.getBoundingClientRect().height);
+    const topSpread = Math.max(...tops) - Math.min(...tops);
+    const sizeOk =
+      widths.every((w) => Math.abs(w - 12) <= 0.5) &&
+      heights.every((h) => Math.abs(h - 12) <= 0.5);
+    raw(
+      `[${el()}] 读数 五 dot top 极差=${topSpread.toFixed(2)}px ` +
+        `宽=${widths.map((w) => w.toFixed(1)).join('/')} 高=${heights.map((h) => h.toFixed(1)).join('/')}`,
+    );
+    raw(`[${el()}] >>> 断言G100-2 五 dot 基线同 y（top 极差≤1px）= ${topSpread <= 1}`);
+    raw(`[${el()}] >>> 断言G100-3 五 dot 等大 12x12（±0.5px）= ${sizeOk}`);
+  }
+  await clearLabel();
+
   // ── 左手键：T 前后对照；Y 已删除（#61）──────────────────
   // 放在最后：切前后对照会卸载单图视口，先做完底栏相关断言再动视图模式。
   const beforeAfterPressed = () =>
@@ -868,6 +938,107 @@ async function scenarioUiContract(
   pressKey('t', 'KeyT');
   await sleep(400);
 
+  // ── issue #99：1280 窄窗状态栏分组几何 ─────────────────
+  // 窗宽由编排器经 `tauri dev --config` 合入 1280（见 e2e/lib/app.mjs），
+  // 这里先自报 innerWidth 落带，窄窗没真正生效时下面的断言不作数。
+  // 参数组要可见必须有一张带 EXIF 的照片在位（夹具 IMG_004 带镜头/焦距/光圈）。
+  raw(`===== #99 窄窗状态栏几何 =====`);
+  if (!(await clickCell('IMG_004', el))) return;
+  await sleep(500);
+  const barEl99 = document.querySelector<HTMLElement>('[data-status-bar]');
+  const paneEl99 = document.querySelector<HTMLElement>('[data-status-pane]');
+  const groups99 = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-status-pane] [data-status-group]'),
+  );
+  const names99 = groups99.map((g) => g.getAttribute('data-status-group'));
+  raw(`[${el()}] 状态栏 innerWidth=${window.innerWidth} 组=${JSON.stringify(names99)}`);
+  if (!barEl99 || !paneEl99 || groups99.length < 4) {
+    raw(`[${el()}] >>> 断言G99-0 状态栏与 ≥4 分组挂载 = false`);
+  } else {
+    const iw = window.innerWidth;
+    raw(`[${el()}] >>> 断言G99-1 窄窗落带（1024≤innerWidth<1300，1280 启动）= ${iw >= 1024 && iw < 1300}`);
+
+    // 组两两不相交（容差 0.5px 浮点噪声）
+    let overlap = '';
+    for (let i = 0; i < groups99.length; i += 1) {
+      for (let j = i + 1; j < groups99.length; j += 1) {
+        const a = groups99[i].getBoundingClientRect();
+        const b = groups99[j].getBoundingClientRect();
+        const ox = a.left < b.right - 0.5 && b.left < a.right - 0.5;
+        const oy = a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+        if (ox && oy) overlap += `${names99[i]}x${names99[j]} `;
+      }
+    }
+    raw(`[${el()}] 读数 组 rect 相交对=${overlap || '(无)'}`);
+    raw(`[${el()}] >>> 断言G99-2 分组 rect 两两不相交 = ${overlap === ''}`);
+
+    // 无横滚：bar 与 pane 的 scrollWidth 都不许超过 clientWidth
+    const barOver99 = barEl99.scrollWidth - barEl99.clientWidth;
+    const paneOver99 = paneEl99.scrollWidth - paneEl99.clientWidth;
+    raw(`[${el()}] 读数 横滚余量 bar=${barOver99}px pane=${paneOver99}px`);
+    raw(
+      `[${el()}] >>> 断言G99-3 scrollWidth≤clientWidth（不横滚）= ${
+        barOver99 <= 0 && paneOver99 <= 0
+      }`,
+    );
+
+    // 组盒子不得逃出 pane（min-w-0 收缩失效时盒子外溢）
+    const paneRect99 = paneEl99.getBoundingClientRect();
+    const escaped = groups99
+      .map((g, i) => ({ name: names99[i], r: g.getBoundingClientRect() }))
+      .filter(
+        ({ r }) => r.left < paneRect99.left - 0.5 || r.right > paneRect99.right + 0.5,
+      )
+      .map(({ name }) => name);
+    raw(`[${el()}] 读数 逃出 pane 的组=${escaped.length ? escaped.join(',') : '(无)'}`);
+    raw(`[${el()}] >>> 断言G99-4 每个组盒子都在 pane 内 = ${escaped.length === 0}`);
+
+    // 断点组 visible 与 matchMedia 一致（断点类失效 / 窄窗不隐藏会红）。
+    // 定位禁止用断点类本身（类被删后选择器查不到元素＝空过，变异实证过），
+    // 一律用结构：体积组是 identity 组最后一个 span 子盒，色名 span 是 label
+    // 组最后一个 span（5 个 dot span 在 LabelDots 按钮内，均排在它前面）。
+    const mm = (q: string) => window.matchMedia(q).matches;
+    const vis99 = (n: HTMLElement | null) => {
+      if (!n) return false;
+      const r = n.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    };
+    const sizeSpan = paneEl99.querySelector<HTMLElement>(
+      '[data-status-group="identity"] > span:last-of-type',
+    );
+    const paramsGroup = paneEl99.querySelector<HTMLElement>('[data-status-group="params"]');
+    const labelName = paneEl99.querySelector<HTMLElement>(
+      '[data-status-group="label"] > span:last-of-type',
+    );
+    const sizeVis = vis99(sizeSpan);
+    const sizeMm = mm('(min-width: 1536px)');
+    const paramsVis = vis99(paramsGroup);
+    const paramsMm = mm('(min-width: 1024px)');
+    const nameVis = vis99(labelName);
+    const nameMm = mm('(min-width: 1280px)');
+    raw(
+      `[${el()}] 读数 体积组 visible=${sizeVis}/2xl=${sizeMm} 参数组 visible=${paramsVis}/lg=${paramsMm} 色名 visible=${nameVis}/xl=${nameMm}`,
+    );
+    raw(
+      `[${el()}] >>> 断言G99-5 断点组 visible 与 matchMedia 一致 = ${
+        sizeVis === sizeMm && paramsVis === paramsMm && nameVis === nameMm
+      }`,
+    );
+
+    // 文本组裁切在自己盒子里（纯几何量不出「漆面压盖」，computed style 补齐；
+    // issue #99 的 overflow-hidden 兜底若被去掉这里立即红）
+    const textGroups = ['identity', 'params'].map((n) =>
+      paneEl99.querySelector<HTMLElement>(`[data-status-group="${n}"]`),
+    );
+    const clipStates = textGroups.map((g) => (g ? getComputedStyle(g).overflowX : 'missing'));
+    raw(`[${el()}] 读数 身份/参数组 overflow-x=${clipStates.join('/')}`);
+    raw(
+      `[${el()}] >>> 断言G99-6 身份/参数组 overflow-x=hidden（漆面不越盒）= ${clipStates.every(
+        (s) => s === 'hidden',
+      )}`,
+    );
+  }
+
   // ── #66 单目录：只填 JPG 输入框，RAW 留空 ─────────────────
   // 旧实现会把混合目录当纯 JPG 视图、丢掉 RAW；这里断言「一个目录就够了」：
   // 12 张 JPG + 4 个 RAW（3 个同 stem）应自动配对成 13 组（12 JPG 组 + 1 个 RAW-only），
@@ -885,6 +1056,111 @@ async function scenarioUiContract(
   } else {
     raw(`[${el()}] >>> 断言U15 单目录混合自动配对组数=13 = false（未提供 mixed 夹具）`);
     raw(`[${el()}] >>> 断言U16 顶栏出现 JPG+RAW 识别结果 = false（未提供 mixed 夹具）`);
+  }
+
+  // ── issue #105：390px 侧栏格头 5 控件单行 ≤370px ─────────
+  // 夹具换成 107 张（WIDE）再现「宫格列表 (107) · 已选 1」最宽左状态；
+  // 侧栏宽恒 390px（App.tsx），格头内宽 = 390 − px-2.5×2 = 370px。
+  raw(`===== #105 格头 5 控件几何 =====`);
+  if (!wideFolder) {
+    raw(`[${el()}] >>> 断言G105-0 已提供 wide 夹具 = false（未提供 VITE_E2E_WIDE）`);
+  } else {
+    // 宫格是虚拟化的：107 组时 DOM 里只有可见行，`[role="option"]` 计数永远到不了
+    // 100（scanFolders 的「单元格齐」信号在此假阴性）。填路径 + 点扫描同
+    // scanFolders，但完成信号改读格头左状态「宫格列表 (N)」的 N + 按钮恢复。
+    const wideScanBtn = await fillPathsAndScan(wideFolder, '', el);
+    const wideReady =
+      wideScanBtn &&
+      (await waitFor(() => {
+        const span = Array.from(document.querySelectorAll<HTMLElement>('span[role="status"]')).find(
+          (s) => /宫格列表/.test(s.textContent || ''),
+        );
+        const m = /宫格列表\s*\((\d+)\)/.exec(span?.textContent || '');
+        const n = m ? Number(m[1]) : 0;
+        return n >= 100 && !wideScanBtn.disabled ? n : null;
+      }, 120_000, 400));
+    raw(
+      `[${el()}] 读数 wide 扫描完成=${!!wideReady}（格头计数 ${wideReady ?? 0} / 下限 100 + 按钮恢复）`,
+    );
+    if (!wideReady) {
+      raw(`[${el()}] >>> 断言G105-0 wide 夹具扫描完成（≥100 组） = false`);
+    } else {
+      if (!(await clickCell('IMG_006', el))) return;
+    await sleep(500);
+
+    const statusSpan = Array.from(document.querySelectorAll<HTMLElement>('span[role="status"]'))
+      .find((s) => /宫格列表/.test(s.textContent || ''));
+    const headerRow = statusSpan?.parentElement;
+    const ctrlGroup = headerRow?.children[1] as HTMLElement | undefined;
+    const CTRL_LABELS = [
+      '全选宫格照片',
+      '清除宫格多选',
+      '按条件筛选照片',
+      '切换为一行 3 张缩略图',
+      '切换为一行 4 张缩略图',
+    ];
+    const ctrls = CTRL_LABELS.map(
+      (l) => headerRow?.querySelector<HTMLButtonElement>(`button[aria-label="${l}"]`) ?? null,
+    );
+    const found = ctrls.filter(Boolean).length;
+    raw(
+      `[${el()}] 读数 格头左侧状态="${statusSpan?.textContent?.replace(/\s+/g, ' ').trim()}" 控件=${found}/5`,
+    );
+    if (!headerRow || !ctrlGroup || found !== 5) {
+      raw(`[${el()}] >>> 断言G105-1 格头与 5 个控件齐全 = false`);
+    } else {
+      const headerRect = headerRow.getBoundingClientRect();
+      const groupRect = ctrlGroup.getBoundingClientRect();
+      const leftW = statusSpan?.getBoundingClientRect().width ?? -1;
+      raw(
+        `[${el()}] 读数 格头内宽=${(headerRect.width - 20).toFixed(1)} 控件组宽=${groupRect.width.toFixed(1)} 左状态宽=${leftW.toFixed(1)}`,
+      );
+
+      // 单行：5 个按钮 top 对齐、高度不因折行而长高（min-h-7=28，两行会 ≥40）
+      const rects = ctrls.map((b) => b!.getBoundingClientRect());
+      const topSpread = Math.max(...rects.map((r) => r.top)) - Math.min(...rects.map((r) => r.top));
+      const maxH = Math.max(...rects.map((r) => r.height));
+      const wrap = ctrls.map((b) => b!.scrollWidth - b!.clientWidth);
+      raw(
+        `[${el()}] 读数 top 极差=${topSpread.toFixed(2)}px 最大高=${maxH.toFixed(1)}px 各按钮内部溢出=${JSON.stringify(wrap)}`,
+      );
+      raw(`[${el()}] >>> 断言G105-2 五控件单行（top 极差≤1px 且高≤32px）= ${topSpread <= 1 && maxH <= 32}`);
+      raw(`[${el()}] >>> 断言G105-3 控件内文字不折行不竖排（各自 scrollWidth≤clientWidth）= ${wrap.every((d) => d <= 1)}`);
+
+      // 总宽与裁切：组宽 ≤370，右缘不越过格头内右缘，组内无溢出
+      const groupOver = ctrlGroup.scrollWidth - ctrlGroup.clientWidth;
+      const rightPad = 10; // px-2.5
+      const beyondRight = groupRect.right - (headerRect.right - rightPad);
+      raw(
+        `[${el()}] 读数 控件组总宽=${groupRect.width.toFixed(1)}px（上限 370）组内溢出=${groupOver}px 越出格头内右缘=${beyondRight.toFixed(1)}px`,
+      );
+      raw(`[${el()}] >>> 断言G105-4 五控件总宽≤370px = ${groupRect.width <= 370}`);
+      raw(
+        `[${el()}] >>> 断言G105-5 无静默裁切（组不越格头内右缘且组内无溢出）= ${
+          beyondRight <= 1 && groupOver <= 1
+        }`,
+      );
+
+      // 左状态 truncate 保住单行：左状态右缘不得压到控件组左缘
+      const leftRect = statusSpan!.getBoundingClientRect();
+      const collide = leftRect.right - groupRect.left;
+      raw(`[${el()}] 读数 左状态与控件组间距=${collide.toFixed(1)}px（负值即压盖）`);
+      raw(`[${el()}] >>> 断言G105-6 左状态不压控件组（间距≥0）= ${collide <= 0.5}`);
+
+      // 格头整行不被 overflow-hidden 裁：行 scrollWidth 不超 clientWidth
+      const rowOver = headerRow.scrollWidth - headerRow.clientWidth;
+      const sidebar = document.querySelector<HTMLElement>('[class*="w-[390px]"]');
+      const sideOver = sidebar ? sidebar.scrollWidth - sidebar.clientWidth : 0;
+      raw(
+        `[${el()}] 读数 格头行溢出=${rowOver}px 侧栏溢出=${sideOver}px（侧栏${sidebar ? '找到' : '未找到'}）`,
+      );
+      raw(
+        `[${el()}] >>> 断言G105-7 格头行与 390px 侧栏都无横向溢出 = ${
+          rowOver <= 1 && (!sidebar || sideOver <= 1)
+        }`,
+      );
+      }
+    }
   }
 
   raw(`[${el()}] 场景结束`);
@@ -1344,6 +1620,8 @@ export interface E2EScenarioOptions {
   raw?: string;
   /** #66：JPG 与 RAW 同目录的单目录夹具（`ui-contract` 用它验自动识别）。 */
   mixed?: string;
+  /** #105：格头拥挤夹具（107 张 JPG，`ui-contract` 用它量格头 5 控件几何）。 */
+  wide?: string;
   /** 成片导出的目标目录（`render-export` 场景必填）。 */
   out?: string;
   /** 逗号分隔的 baseName 清单（`detail-1to1` 用它锁定两张真实 RAW）。 */
@@ -1402,7 +1680,7 @@ export async function runE2E(
     } else if (scenario === 'detail-1to1') {
       await scenarioDetailOneToOne(jpgFolder, opts.raw || '', opts.names || '', el);
     } else if (scenario === 'ui-contract') {
-      await scenarioUiContract(jpgFolder, el, opts.mixed || '');
+      await scenarioUiContract(jpgFolder, el, opts.mixed || '', opts.wide || '');
     } else if (scenario === 'engine-download') {
       await scenarioEngineDownload(el);
     } else {
