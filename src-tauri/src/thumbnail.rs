@@ -11,7 +11,6 @@ use fast_image_resize::{PixelType, Resizer};
 use image::{DynamicImage, GenericImageView, ImageFormat, RgbImage};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufReader;
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -19,17 +18,13 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 /// Read orientation from EXIF (default 1)
 pub fn read_orientation(file_path: &Path) -> u32 {
-    let file = match File::open(file_path) {
-        Ok(f) => f,
-        Err(_) => return 1,
+    // 打开+解析与 EXIF 主读法共用底层入口（issue #144）；「默认 1」语义留此处。
+    let Some(exif) = crate::scanner::open_exif_reader(file_path) else {
+        return 1;
     };
-    let mut buf_reader = BufReader::new(file);
-    let exifreader = exif::Reader::new();
-    if let Ok(exif) = exifreader.read_from_container(&mut buf_reader) {
-        if let Some(field) = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY) {
-            if let Some(val) = field.value.get_uint(0) {
-                return val;
-            }
+    if let Some(field) = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY) {
+        if let Some(val) = field.value.get_uint(0) {
+            return val;
         }
     }
     1
@@ -51,10 +46,7 @@ pub fn apply_orientation(img: DynamicImage, orientation: u32) -> DynamicImage {
 
 /// Try to extract embedded thumbnail from EXIF
 pub fn try_extract_exif_thumbnail(file_path: &Path) -> Option<Vec<u8>> {
-    let file = File::open(file_path).ok()?;
-    let mut buf_reader = BufReader::new(file);
-    let exifreader = exif::Reader::new();
-    let exif = exifreader.read_from_container(&mut buf_reader).ok()?;
+    let exif = crate::scanner::open_exif_reader(file_path)?;
 
     // Some cameras store JPEG thumbnail in IFD1
     if let Some(offset_field) =

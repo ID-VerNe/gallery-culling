@@ -252,15 +252,12 @@ pub fn resolve_documents(album_path: &Path, docs: &[AlbumDoc]) -> Vec<ResolvedDo
         let jpg_meta = jpg
             .as_ref()
             .and_then(|p| fs::metadata(p).ok().filter(|m| m.is_file()));
-        // EXIF：与扫描路径**同一顺序** —— 配对 JPG 优先，没有 JPG 才读主路径。
-        // JPG 是 1.5MB 而 ARW 是 25MB，实测差 80 倍（0.14 vs 11.1 ms/张）。
-        let exif = if jpg_meta.is_some() {
-            jpg.as_deref().and_then(crate::scanner::read_exif_metadata)
-        } else if meta.is_some() {
-            crate::scanner::read_exif_metadata(&resolved)
-        } else {
-            None
-        };
+        // EXIF：与扫描/水印同一顺序（ADR-010，issue #144）—— 配对 JPG 优先，
+        // 坏了回落主路径。stat 守卫保留：选片集记录可能指向已删文件，
+        // 不存在的路径不进读取（存在性另喂 exists/jpg_exists 字段）。
+        let jpg_path = jpg.as_deref().filter(|_| jpg_meta.is_some());
+        let raw_path = Some(resolved.as_path()).filter(|_| meta.is_some());
+        let exif = crate::scanner::read_exif_preferring_jpg(jpg_path, raw_path);
         ResolvedDoc {
             source: d.source.clone(),
             exists: meta.is_some(),
@@ -498,6 +495,67 @@ mod tests {
         let source = album_source(&dir, &photo);
         assert!(Path::new(&source).is_absolute(), "跨子树必须退回绝对路径");
         assert_eq!(resolve_source(&dir, &source), photo);
+    }
+
+    /// issue #144 裁决：坏 JPG + 好 RAW → 选片集也回落 RAW（与扫描同序）。
+    ///
+    /// 旧 stat 分流 JPG 在场即停，坏 JPG 让整本选集 exif 全空；本用例先红后改。
+    #[test]
+    fn resolve_documents_corrupt_jpg_falls_back_to_raw_exif() {
+        let dir = scratch("exif_fb");
+        fs::write(dir.join("C0001.ARW"), crate::scanner::exif_test_blob("RAW")).unwrap();
+        fs::write(dir.join("C0001.jpg"), b"not an image").unwrap();
+
+        let album = dir.join("pick.galleryalbum");
+        let docs = vec![AlbumDoc {
+            source: "C0001.ARW".to_string(),
+            jpg: Some("C0001.jpg".to_string()),
+            rating: 0,
+            flag: "none".to_string(),
+            label: "".to_string(),
+        }];
+        write_album(&album, &docs).unwrap();
+
+        let resolved = resolve_documents(&album, &docs);
+        assert_eq!(resolved.len(), 1);
+        let exif = resolved[0]
+            .exif
+            .as_ref()
+            .expect("坏 JPG 必须回落 RAW，exif 必须有值");
+        assert_eq!(exif.camera_make.as_deref(), Some("RAW"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// stat 守卫（issue #144）：jpg 字段记着但文件已删 → 不读 JPG，只读主路径。
+    ///
+    /// 复用 helper 不得把「磁盘上不存在」的路径塞进读取 —— 存在性仍由 stat 判。
+    #[test]
+    fn resolve_documents_missing_jpg_reads_main_path_only() {
+        let dir = scratch("exif_stat");
+        fs::write(dir.join("D0001.ARW"), crate::scanner::exif_test_blob("RAW")).unwrap();
+        // 故意不写 D0001.jpg —— 记录里 jpg 字段在，磁盘上没有
+
+        let album = dir.join("pick.galleryalbum");
+        let docs = vec![AlbumDoc {
+            source: "D0001.ARW".to_string(),
+            jpg: Some("D0001.jpg".to_string()),
+            rating: 0,
+            flag: "none".to_string(),
+            label: "".to_string(),
+        }];
+        write_album(&album, &docs).unwrap();
+
+        let resolved = resolve_documents(&album, &docs);
+        assert_eq!(resolved.len(), 1);
+        assert!(!resolved[0].jpg_exists, "前提：JPG 不在盘上");
+        let exif = resolved[0]
+            .exif
+            .as_ref()
+            .expect("JPG 缺失时必须读主路径 RAW");
+        assert_eq!(exif.camera_make.as_deref(), Some("RAW"));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

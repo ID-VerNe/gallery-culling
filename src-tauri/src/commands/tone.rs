@@ -163,15 +163,70 @@ pub async fn get_tone_state_cmd(
 }
 
 /// 从 XMP 读回六滑杆（缺失按 0，与滑杆零点一致）。
+///
+/// 走 `read_xmp_tone_values` 的 Default 语义入口（issue #144）：面板读回永不
+/// 表达「没调过」，与滑杆零点一致；「没调过」的 Option 语义归扫描路径。
 fn read_xmp_tone(path: &std::path::Path) -> ToneAdjustments {
     read_xmp_full(path)
-        .map(|m| ToneAdjustments {
-            exposure: m.exposure.unwrap_or(0.0),
-            highlights: m.highlights.unwrap_or(0.0),
-            shadows: m.shadows.unwrap_or(0.0),
-            temperature: m.temperature.unwrap_or(0.0),
-            tint: m.tint.unwrap_or(0.0),
-            contrast: m.contrast.unwrap_or(0.0),
-        })
+        .map(|m| crate::scanner::read_xmp_tone_values(&m))
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "gallery_tone_{}_{}_{}",
+            tag,
+            std::process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 缺失文件 → 全零默认（Default 语义），不 panic。
+    #[test]
+    fn read_xmp_tone_missing_file_is_default() {
+        let dir = scratch("miss");
+        let t = read_xmp_tone(&dir.join("nope.xmp"));
+        assert_eq!(t.exposure, 0.0);
+        assert_eq!(t.contrast, 0.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 真 XMP 文件：读回的曝光/对比度与缺项按 0 —— 与旧实现逐字段等价。
+    #[test]
+    fn read_xmp_tone_reads_crs_fields() {
+        let dir = scratch("crs");
+        let xmp = dir.join("a.xmp");
+        std::fs::write(
+            &xmp,
+            "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
+             <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n\
+             \x20 <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n\
+             \x20  <rdf:Description rdf:about=\"\"\n\
+             \x20    xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\">\n\
+             \x20   <crs:Exposure2012>0.50</crs:Exposure2012>\n\
+             \x20   <crs:Contrast2012>-10</crs:Contrast2012>\n\
+             \x20  </rdf:Description>\n\
+             \x20 </rdf:RDF>\n\
+             </x:xmpmeta>\n",
+        )
+        .unwrap();
+
+        let t = read_xmp_tone(&xmp);
+        assert_eq!(t.exposure, 0.5);
+        assert_eq!(t.contrast, -10.0);
+        assert_eq!(t.highlights, 0.0, "缺项按 0");
+        assert_eq!(t.temperature, 0.0, "缺项按 0");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
