@@ -200,7 +200,7 @@ export async function cdpReady(timeoutMs = 5000) {
  *   - .cmd shim + 参数：cmd.exe 会把整串当命令行重新解析，转义极易出错。
  * 编排器本来就全程持有这个子进程，所以不需要 detached（也就不需要 shim）。
  */
-function spawnDevProcess({ logFile, extraEnv = {} }) {
+function spawnDevProcess({ logFile, extraEnv = {}, windowWidth = 0 }) {
   fs.mkdirSync(path.dirname(logFile), { recursive: true });
   try {
     fs.writeFileSync(logFile, '', 'utf8');
@@ -208,9 +208,48 @@ function spawnDevProcess({ logFile, extraEnv = {} }) {
     /* 截断失败不该中断整个编排，旧内容保留即可 */
   }
 
+  // issue #99 e2e：真窗几何断言要 1280 窄窗，而 tauri.conf.json 是 1400。
+  // 不动产品配置，用 Tauri CLI 的 --config <路径> 做运行期合并（数组整体替换，
+  // 所以把窗口对象整份抄过来只改 width）。无 windowWidth 时命令与历史完全一致。
+  let tauriExtra = '';
+  if (windowWidth) {
+    const cfgPath = path.join(PROJECT_ROOT, 'e2e', '.tmp', `window-${windowWidth}.json`);
+    fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+    fs.writeFileSync(
+      cfgPath,
+      JSON.stringify(
+        {
+          app: {
+            windows: [
+              {
+                title: '快速选图工具 - Gallery Culling',
+                width: windowWidth,
+                height: 900,
+                minWidth: 960,
+                minHeight: 640,
+                resizable: true,
+                fullscreen: false,
+                devtools: true,
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    // 必须写 `--` 分隔符：不带它时 npm 会把 `--config` 当自己的 flag 吞掉，
+    // tauri 只收到一个位置参数（路径），窗宽静默不生效（实测 innerWidth 仍 1400）。
+    // 值不能带引号：npm→cmd→tauri 的多层转义会把引号留进字符串，tauri 报
+    // 「文件名、目录名或卷标语法不正确 (os error 123)」。路径无空格，正斜杠
+    // 在 Windows 上同样可解析，两头都避开转义问题。
+    const cfgPosix = cfgPath.replace(/\\/g, '/');
+    tauriExtra = ` -- --config ${cfgPosix}`;
+  }
+
   const child = spawn(
     IS_WIN ? 'cmd.exe' : 'sh',
-    IS_WIN ? ['/c', 'npm run tauri dev'] : ['-c', 'npm run tauri dev'],
+    IS_WIN ? ['/c', `npm run tauri dev${tauriExtra}`] : ['-c', `npm run tauri dev${tauriExtra}`],
     {
       cwd: PROJECT_ROOT,
       // issue #81：无论哪个编排器起 dev 进程，库都必须落在 e2e 自己的目录里。
@@ -246,6 +285,7 @@ function spawnDevProcess({ logFile, extraEnv = {} }) {
 export async function spawnDevTree({
   logFile = path.join(PROJECT_ROOT, 'e2e', '.tmp', 'tauri-dev.log'),
   extraEnv = {},
+  windowWidth = 0,
 } = {}) {
   killApp();
   // 等旧 WebView2 真正退出：端口还占着就 spawn，新进程会连到**旧实例**，
@@ -253,7 +293,7 @@ export async function spawnDevTree({
   if (!(await waitPortFree(60_000))) {
     console.warn('  [warn] 端口未释放干净，仍继续启动（可能读到旧实例）');
   }
-  return spawnDevProcess({ logFile, extraEnv });
+  return spawnDevProcess({ logFile, extraEnv, windowWidth });
 }
 
 /**

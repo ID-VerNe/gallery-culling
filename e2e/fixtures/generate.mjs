@@ -23,6 +23,9 @@ export const JPG = path.join(FIXTURE_ROOT, 'JPG');
 export const RAW = path.join(FIXTURE_ROOT, 'RAW');
 export const MIXED = path.join(FIXTURE_ROOT, 'MIXED');
 export const OUT = path.join(FIXTURE_ROOT, 'OUT');
+/** #105：格头拥挤夹具 —— 107 张 JPG（与 issue 截图同量级），让格头左状态
+ *  文本「宫格列表 (107) · 已选 1」撑到最宽，5 个控件的单行总宽实测才有压力。 */
+export const WIDE = path.join(FIXTURE_ROOT, 'WIDE');
 
 /** 64x48 的合法 JPEG（base64）。够小，直接内嵌，不依赖 ImageMagick。 */
 /** 480x360 的合法 JPEG（base64）。够小可直接内嵌，不依赖 ImageMagick。
@@ -109,12 +112,14 @@ export function generateFixtures(root = FIXTURE_ROOT) {
   const jpgDir = path.join(root, 'JPG');
   const rawDir = path.join(root, 'RAW');
   const outDir = path.join(root, 'OUT');
+  const wideDir = path.join(root, 'WIDE');
 
   // 每次重建：测试会就地写 rating/tone/export，不清就会互相污染
   fs.rmSync(root, { recursive: true, force: true });
   fs.mkdirSync(jpgDir, { recursive: true });
   fs.mkdirSync(rawDir, { recursive: true });
   fs.mkdirSync(outDir, { recursive: true });
+  fs.mkdirSync(wideDir, { recursive: true });
 
   const jpeg = Buffer.from(TINY_JPEG_B64, 'base64');
 
@@ -164,7 +169,15 @@ export function generateFixtures(root = FIXTURE_ROOT) {
   }
   fs.writeFileSync(path.join(mixedDir, `${RAW_ONLY_STEM}.ARW`), jpeg);
 
-  return { root, jpgDir, rawDir, mixedDir, outDir };
+  // #105 格头夹具：107 张同名规律 JPG（无 sidecar，纯数量压力）。
+  // 只有 JPG：格头左状态「宫格列表 (107) · 已选 1」是最宽形态，
+  // 右侧 5 个控件的单行总宽 ≤370px 才有判别力。
+  for (let i = 1; i <= 107; i += 1) {
+    const stem = `IMG_${String(i).padStart(3, '0')}`;
+    fs.writeFileSync(path.join(wideDir, `${stem}.jpg`), jpeg);
+  }
+
+  return { root, jpgDir, rawDir, mixedDir, wideDir, outDir };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
