@@ -20,13 +20,18 @@
  * 真实构建走 `dist/`，门禁不该依赖「有人先跑过 build」。这里用 postcss 在内存里把
  * `src/index.css` 跑一遍 Tailwind，产物只存在于字符串里。
  */
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { readFileSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { ROOT, buildCss, collectSourceFiles } from './tailwind-gate-lib.mjs';
+// 为 depProblems 保留的直引（issue #127）：本文件的外部 import 仍需落在某条 ci
+// 门禁的加载路径上，而 check-gates-manifest 只看 check-*.mjs 的字面量。运行时
+// 实际走 lib 的 import，删掉这两行只会让「parity 空 node_modules 时 fail-closed」
+// 的保证静默消失（issue #24）。
 import postcss from 'postcss';
 import tailwindcss from 'tailwindcss';
 
-export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+export { ROOT, buildCss, collectSourceFiles };
 
 /**
  * 匹配 `bg-<theme>/<NN>` 形式的类名。
@@ -90,24 +95,6 @@ export function judgeThemeAlpha(groups, css) {
   };
 }
 
-/**
- * 递归收集 `src/` 下的源码文件。
- *
- * 只收 `.ts` / `.tsx`（Tailwind content 也是这两类），跳过测试文件 —— 测试里出现的
- * 类名断言不代表真的渲染，把它们算进来会让门禁对着「测试字符串」做无用功。
- */
-export function collectSourceFiles(dir = join(ROOT, 'src'), acc = []) {
-  for (const entry of readdirSync(dir)) {
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) {
-      collectSourceFiles(full, acc);
-    } else if (/\.(ts|tsx)$/.test(entry) && !/\.(test|spec)\.(ts|tsx)$/.test(entry)) {
-      acc.push(full);
-    }
-  }
-  return acc;
-}
-
 /** 把 `src/` 下所有源码里的主题色透明度组合收集起来。 */
 export function scanThemeAlphaUsage(files = collectSourceFiles()) {
   const merged = new Map();
@@ -119,24 +106,6 @@ export function scanThemeAlphaUsage(files = collectSourceFiles()) {
     }
   }
   return [...merged.values()];
-}
-
-/**
- * 在内存里用 Tailwind 编译 `src/index.css`，返回产物全文。
- *
- * ⚠️ 这里**刻意自己 import 配置再传对象**，不把 `config: <路径>` 交给 Tailwind。
- * 原因：Tailwind 拿到路径时会用 `jiti` 去加载，而 jiti 在 vitest 的 ESM 环境里
- * 会抛 `Cannot set property require of [object Object] which has only a getter`，
- * 产物变成残缺的（规则静默消失），看起来像「配色配置坏了」——是个会把人带偏的假象。
- */
-export async function buildCss() {
-  const input = readFileSync(join(ROOT, 'src/index.css'), 'utf8');
-  const configModule = await import(pathToFileURL(join(ROOT, 'tailwind.config.js')).href);
-  const config = configModule.default ?? configModule;
-  const result = await postcss([tailwindcss(config)]).process(input, {
-    from: join(ROOT, 'src/index.css'),
-  });
-  return result.css;
 }
 
 export async function main() {

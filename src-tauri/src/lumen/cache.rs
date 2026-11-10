@@ -162,6 +162,33 @@ impl PreviewCacheInputs {
     }
 }
 
+/// 共享的缓存编排（issue #136）：命中短路 → 建父目录 → render → 缺失检查 → rename。
+///
+/// `ensure_preview` 与 `ensure_detail` 六步同骨架，仅 tmp 命名与 `missing_msg` 分差；
+/// `key`/`out`/`tmp_name`/`args` 构造保留各自函数（细节 tmp **必须保留 `.jpg` 结尾**，
+/// 见 `ensure_detail` 处注释），这里只收敛四步。**失败时最终路径不得存在**。
+pub(super) fn ensure_cached_render(
+    out: &Path,
+    tmp_name: String,
+    cache_root: &Path,
+    missing_msg: &str,
+    render: impl FnOnce(&Path) -> Result<(), LumenError>,
+) -> Result<PathBuf, LumenError> {
+    if out.is_file() {
+        return Ok(out.to_path_buf()); // 缓存命中：不碰渲染边界
+    }
+    let tmp = out.parent().unwrap_or(cache_root).join(tmp_name);
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| LumenError::Io(e.to_string()))?;
+    }
+    render(&tmp)?;
+    if !tmp.is_file() {
+        return Err(LumenError::Protocol(missing_msg.to_string()));
+    }
+    std::fs::rename(&tmp, out).map_err(|e| LumenError::Io(e.to_string()))?;
+    Ok(out.to_path_buf())
+}
+
 /// 预览渲染编排：命中缓存直接返回；否则 tmp 渲染 + 原子 rename。
 ///
 /// `render` 是进程边界注入（真实实现为 `run_lumen(exe, "render.preview", args)`）。
@@ -173,41 +200,33 @@ pub fn ensure_preview(
 ) -> Result<PathBuf, LumenError> {
     let key = inputs.key(src);
     let out = inputs.cache_path(cache_root, &key);
-    if out.is_file() {
-        return Ok(out); // 缓存命中：不碰渲染边界
-    }
-
     let file_name = out
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .ok_or_else(|| LumenError::Protocol("缓存路径非法".to_string()))?;
-    let tmp = out
-        .parent()
-        .unwrap_or(cache_root)
-        .join(format!("{}.tmp", file_name));
-
-    if let Some(parent) = out.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| LumenError::Io(e.to_string()))?;
-    }
-
-    let args = preview_args(src, inputs.width, inputs.variant, &tmp);
-    render(&tmp, &args)?;
-    if !tmp.is_file() {
-        return Err(LumenError::Protocol(
-            "LUMEN RAW 未生成预览输出文件".to_string(),
-        ));
-    }
-    std::fs::rename(&tmp, &out).map_err(|e| LumenError::Io(e.to_string()))?;
-    Ok(out)
+    let tmp_name = format!("{file_name}.tmp");
+    ensure_cached_render(
+        &out,
+        tmp_name,
+        cache_root,
+        "LUMEN RAW 未生成预览输出文件",
+        |tmp| {
+            let args = preview_args(src, inputs.width, inputs.variant, tmp);
+            render(tmp, &args)
+        },
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::lumen::test_support::{ep_inputs, t_plus, tmp};
+    use super::*;
+    use crate::lumen::test_support::{
+        assert_cache_hit_skips_render, assert_cache_missing_output_is_protocol_error,
+        assert_cache_propagates_error, assert_cache_success_renames, ep_inputs, t_plus, tmp,
+    };
+    use crate::lumen::*;
     use std::path::{Path, PathBuf};
     use std::time::SystemTime;
-    use super::*;
-    use crate::lumen::*;
 // ---- B7 ----
 fn key(src: &Path, width: u32, variant: PreviewVariant, m: Option<SystemTime>) -> String {
     lumen_cache_key(src, width, variant, "1.6.0", m, m)
@@ -458,14 +477,9 @@ fn ensure_preview_cache_hit_skips_render() {
     std::fs::create_dir_all(out.parent().unwrap()).unwrap();
     std::fs::write(&out, b"cached").unwrap();
 
-    let mut called = false;
-    let got = ensure_preview(Path::new("src.ARW"), &root, inputs, |_tmp, _args| {
-        called = true;
-        Err(LumenError::Command("不应被调用".into()))
-    })
-    .expect("命中应直接 Ok");
-    assert!(!called, "缓存命中不得调用渲染边界");
-    assert_eq!(got, out);
+    assert_cache_hit_skips_render(out, |render| {
+        ensure_preview(Path::new("src.ARW"), &root, inputs, render)
+    });
 }
 
 #[test]
@@ -478,29 +492,23 @@ fn ensure_preview_success_writes_tmp_then_renames() {
         out.parent().unwrap().join(format!("{}.tmp", name))
     };
 
-    let got = ensure_preview(Path::new("src.ARW"), &root, inputs, |tmp, args| {
-        assert_eq!(args["size"], serde_json::json!(1600));
-        assert!(args["output"].as_str().unwrap().ends_with(".tmp"));
-        std::fs::write(tmp, b"rendered").unwrap(); // 模拟 lumen 落盘
-        Ok(())
-    })
-    .expect("渲染成功应 Ok");
-    assert_eq!(got, out);
-    assert!(out.is_file(), "最终产物应存在");
-    assert!(!tmp_expected.exists(), "rename 后不得残留 tmp");
+    assert_cache_success_renames(
+        out,
+        tmp_expected,
+        |args| {
+            assert_eq!(args["size"], serde_json::json!(1600));
+            assert!(args["output"].as_str().unwrap().ends_with(".tmp"));
+        },
+        |render| ensure_preview(Path::new("src.ARW"), &root, inputs, render),
+    );
 }
 
 #[test]
 fn ensure_preview_missing_output_is_protocol_error() {
     let root = tmp("ep_missing");
-    let err = ensure_preview(
-        Path::new("src.ARW"),
-        &root,
-        ep_inputs(None),
-        |_tmp, _args| Ok(()), // “渲染成功”但什么都没写
-    )
-    .expect_err("输出缺失应 Err");
-    assert!(matches!(err, LumenError::Protocol(_)), "实际: {:?}", err);
+    assert_cache_missing_output_is_protocol_error("未生成预览输出文件", |render| {
+        ensure_preview(Path::new("src.ARW"), &root, ep_inputs(None), render)
+    });
 }
 
 #[test]
@@ -508,12 +516,9 @@ fn ensure_preview_propagates_render_error_and_leaves_no_file() {
     let root = tmp("ep_err");
     let inputs = ep_inputs(None);
     let out = inputs.cache_path(&root, &inputs.key(Path::new("src.ARW")));
-    let err = ensure_preview(Path::new("src.ARW"), &root, inputs, |_tmp, _args| {
-        Err(LumenError::Command("lumen 炸了".into()))
-    })
-    .expect_err("渲染错误应透传");
-    assert!(matches!(err, LumenError::Command(_)));
-    assert!(!out.exists(), "失败时最终路径不得存在");
+    assert_cache_propagates_error(out, |render| {
+        ensure_preview(Path::new("src.ARW"), &root, inputs, render)
+    });
 }
 
 // ---- Step 2: B5 ----

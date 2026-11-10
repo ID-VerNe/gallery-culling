@@ -18,7 +18,7 @@ use serde_json::Value;
 
 use crate::cachekey::sha256_hex16;
 
-use super::cache::mtime_tag;
+use super::cache::{ensure_cached_render, mtime_tag};
 use super::recipe_hash;
 use super::LumenError;
 
@@ -129,10 +129,6 @@ pub fn ensure_detail(
 ) -> Result<PathBuf, LumenError> {
     let key = inputs.key(src);
     let out = inputs.cache_path(cache_root, &key);
-    if out.is_file() {
-        return Ok(out); // 缓存命中：不碰渲染边界（6–8s 省下来）
-    }
-
     let file_name = out
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
@@ -145,21 +141,16 @@ pub fn ensure_detail(
         .rsplit_once('.')
         .map(|(stem, ext)| format!("{stem}.tmp.{ext}"))
         .unwrap_or_else(|| format!("{file_name}.tmp"));
-    let tmp = out.parent().unwrap_or(cache_root).join(tmp_name);
-
-    if let Some(parent) = out.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| LumenError::Io(e.to_string()))?;
-    }
-
-    let args = detail_args(src, &tmp);
-    render(&tmp, &args)?;
-    if !tmp.is_file() {
-        return Err(LumenError::Protocol(
-            "LUMEN RAW 未生成细节输出文件".to_string(),
-        ));
-    }
-    std::fs::rename(&tmp, &out).map_err(|e| LumenError::Io(e.to_string()))?;
-    Ok(out)
+    ensure_cached_render(
+        &out,
+        tmp_name,
+        cache_root,
+        "LUMEN RAW 未生成细节输出文件",
+        |tmp| {
+            let args = detail_args(src, tmp);
+            render(tmp, &args)
+        },
+    )
 }
 
 /// 淘汰结果（诊断用；UI 不展示）。
@@ -255,7 +246,10 @@ pub fn is_detail_cache_file(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lumen::test_support::tmp;
+    use crate::lumen::test_support::{
+        assert_cache_hit_skips_render, assert_cache_missing_output_is_protocol_error,
+        assert_cache_propagates_error, assert_cache_success_renames, tmp,
+    };
     use std::time::{Duration, UNIX_EPOCH};
 
     fn t(secs: u64) -> SystemTime {
@@ -385,14 +379,9 @@ mod tests {
         std::fs::create_dir_all(out.parent().unwrap()).unwrap();
         std::fs::write(&out, b"cached").unwrap();
 
-        let mut called = false;
-        let got = ensure_detail(Path::new("src.ARW"), &root, inputs, |_tmp, _args| {
-            called = true;
-            Err(LumenError::Command("不应被调用".into()))
-        })
-        .expect("命中应直接 Ok");
-        assert!(!called, "缓存命中不得调用渲染边界");
-        assert_eq!(got, out);
+        assert_cache_hit_skips_render(out, |render| {
+            ensure_detail(Path::new("src.ARW"), &root, inputs, render)
+        });
     }
 
     #[test]
@@ -406,32 +395,31 @@ mod tests {
             out.parent().unwrap().join(format!("{stem}.tmp.{ext}"))
         };
 
-        let got = ensure_detail(Path::new("src.ARW"), &root, inputs, |tmp, args| {
-            assert!(args.get("long_edge").is_none(), "细节必须是原生尺寸");
-            // 真机冒烟抓到的：`photo.export` 校验 output 扩展名，
-            // `<name>.jpg.tmp` 会被拒（output must end in .jpg/.png/.tif/.dng）。
-            // 假渲染器不校验，所以这条断言是那个 bug 唯一的单测哨兵。
-            let output = args["output"].as_str().unwrap();
-            assert!(
-                output.ends_with(".jpg"),
-                "photo.export 要求 output 以图片扩展名结尾，实际: {output}"
-            );
-            assert!(output.contains(".tmp."), "仍是临时文件: {output}");
-            std::fs::write(tmp, b"rendered").unwrap();
-            Ok(())
-        })
-        .expect("渲染成功应 Ok");
-        assert_eq!(got, out);
-        assert!(out.is_file(), "最终产物应存在");
-        assert!(!tmp_expected.exists(), "rename 后不得残留 tmp");
+        assert_cache_success_renames(
+            out,
+            tmp_expected,
+            |args| {
+                assert!(args.get("long_edge").is_none(), "细节必须是原生尺寸");
+                // 真机冒烟抓到的：`photo.export` 校验 output 扩展名，
+                // `<name>.jpg.tmp` 会被拒（output must end in .jpg/.png/.tif/.dng）。
+                // 假渲染器不校验，所以这条断言是那个 bug 唯一的单测哨兵。
+                let output = args["output"].as_str().unwrap();
+                assert!(
+                    output.ends_with(".jpg"),
+                    "photo.export 要求 output 以图片扩展名结尾，实际: {output}"
+                );
+                assert!(output.contains(".tmp."), "仍是临时文件: {output}");
+            },
+            |render| ensure_detail(Path::new("src.ARW"), &root, inputs, render),
+        );
     }
 
     #[test]
     fn ensure_detail_missing_output_is_protocol_error() {
         let root = tmp("detail_ep_missing");
-        let err = ensure_detail(Path::new("src.ARW"), &root, inputs(None), |_t, _a| Ok(()))
-            .expect_err("输出缺失应 Err");
-        assert!(matches!(err, LumenError::Protocol(_)), "实际: {:?}", err);
+        assert_cache_missing_output_is_protocol_error("未生成细节输出文件", |render| {
+            ensure_detail(Path::new("src.ARW"), &root, inputs(None), render)
+        });
     }
 
     #[test]
@@ -439,12 +427,9 @@ mod tests {
         let root = tmp("detail_ep_err");
         let inputs = inputs(None);
         let out = inputs.cache_path(&root, &inputs.key(Path::new("src.ARW")));
-        let err = ensure_detail(Path::new("src.ARW"), &root, inputs, |_t, _a| {
-            Err(LumenError::Command("lumen 炸了".into()))
-        })
-        .expect_err("渲染错误应透传");
-        assert!(matches!(err, LumenError::Command(_)));
-        assert!(!out.exists(), "失败时最终路径不得存在");
+        assert_cache_propagates_error(out, |render| {
+            ensure_detail(Path::new("src.ARW"), &root, inputs, render)
+        });
     }
 
     // ---- 淘汰判定（纯函数）----
