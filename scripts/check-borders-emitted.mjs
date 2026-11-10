@@ -30,13 +30,16 @@
  * **扫源码里所有描边相关的类，逐个去产物里核对**。谁明天加了
  * `border-foo` 而配置里没这键，门禁自动覆盖。
  */
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { readFileSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { ROOT, buildCss, collectSourceFiles } from './tailwind-gate-lib.mjs';
+// 为 depProblems 保留的直引（issue #127）：见 check-theme-alpha.mjs 同款注释 ——
+// 本文件的外部 import 仍需落在某条 ci 门禁的加载路径上，运行时实际走 lib 的 import。
 import postcss from 'postcss';
 import tailwindcss from 'tailwindcss';
 
-export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+export { ROOT, buildCss, collectSourceFiles };
 
 /**
  * 匹配 `border-<name>` 形式的类名（含 `border-t`/`border-b` 这类方位前缀）。
@@ -275,23 +278,6 @@ export function judgeBorderClasses(keys, css) {
   };
 }
 
-/**
- * 递归收集 `src/` 下的源码文件。
- *
- * 只收 `.ts` / `.tsx`，跳过测试文件 —— 测试里的类名断言不代表真的渲染。
- */
-export function collectSourceFiles(dir = join(ROOT, 'src'), acc = []) {
-  for (const entry of readdirSync(dir)) {
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) {
-      collectSourceFiles(full, acc);
-    } else if (/\.(ts|tsx)$/.test(entry) && !/\.(test|spec)\.(ts|tsx)$/.test(entry)) {
-      acc.push(full);
-    }
-  }
-  return acc;
-}
-
 /** 把 `src/` 下所有源码里的描边类收集起来。 */
 export function scanBorderUsage(files = collectSourceFiles()) {
   const merged = new Map();
@@ -302,23 +288,6 @@ export function scanBorderUsage(files = collectSourceFiles()) {
     }
   }
   return [...merged.values()];
-}
-
-/**
- * 在内存里用 Tailwind 编译 `src/index.css`，返回产物全文。
- *
- * ⚠️ 同 check-theme-alpha.mjs：**刻意自己 import 配置再传对象**，不把
- * `config: <路径>` 交给 Tailwind —— jiti 在 vitest 的 ESM 环境里会抛
- * `Cannot set property require of ...`，产物残缺，看起来像「配置坏了」。
- */
-export async function buildCss() {
-  const input = readFileSync(join(ROOT, 'src/index.css'), 'utf8');
-  const configModule = await import(pathToFileURL(join(ROOT, 'tailwind.config.js')).href);
-  const config = configModule.default ?? configModule;
-  const result = await postcss([tailwindcss(config)]).process(input, {
-    from: join(ROOT, 'src/index.css'),
-  });
-  return result.css;
 }
 
 export async function main() {
