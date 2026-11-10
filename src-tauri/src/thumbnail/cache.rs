@@ -464,4 +464,38 @@ mod tests {
 
         cleanup(&dir);
     }
+
+    /// issue #107 回归网：缓存键必须把「同文件异拼写」归一为同一键 ——
+    /// 盘符大小写 + 正反斜杠差异经 canonicalize 后必须同键（issue #107 墓碑口径）。
+    /// 变异：file_fingerprint 去掉 canonicalize_or_self 必须红（键随拼写分裂）。
+    #[test]
+    fn file_fingerprint_unifies_drive_case_and_slashes() {
+        let dir = unique_dir("fingerprint-spelling");
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let f = dir.join("a.jpg");
+        std::fs::write(&f, b"x").expect("write a.jpg");
+
+        let raw = f.to_string_lossy().to_string();
+        // 异拼写：小写盘符 + 正斜杠（前端 altSpelling 探键同款变换）
+        let alt = format!(
+            "c:/{}",
+            raw.strip_prefix("C:").unwrap().replace(char::from(92), "/")
+        );
+        assert_ne!(raw, alt, "测试自身：两种拼写必须确实不同");
+
+        let (p1, m1) = file_fingerprint(Path::new(&raw));
+        let (p2, m2) = file_fingerprint(Path::new(&alt));
+        // 注意：PathBuf 的 Eq 在 Windows 按组件比较（前缀大小写不敏感），单比 p1/p2
+        // 会被「假归一」骗了；必须钉到缓存文件名（键的字符串形态 → sha256 → 文件名），
+        // 这才是跨进程复用磁盘缓存的真契约（issue #107）。
+        let c1 = cache_path_for(&p1, m1, Path::new(&raw), 200, 1);
+        let c2 = cache_path_for(&p2, m2, Path::new(&alt), 200, 1);
+        assert_eq!(
+            c1, c2,
+            "异拼写必须落到同一缓存文件（键归一），否则跨进程会重复生成（issue #107）"
+        );
+        assert_eq!(c1.file_name(), c2.file_name(), "缓存文件名必须同源");
+
+        cleanup(&dir);
+    }
 }

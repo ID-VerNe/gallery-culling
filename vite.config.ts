@@ -99,6 +99,8 @@ const e2eLogEndpoint = (): Plugin => ({
           phase: process.env.VITE_E2E_PHASE || '1',
           expectIndex: process.env.VITE_E2E_EXPECT_INDEX || '',
           expectBase: process.env.VITE_E2E_EXPECT_BASE || '',
+          // thumb-cache：phase 1 实测的 IMG_001 缓存文件名，phase 2 T7 硬断言用。
+          expectThumb: process.env.VITE_E2E_EXPECT_THUMB || '',
         }),
       );
     });
@@ -123,7 +125,7 @@ const e2eLogEndpoint = (): Plugin => ({
     });
 
     console.log(
-      `[e2e-endpoint] 就绪 | VITE_E2E_SCENARIO=${process.env.VITE_E2E_SCENARIO || '(未设置)'} | VITE_E2E_JPG=${process.env.VITE_E2E_JPG || '(未设置)'} | VITE_E2E_RAW=${process.env.VITE_E2E_RAW || '(未设置)'} | VITE_E2E_OUT=${process.env.VITE_E2E_OUT || '(未设置)'}`,
+      `[e2e-endpoint] 就绪 | VITE_E2E_SCENARIO=${process.env.VITE_E2E_SCENARIO || '(未设置)'} | VITE_E2E_JPG=${process.env.VITE_E2E_JPG || '(未设置)'} | VITE_E2E_RAW=${process.env.VITE_E2E_RAW || '(未设置)'} | VITE_E2E_OUT=${process.env.VITE_E2E_OUT || '(未设置)'} | VITE_E2E_PHASE=${process.env.VITE_E2E_PHASE || '(未设置)'} | VITE_E2E_EXPECT_THUMB=${process.env.VITE_E2E_EXPECT_THUMB || '(未设置)'}`,
     );
   },
 });

@@ -335,6 +335,7 @@ async function runRestartScenario(scenario, commonEnv, R, timeoutMs) {
 
   let expectIndex = -1;
   let expectBase = '';
+  let expectThumb = '';
   let snap1 = null;
 
   console.log('\n[B\'] 段间硬断言（python sqlite / 磁盘缓存快照）');
@@ -361,7 +362,7 @@ async function runRestartScenario(scenario, commonEnv, R, timeoutMs) {
     R.check('T1 解析到冷启动读数', !!t1, t1 ? `IPC=${t1[1]} 格子=${t1[2]}` : '日志里没有 T1 读数行');
     if (t1) {
       R.check(
-        'T2 磁盘缓存文件数 = 冷启动 IPC 数（phase 1 不变量；变异杀灭在 T7/T6）',
+        'T2 磁盘缓存文件数 = 冷启动 IPC 数（phase 1 不变量；变异杀灭在 T7/T6/T6b）',
         Object.keys(snap1).length === Number(t1[1]),
         `磁盘=${Object.keys(snap1).length} IPC=${t1[1]}`,
       );
@@ -372,6 +373,18 @@ async function runRestartScenario(scenario, commonEnv, R, timeoutMs) {
       !!t4 && Number(t4[1]) === Number(t4[2]),
       t4 ? `${t4[1]} vs ${t4[2]}` : '日志里没有 T4 读数行',
     );
+    // T7 的期望值 = phase 1 异写法探键（T3）实际返回的缓存文件名。phase 2
+    // 的冷索引探键必须钉这个「外部真值」——不能同进程内互比（PathBuf 组件比较
+    // 会把两次调用互相吸收，2026-11-10 三次实测变异活着但互比仍同哈希）。
+    const t3 = log1.match(/读数 T3 异写法（\S+）直调返回 (\S+)/);
+    R.check(
+      'T3 解析到 phase 1 异写法探键返回的缓存文件名（phase 2 T7 期望值）',
+      !!t3,
+      // 注意：正则里（）是全角字面量（日志原文如此），唯一捕获组是末尾 (\S+)，
+      // 所以文件名在 t3[1] 不是 t3[2]（2026-11-10 晚 T7 未注入的根因）。
+      t3 ? t3[1] : '日志里没有 T3 读数行',
+    );
+    expectThumb = t3 ? t3[1] : '';
   }
 
   console.log('--- 优雅关闭并重启（in-app 路径，零 CDP）---');
@@ -393,6 +406,16 @@ async function runRestartScenario(scenario, commonEnv, R, timeoutMs) {
     phase2Env.VITE_E2E_EXPECT_INDEX = String(expectIndex);
     phase2Env.VITE_E2E_EXPECT_BASE = expectBase;
   }
+  if (scenario === 'thumb-cache') {
+    phase2Env.VITE_E2E_EXPECT_THUMB = expectThumb;
+  }
+  // 诊断（2026-11-10 T7 未注入排查）：把编排器内存里的值与将要下发的 env 打出来，
+  // 与 vite 端 [e2e-endpoint] 就绪行、应用侧 [boot-v2] 行三处对账，定位断点。
+  console.log(
+    `[phase2-env] scenario=${scenario} VITE_E2E_PHASE=${phase2Env.VITE_E2E_PHASE} ` +
+      `VITE_E2E_EXPECT_THUMB=${JSON.stringify(phase2Env.VITE_E2E_EXPECT_THUMB)} ` +
+      `(t3=${JSON.stringify(expectThumb)})`,
+  );
   console.log('--- 启动应用（phase 2 / 重启后）---');
   await spawnDevTree({ logFile: DEV_LOG, extraEnv: phase2Env });
 

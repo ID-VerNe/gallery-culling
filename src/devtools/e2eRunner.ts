@@ -1822,14 +1822,25 @@ async function scenarioSessionRestore(
  *   T5/T5b 重开后：前端进程内索引随进程清零、会重发（每格仍恰好一次）；
  *   T7 phase 2 异写法探键（**跨进程主断言**，放在 scanFolders 之前抢冷索引窗口）：
  *      全新进程索引为空，异写法只能靠「磁盘缓存键归一」命中既有缓存；变异
- *      「file_fingerprint 去掉 canonicalize」在这里算出不同键 → 直调生成第 13
- *      份缓存文件 → T7（返回值必须与正写法同一文件）与编排器 T6/T6b（磁盘文件集
- *      + mtime 快照对账）双红。探键若放在宫格预热之后，会被进程内索引吸收而假绿
- *      （2026-11-10 三次实测：变异在二进制里活着 —— exe sha c5584ce1→1ce16234 ——
- *      但 T3/T7 仍同哈希返回，PathBuf 组件比较吸收拼写差异）；
+ *      「file_fingerprint 去掉 canonicalize」会在这里算出不同键 → 直调生成第 13
+ *      份缓存文件 → T7（返回值必须与 phase 1 实测同一缓存文件，期望值由编排器
+ *      解析 phase 1 T3 读数后经 env 注入）与编排器 T6/T6b（磁盘文件集 + mtime
+ *      快照对账）双红。注意探键不能「异写法 vs 正写法」互比：ThumbIndexKey 的
+ *      PathBuf 按组件比较（Windows 上大小写/斜杠不敏感）会把第二次调用吸收进
+ *      第一次的索引项，两次返回值永远相同（2026-11-10 三次实测：变异在二进制
+ *      里活着 —— exe sha c5584ce1→1ce16234 —— 但互比仍同哈希返回）；必须钉
+ *      phase 1 的磁盘文件名这个外部真值。
  *   T2/T4/T6/T6b 由编排器在磁盘上对账（浏览器里读不到磁盘）。
  */
-async function scenarioThumbCache(jpgFolder: string, phase: string, el: () => string) {
+async function scenarioThumbCache(
+  jpgFolder: string,
+  phase: string,
+  opts: E2EScenarioOptions,
+  el: () => string,
+) {
+  // T7 的期望值（phase 1 实测的 IMG_001 缓存文件名）由编排器注入；未注入时
+  // T7 降级为读数（与 session-restore 的 canHard 同口径），不硬断言。
+  const expectThumb = opts.expectThumb || '';
   if (phase !== '2') {
     // ── phase 1：冷启动基线 + 异写法探键 + 切面板 ────────
     if (!(await scanFolders(jpgFolder, '', 12, el))) return;
@@ -1885,12 +1896,18 @@ async function scenarioThumbCache(jpgFolder: string, phase: string, el: () => st
     filePath: `${jpgFolder}\\IMG_001.jpg`,
     width: 200,
   });
-  raw(`[${el()}] >>> 读数 T7 跨进程异写法（${alt2}）直调返回 ${altPath2.split(/[\\/]/).pop()}`);
+  const alt2Base = altPath2.split(/[\\/]/).pop() ?? '';
+  raw(`[${el()}] >>> 读数 T7 跨进程异写法（${alt2}）直调返回 ${alt2Base}`);
   raw(
-    `[${el()}] >>> 断言T7 跨进程异写法与正写法同键（返回同一缓存文件） = ${
-      altPath2 === directPath
-    }`,
+    `[${el()}] >>> 读数 T7b 同片正写法直调返回 ${directPath.split(/[\\/]/).pop()}（expectThumb=${expectThumb || '(未注入)'}）`,
   );
+  if (expectThumb) {
+    raw(
+      `[${el()}] >>> 断言T7 跨进程异写法命中 phase 1 同一缓存文件（键归一） = ${
+        alt2Base === expectThumb
+      }`,
+    );
+  }
   if (!(await scanFolders(jpgFolder, '', 12, el))) return;
   const c3 = await waitForIpcStable();
   const cells2 = gridCellCount();
@@ -1919,6 +1936,8 @@ export interface E2EScenarioOptions {
   expectIndex?: number;
   /** session-restore：phase 1 实测的当前照片 baseName。 */
   expectBase?: string;
+  /** thumb-cache：phase 1 实测的 IMG_001 缓存文件名；phase 2 T7 硬断言用。 */
+  expectThumb?: string;
 }
 
 /** 入口：由 main.tsx 在 dev 下从 Vite 的 `/__e2e_scenario` 取到配置后调用。 */
@@ -1980,7 +1999,7 @@ export async function runE2E(
       await scenarioSessionRestore(jpgFolder, String(opts.phase ?? '1'), opts, el);
     } else if (scenario === 'thumb-cache') {
       installThumbIpcCounter();
-      await scenarioThumbCache(jpgFolder, String(opts.phase ?? '1'), el);
+      await scenarioThumbCache(jpgFolder, String(opts.phase ?? '1'), opts, el);
     } else {
       raw(`[${el()}] 未知场景: ${scenario}`);
     }
