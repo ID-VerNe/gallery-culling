@@ -1,6 +1,6 @@
 //! 目录扫描与取消。
 //!
-//! 进度节流器 `ProgressThrottle` 仍由 mod.rs 持有 —— 导出路径也用它，
+//! 进度节流器 `ProgressThrottle` 由 `commands::state` 持有（经 commands 门面转发）—— 导出路径也用它，
 //! 两处节流阈值必须一致，分叉会让两条进度条的刷新节奏不同。
 
 use std::sync::atomic::Ordering;

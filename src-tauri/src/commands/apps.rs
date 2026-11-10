@@ -241,6 +241,14 @@ pub async fn trash_photos_cmd(file_paths: Vec<String>) -> Result<usize, String> 
     .await
 }
 
+/// 在 Luminar Neo 里打开照片并等用户编辑完回传路径（roundtrip）。
+#[tauri::command]
+pub async fn open_in_luminar_roundtrip_cmd(file_path: String) -> Result<String, String> {
+    let path = std::path::PathBuf::from(file_path);
+    let edited_path = crate::luminar::edit_in_luminar(&path).await?;
+    Ok(edited_path.to_string_lossy().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{decide_external_launch, ExternalLaunch};
