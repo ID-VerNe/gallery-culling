@@ -11,6 +11,7 @@ use std::sync::{OnceLock, RwLock};
 use crate::cachekey::sha256_hex16;
 
 use crate::db::{user_home_dir, DATA_DIR_ENV};
+use crate::pathutil::canonicalize_or_self;
 
 /// 缓存落点子目录（issue #107 · PA）：与 DB 同树 `home/.galleryculling`。
 const APP_DATA_SUBDIR: &str = ".galleryculling";
@@ -172,7 +173,7 @@ fn copy_jpgs_recursive(src_dir: &Path, target_root: &Path, src_root: &Path, copi
 /// mtime 用纳秒（`u128`，与 `lumen::cache::mtime_tag` 同口径）：秒级会在
 /// 同秒覆写时让键与文件名都不变，进程内索引命中直接返回旧图（issue #142）。
 pub(super) fn file_fingerprint(file_path: &Path) -> (PathBuf, u128) {
-    let abs_path = fs::canonicalize(file_path).unwrap_or_else(|_| file_path.to_path_buf());
+    let abs_path = canonicalize_or_self(file_path);
     let mtime = file_mtime_nanos(file_path);
     (abs_path, mtime)
 }

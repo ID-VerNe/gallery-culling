@@ -16,6 +16,7 @@ use crate::models::{
     ExifData, FolderMode, FolderProbe, FolderScanResult, PhotoFileInfo, PhotoGroupInfo,
     PhotoGroupStatus, ToneAdjustments, TASK_CANCELLED,
 };
+use crate::pathutil::normalize_dir_str;
 use crate::xmp::{
     check_sidecar_exists, flag_from_xmp, get_xmp_path, legacy_flag_from_label, read_xmp_full,
     XmpMetadata,
@@ -242,17 +243,12 @@ fn scan_directory_dual(
 
 /// 两个路径是否指向同一个目录。Windows 路径大小写不敏感、`/` 与 `\` 可混用，
 /// 先尝试 `canonicalize`，失败时退化为归一化字符串比较（不额外 IO）。
+/// 归一化口径唯一真值在 `pathutil::normalize_dir_str`（issue #140）。
 fn dirs_are_same(a: &Path, b: &Path) -> bool {
     if let (Ok(ca), Ok(cb)) = (a.canonicalize(), b.canonicalize()) {
         return ca == cb;
     }
-    let norm = |p: &Path| {
-        p.to_string_lossy()
-            .replace('\\', "/")
-            .trim_end_matches('/')
-            .to_lowercase()
-    };
-    norm(a) == norm(b)
+    normalize_dir_str(&a.to_string_lossy()) == normalize_dir_str(&b.to_string_lossy())
 }
 
 fn folder_mode(jpg_count: usize, raw_count: usize) -> FolderMode {
@@ -714,6 +710,7 @@ pub fn scan_folders(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn test_scan_empty_directory() {
@@ -1436,5 +1433,37 @@ mod tests {
         assert_eq!(res.total_count, 5000);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// #140：dirs_are_same 的退化比较走 normalize_dir_str —— 大小写 / 正反斜杠 /
+    /// 尾分隔符差异必须判同，不同目录判异。canonicalize 失败（路径不存在）时
+    /// 走字符串兜底，这条用例同时锁住两层语义。
+    #[test]
+    fn dirs_are_same_normalizes_case_separators_and_trailing_slash() {
+        let root = unique_dir("dirs_same");
+        let sub = root.join("Sub");
+        fs::create_dir_all(&sub).unwrap();
+
+        // 大小写差异
+        assert!(dirs_are_same(&sub, &root.join("sub")));
+        // 正反斜杠混用 + 尾分隔符
+        let alt_back = PathBuf::from(format!(r"{}\", sub.display()));
+        let alt_fwd = PathBuf::from(format!("{}/", sub.display()));
+        assert!(dirs_are_same(&alt_back, &alt_fwd));
+        // 不同目录
+        assert!(!dirs_are_same(&sub, &root));
+        // 不存在的路径：canonicalize 失败 → 字符串兜底口径
+        assert!(dirs_are_same(&root.join("nope"), &root.join("NOPE")));
+        assert!(!dirs_are_same(&root.join("nope"), &root.join("nope2")));
+        // 兜底口径同样去尾分隔符（写法差异不得判异）
+        assert!(dirs_are_same(&root.join("nope/"), &root.join("NOPE")));
+        assert!(dirs_are_same(&root.join(r"nope\"), &root.join("NOPE")));
+        // 兜底口径同样统一正反斜杠
+        assert!(dirs_are_same(
+            &root.join("nope/sub"),
+            &root.join(r"nope\sub")
+        ));
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

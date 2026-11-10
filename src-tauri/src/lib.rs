@@ -8,6 +8,7 @@ mod lrcat;
 pub mod lumen;
 mod luminar;
 pub mod models;
+mod pathutil;
 mod proc;
 mod scanner;
 mod syncqueue;

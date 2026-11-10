@@ -16,6 +16,8 @@ use rusqlite::{Connection, OpenFlags};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::pathutil::normalize_dir_str;
+
 /// LR 目录里的一张照片，路径已拼成绝对路径（平台分隔符）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -120,7 +122,7 @@ fn read_once(path: &Path, folders: &[String]) -> Result<LrcatRead, String> {
             format!("这不是 Lightroom 目录（缺 Adobe_images / AgLibraryFile 等表）：{e}")
         })?;
 
-    let wanted: Vec<String> = folders.iter().map(|f| norm_dir(f)).collect();
+    let wanted: Vec<String> = folders.iter().map(|f| normalize_dir_str(f)).collect();
     let mut photos = Vec::new();
     let mut skipped_virtual = 0usize;
     let mut total = 0usize;
@@ -151,7 +153,7 @@ fn read_once(path: &Path, folders: &[String]) -> Result<LrcatRead, String> {
             continue;
         }
         let p = join_photo_path(&root, &sub, &base, &ext);
-        if !wanted.is_empty() && !wanted.contains(&norm_dir(&parent_of(&p))) {
+        if !wanted.is_empty() && !wanted.contains(&normalize_dir_str(&parent_of(&p))) {
             continue;
         }
         photos.push(LrcatPhoto {
@@ -195,11 +197,6 @@ fn join_photo_path(root: &str, sub: &str, base: &str, ext: &str) -> String {
         s = s.replace('/', "\\");
     }
     s
-}
-
-/// 目录归一化：正斜杠 + 去尾分隔符 + 小写。与前端 `normalizeDir` 同口径。
-fn norm_dir(p: &str) -> String {
-    p.replace('\\', "/").trim_end_matches('/').to_lowercase()
 }
 
 fn parent_of(path: &str) -> String {

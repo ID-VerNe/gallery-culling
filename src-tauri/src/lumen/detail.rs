@@ -17,6 +17,7 @@ use std::time::SystemTime;
 use serde_json::Value;
 
 use crate::cachekey::sha256_hex16;
+use crate::pathutil::canonicalize_or_self;
 
 use super::cache::{ensure_cached_render, mtime_tag};
 use super::recipe_hash;
@@ -41,7 +42,7 @@ pub fn detail_cache_key(
     recipe: Option<&Value>,
 ) -> String {
     // 相对路径 canonicalize，保证同一文件不同写法同键（与预览键同口径）。
-    let abs = src.canonicalize().unwrap_or_else(|_| src.to_path_buf());
+    let abs = canonicalize_or_self(src);
     let recipe_tag = recipe.map(recipe_hash).unwrap_or_else(|| "-".to_string());
     // v1：细节域。与预览的 `lumen-preview-v2` 前缀不同 → 同输入也不撞键。
     let payload = format!(
