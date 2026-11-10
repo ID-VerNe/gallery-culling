@@ -4,6 +4,11 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 mod metadata;
+#[cfg(test)]
+pub(crate) use metadata::exif_test_blob;
+/// 底层「打开 + 解析容器」入口（issue #144）：缩略图的方向角/内嵌图与主读法
+/// 共享这一步，字段语义各自留在调用方。
+pub use metadata::open_exif_reader;
 pub use metadata::read_exif_metadata;
 /// 「配对 JPG 优先、主路径兜底」的 EXIF 读法（ADR-010 修订后全项目唯一顺序）。
 pub use metadata::read_exif_preferring_jpg;
@@ -82,29 +87,62 @@ fn find_edited_version(base_dir: &Path, stem: &str) -> Option<PhotoFileInfo> {
     None
 }
 
-/// 从 XMP 元数据里取调色。六个参数**全空**才算「没调过」—— 只填一个曝光
-/// 也是用户的编辑，不能因为其余是 0 就当成没有。
+/// XMP 调色读取的显式分歧（issue #144）：「没调过」与「调过但全零」是两个真
+/// 语义，原本散落在三处、靠返回值形状（`Option` vs `Default`）隐式表达，调用
+/// 方极易拿错（`ToneState` 同时带 `tone`/`xmp_tone`/`lumen_tone: Option` 即为
+/// 实证）。显式 enum 后，分歧由类型名担着，不再靠猜。
+///
+/// `lumen/tone.rs` 的 JSON→Tone 输入域不同（`serde_json::Value`），不在此枚举
+/// 覆盖内，也**不**强行并入 —— Option vs Default 不可一药两治。
+pub(crate) enum XmpTone {
+    /// 六项全空 —— 用户从没动过滑杆。
+    Untouched,
+    /// 有编辑；缺失项按 0 补全（滑杆零点语义）。
+    Edited(ToneAdjustments),
+}
+
+impl XmpTone {
+    /// 六个参数**全空**才算「没调过」—— 只填一个曝光也是用户的编辑，
+    /// 不能因为其余是 0 就当成没有。
+    fn from_xmp(meta: &XmpMetadata) -> Self {
+        if meta.exposure.is_some()
+            || meta.highlights.is_some()
+            || meta.shadows.is_some()
+            || meta.temperature.is_some()
+            || meta.tint.is_some()
+            || meta.contrast.is_some()
+        {
+            XmpTone::Edited(ToneAdjustments {
+                exposure: meta.exposure.unwrap_or(0.0),
+                highlights: meta.highlights.unwrap_or(0.0),
+                shadows: meta.shadows.unwrap_or(0.0),
+                temperature: meta.temperature.unwrap_or(0.0),
+                tint: meta.tint.unwrap_or(0.0),
+                contrast: meta.contrast.unwrap_or(0.0),
+            })
+        } else {
+            XmpTone::Untouched
+        }
+    }
+}
+
+/// 入口一（Option 语义）：扫描与选片集 —— 没调过就是 `None`，前端不亮调色徽标。
 ///
 /// `pub(crate)`：选片集打开时（`albumcmds`）要用同一份判定，否则「文件夹视图
 /// 有调色、选片集视图全 0」会让面板基线说谎。
 pub(crate) fn extract_tone_from_xmp(meta: &XmpMetadata) -> Option<ToneAdjustments> {
-    if meta.exposure.is_some()
-        || meta.highlights.is_some()
-        || meta.shadows.is_some()
-        || meta.temperature.is_some()
-        || meta.tint.is_some()
-        || meta.contrast.is_some()
-    {
-        Some(ToneAdjustments {
-            exposure: meta.exposure.unwrap_or(0.0),
-            highlights: meta.highlights.unwrap_or(0.0),
-            shadows: meta.shadows.unwrap_or(0.0),
-            temperature: meta.temperature.unwrap_or(0.0),
-            tint: meta.tint.unwrap_or(0.0),
-            contrast: meta.contrast.unwrap_or(0.0),
-        })
-    } else {
-        None
+    match XmpTone::from_xmp(meta) {
+        XmpTone::Untouched => None,
+        XmpTone::Edited(t) => Some(t),
+    }
+}
+
+/// 入口二（Default 语义）：面板读回 —— 缺失按 0，与滑杆零点一致，永不表达
+/// 「没调过」。`commands/tone.rs` 的 `read_xmp_tone` 走这里。
+pub(crate) fn read_xmp_tone_values(meta: &XmpMetadata) -> ToneAdjustments {
+    match XmpTone::from_xmp(meta) {
+        XmpTone::Untouched => ToneAdjustments::default(),
+        XmpTone::Edited(t) => t,
     }
 }
 
@@ -487,14 +525,13 @@ fn assemble_group(
         )
     };
 
-    // Read EXIF: prefer JPG (faster to read header), fallback to RAW
-    let mut exif = if let Some(jpg) = &jpg_opt {
-        read_exif_metadata(Path::new(&jpg.path))
-    } else if let Some(raw) = &raw_opt {
-        read_exif_metadata(Path::new(&raw.path))
-    } else {
-        None
-    };
+    // EXIF：与水印同一读法（ADR-010，issue #144）—— 配对 JPG 优先，
+    // JPG 坏了回落 RAW。旧写法 JPG 在场即止，注释写 fallback 代码却没有，
+    // 坏 JPG 时用户见空 EXIF。
+    let mut exif = read_exif_preferring_jpg(
+        jpg_opt.as_ref().map(|j| Path::new(&j.path)),
+        raw_opt.as_ref().map(|r| Path::new(&r.path)),
+    );
     if let Some(m) = &xmp_meta {
         merge_xmp_metadata_into_exif(&mut exif, m);
     }
@@ -850,6 +887,79 @@ mod tests {
 
         let _ = fs::remove_dir_all(&jpg_dir);
         let _ = fs::remove_dir_all(&raw_dir);
+    }
+
+    /// issue #144 裁决：坏 JPG + 好 RAW → 扫描路径回落 RAW 读 EXIF。
+    ///
+    /// 旧分流 JPG 在场即停（注释写 "fallback to RAW"，代码却没有），JPG 损坏时
+    /// 用户见空 EXIF；本用例先红后改。
+    #[test]
+    fn corrupt_jpg_falls_back_to_raw_exif() {
+        let jpg_dir = unique_dir("exif_badjpg");
+        let raw_dir = unique_dir("exif_goodraw");
+
+        fs::write(jpg_dir.join("B0001.jpg"), b"not an image at all").unwrap();
+        fs::write(raw_dir.join("B0001.ARW"), metadata::exif_test_blob("RAW")).unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let res = scan_folders(
+            jpg_dir.to_str().unwrap(),
+            Some(raw_dir.to_str().unwrap()),
+            "filename",
+            &cancel,
+            |_, _, _| {},
+        )
+        .expect("扫描应成功");
+
+        let g = res
+            .groups
+            .iter()
+            .find(|g| g.base_name == "B0001")
+            .expect("应产出 B0001 组");
+        let exif = g.exif.as_ref().expect("坏 JPG 必须回落 RAW，exif 必须有值");
+        assert_eq!(exif.camera_make.as_deref(), Some("RAW"));
+
+        let _ = fs::remove_dir_all(&jpg_dir);
+        let _ = fs::remove_dir_all(&raw_dir);
+    }
+
+    /// tone 双入口（issue #144）：Option 语义 —— 六项全空 = 没调过 = None。
+    #[test]
+    fn tone_option_semantics_all_empty_is_none() {
+        let m = XmpMetadata::default();
+        assert!(extract_tone_from_xmp(&m).is_none());
+    }
+
+    /// 只填一项也是编辑；其余缺失项按 0 补，不因其余是 0 吞掉这次编辑。
+    #[test]
+    fn tone_option_semantics_partial_is_some_zero_filled() {
+        let m = XmpMetadata {
+            exposure: Some(0.5),
+            ..Default::default()
+        };
+        let t = extract_tone_from_xmp(&m).expect("有编辑即 Some");
+        assert_eq!(t.exposure, 0.5);
+        assert_eq!(t.highlights, 0.0, "缺失项按 0 补");
+    }
+
+    /// Default 语义：全空也给出全零面板值，永不表达「没调过」。
+    #[test]
+    fn tone_default_semantics_all_empty_is_zero() {
+        let t = read_xmp_tone_values(&XmpMetadata::default());
+        assert_eq!(t.exposure, 0.0);
+        assert_eq!(t.contrast, 0.0);
+    }
+
+    /// Default 语义：缺失项按 0，与滑杆零点一致。
+    #[test]
+    fn tone_default_semantics_missing_field_is_zero() {
+        let m = XmpMetadata {
+            temperature: Some(10.0),
+            ..Default::default()
+        };
+        let t = read_xmp_tone_values(&m);
+        assert_eq!(t.temperature, 10.0);
+        assert_eq!(t.exposure, 0.0, "缺失项按 0");
     }
 
     /// sidecar 双读：RAW 侧单独有 sidecar 时，评级/旗标必须从 RAW 侧读回。
