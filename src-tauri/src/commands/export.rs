@@ -409,6 +409,150 @@ fn write_export_manifest(
     }
 }
 
+/// 自检时每个条目的源文件检查顺序。
+///
+/// 复制与成片的顺序**刻意不同**：复制先看 JPG（`jpg_path` 在前），成片先看
+/// RAW（与前端 `groupPath()` = `raw.path || jpg.path` 一致）。抽成枚举是为了
+/// 让 `prepare_export_target` 单源实现守卫 while 仍保持各自的检查顺序 ——
+/// 顺序只影响「哪个源先命中即拒绝」，不影响拒绝文案。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SrcOrder {
+    JpgFirst,
+    RawFirst,
+}
+
+/// `prepare_export_target` 的产物：清单起始时间与已建好的临时目录。
+struct PreparedExport {
+    started_at: u64,
+    tmp_dir: PathBuf,
+}
+
+/// 导出外壳的准备阶段（issue #137）：建目标目录 + canonical 自检 + 建临时目录。
+///
+/// 自检：canonicalize 归一化大小写 / 短名 / `..` / 尾斜杠后逐项比较，不自己写
+/// 字符串比较（Windows 下路径规范化必须交给 OS）。目标目录 == 任一源文件父
+/// 目录时整体拒绝、不产出任何文件 —— 否则后续同名搬迁可能覆盖原片。
+fn prepare_export_target(
+    target_folder: &Path,
+    items: &[ExportItem],
+    src_order: SrcOrder,
+) -> Result<PreparedExport, String> {
+    fs::create_dir_all(target_folder).map_err(|e| format!("创建目标导出目录失败: {}", e))?;
+
+    let target_canon =
+        fs::canonicalize(target_folder).map_err(|e| format!("无法解析目标导出目录: {}", e))?;
+    for item in items {
+        let paths: [&Option<String>; 2] = match src_order {
+            SrcOrder::JpgFirst => [&item.jpg_path, &item.raw_path],
+            SrcOrder::RawFirst => [&item.raw_path, &item.jpg_path],
+        };
+        for src_str in paths.into_iter().flatten() {
+            let src = Path::new(src_str);
+            if let Some(parent) = src.parent() {
+                if let Ok(parent_canon) = fs::canonicalize(parent) {
+                    if parent_canon == target_canon {
+                        return Err(TARGET_IS_SOURCE_MSG.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let started_at = now_epoch_secs();
+
+    // 临时目录建在目标目录**内部** → 保证与最终目标同卷，`rename` 才是原子的
+    // （跨卷 rename 会退化为 copy，失去原子性）。
+    let tmp_dir = target_folder.join(format!("{}{}", EXPORT_TMP_PREFIX, uuid::Uuid::new_v4()));
+    fs::create_dir_all(&tmp_dir).map_err(|e| format!("创建导出临时目录失败: {}", e))?;
+
+    Ok(PreparedExport {
+        started_at,
+        tmp_dir,
+    })
+}
+
+/// 导出外壳的收尾阶段（issue #137）：取消零污染 / 提交搬迁 + 写清单 + 终态进度。
+///
+/// `cancelled` 分支删临时目录、标 cancelled、写 `cancelled` 清单；正常分支逐个
+/// 原子搬迁、删临时目录、按失败与否写 `completed/failed` 清单。调用点须在
+/// 循环结束后调用 —— 循环内的协作式取消检查点不在这里。
+#[allow(clippy::too_many_arguments)]
+fn finalize_export(
+    mut staging: ExportStaging,
+    cancelled: bool,
+    target_folder: &Path,
+    tmp_dir: &Path,
+    started_at: u64,
+    mode: &str,
+    render: Option<RenderManifest<'_>>,
+    include_jpg: bool,
+    include_raw: bool,
+    overwrite: bool,
+    total: usize,
+    on_progress: &mut impl FnMut(usize, usize, &str),
+) -> ExportOutcome {
+    if cancelled {
+        // 取消：删临时目录，目标目录保持原样（零污染）
+        let _ = fs::remove_dir_all(tmp_dir);
+        staging.mark_cancelled();
+        staging.outcome.cancelled = true;
+        write_export_manifest(
+            target_folder,
+            started_at,
+            "cancelled",
+            mode,
+            render,
+            include_jpg,
+            include_raw,
+            overwrite,
+            &staging.manifest,
+        );
+        on_progress(total, total, "");
+        return staging.outcome;
+    }
+
+    // 提交阶段：逐个原子搬迁。到这里视为已提交，不再响应取消 —— rename 是极快的
+    // 元数据操作，中途停下反而制造半成品；要么全搬，要么（取消时）一个不搬。
+    staging.commit();
+    let _ = fs::remove_dir_all(tmp_dir);
+
+    let status = if staging.outcome.failed.is_empty() {
+        "completed"
+    } else {
+        "failed"
+    };
+    write_export_manifest(
+        target_folder,
+        started_at,
+        status,
+        mode,
+        render,
+        include_jpg,
+        include_raw,
+        overwrite,
+        &staging.manifest,
+    );
+    on_progress(total, total, "");
+    staging.outcome
+}
+
+/// 双 batch 命令共享的进度节流 emit 闭包构造器（issue #137）。
+fn make_export_progress_emitter(app: tauri::AppHandle) -> impl FnMut(usize, usize, &str) {
+    let mut throttle = ProgressThrottle::new();
+    move |processed, total, current| {
+        if throttle.should_emit("export", processed, total) {
+            let _ = app.emit(
+                "export-progress",
+                ExportProgress {
+                    processed,
+                    total,
+                    current: current.to_string(),
+                },
+            );
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn batch_export_cmd(
     app: tauri::AppHandle,
@@ -431,7 +575,6 @@ pub async fn batch_export_cmd(
     let overwrite = overwrite.unwrap_or(false);
 
     blocking("批量导出任务异常", move || {
-        let mut throttle = ProgressThrottle::new();
         export_items(
             items,
             Path::new(&target_folder),
@@ -439,18 +582,7 @@ pub async fn batch_export_cmd(
             include_jpg,
             overwrite,
             &cancel,
-            |processed, total, current| {
-                if throttle.should_emit("export", processed, total) {
-                    let _ = app_for_progress.emit(
-                        "export-progress",
-                        ExportProgress {
-                            processed,
-                            total,
-                            current: current.to_string(),
-                        },
-                    );
-                }
-            },
+            make_export_progress_emitter(app_for_progress),
         )
     })
     .await
@@ -482,31 +614,9 @@ pub fn export_items(
     cancel: &AtomicBool,
     mut on_progress: impl FnMut(usize, usize, &str),
 ) -> Result<ExportOutcome, String> {
-    fs::create_dir_all(target_folder).map_err(|e| format!("创建目标导出目录失败: {}", e))?;
-
-    // 自检：canonicalize 归一化大小写 / 短名 / `..` / 尾斜杠后逐项比较，
-    // 不自己写字符串比较（Windows 下路径规范化必须交给 OS）。
-    let target_canon =
-        fs::canonicalize(target_folder).map_err(|e| format!("无法解析目标导出目录: {}", e))?;
-    for item in &items {
-        for src_str in [&item.jpg_path, &item.raw_path].into_iter().flatten() {
-            let src = Path::new(src_str);
-            if let Some(parent) = src.parent() {
-                if let Ok(parent_canon) = fs::canonicalize(parent) {
-                    if parent_canon == target_canon {
-                        return Err(TARGET_IS_SOURCE_MSG.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    let started_at = now_epoch_secs();
-
-    // 临时目录建在目标目录**内部** → 保证与最终目标同卷，`rename` 才是原子的
-    // （跨卷 rename 会退化为 copy，失去原子性）。
-    let tmp_dir = target_folder.join(format!("{}{}", EXPORT_TMP_PREFIX, uuid::Uuid::new_v4()));
-    fs::create_dir_all(&tmp_dir).map_err(|e| format!("创建导出临时目录失败: {}", e))?;
+    let prepared = prepare_export_target(target_folder, &items, SrcOrder::JpgFirst)?;
+    let started_at = prepared.started_at;
+    let tmp_dir = prepared.tmp_dir;
 
     let total = items.len();
     let mut staging = ExportStaging::default();
@@ -556,49 +666,20 @@ pub fn export_items(
         }
     }
 
-    if cancelled {
-        // 取消：删临时目录，目标目录保持原样（零污染）
-        let _ = fs::remove_dir_all(&tmp_dir);
-        staging.mark_cancelled();
-        staging.outcome.cancelled = true;
-        write_export_manifest(
-            target_folder,
-            started_at,
-            "cancelled",
-            "copy",
-            None,
-            include_jpg,
-            include_raw,
-            overwrite,
-            &staging.manifest,
-        );
-        on_progress(total, total, "");
-        return Ok(staging.outcome);
-    }
-
-    // 提交阶段：逐个原子搬迁。到这里视为已提交，不再响应取消 —— rename 是极快的
-    // 元数据操作，中途停下反而制造半成品；要么全搬，要么（取消时）一个不搬。
-    staging.commit();
-    let _ = fs::remove_dir_all(&tmp_dir);
-
-    let status = if staging.outcome.failed.is_empty() {
-        "completed"
-    } else {
-        "failed"
-    };
-    write_export_manifest(
+    Ok(finalize_export(
+        staging,
+        cancelled,
         target_folder,
+        &tmp_dir,
         started_at,
-        status,
         "copy",
         None,
         include_jpg,
         include_raw,
         overwrite,
-        &staging.manifest,
-    );
-    on_progress(total, total, "");
-    Ok(staging.outcome)
+        total,
+        &mut on_progress,
+    ))
 }
 
 /// 成片渲染导出的**纯实现**（不含 tauri 命令属性，可直接被单测调用）。
@@ -662,30 +743,11 @@ pub fn render_export_items(
     mut render: impl FnMut(&Path, &Path) -> Result<(), String>,
     mut on_progress: impl FnMut(usize, usize, &str),
 ) -> Result<ExportOutcome, String> {
-    fs::create_dir_all(target_folder).map_err(|e| format!("创建目标导出目录失败: {}", e))?;
-
-    // 与复制同款自检：目标 == 源目录时，output 会落回源目录，同名就可能覆盖原片。
-    // 命中即整体拒绝 —— 一张都不渲。
-    let target_canon =
-        fs::canonicalize(target_folder).map_err(|e| format!("无法解析目标导出目录: {}", e))?;
-    for item in &items {
-        // 源优先取 RAW（与前端 `groupPath()` = `raw.path || jpg.path` 一致）
-        for src_str in [&item.raw_path, &item.jpg_path].into_iter().flatten() {
-            let src = Path::new(src_str);
-            if let Some(parent) = src.parent() {
-                if let Ok(parent_canon) = fs::canonicalize(parent) {
-                    if parent_canon == target_canon {
-                        return Err(TARGET_IS_SOURCE_MSG.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    let started_at = now_epoch_secs();
-    // 临时目录建在目标目录**内部**，保证同卷，`rename` 才是原子的。
-    let tmp_dir = target_folder.join(format!("{}{}", EXPORT_TMP_PREFIX, uuid::Uuid::new_v4()));
-    fs::create_dir_all(&tmp_dir).map_err(|e| format!("创建导出临时目录失败: {}", e))?;
+    // 与复制同款自检（源优先取 RAW，见 `SrcOrder::RawFirst`）：目标 == 源目录
+    // 时 output 会落回源目录，同名就可能覆盖原片。命中即整体拒绝 —— 一张都不渲。
+    let prepared = prepare_export_target(target_folder, &items, SrcOrder::RawFirst)?;
+    let started_at = prepared.started_at;
+    let tmp_dir = prepared.tmp_dir;
 
     let total = items.len();
     let mut staging = ExportStaging {
@@ -771,47 +833,20 @@ pub fn render_export_items(
         }),
     };
 
-    if cancelled {
-        let _ = fs::remove_dir_all(&tmp_dir);
-        staging.mark_cancelled();
-        staging.outcome.cancelled = true;
-        write_export_manifest(
-            target_folder,
-            started_at,
-            "cancelled",
-            "render",
-            Some(render_meta),
-            false,
-            false,
-            overwrite,
-            &staging.manifest,
-        );
-        on_progress(total, total, "");
-        return Ok(staging.outcome);
-    }
-
-    // 提交阶段与复制一致：到这里视为已提交，不再响应取消。
-    staging.commit();
-    let _ = fs::remove_dir_all(&tmp_dir);
-
-    let status = if staging.outcome.failed.is_empty() {
-        "completed"
-    } else {
-        "failed"
-    };
-    write_export_manifest(
+    Ok(finalize_export(
+        staging,
+        cancelled,
         target_folder,
+        &tmp_dir,
         started_at,
-        status,
         "render",
         Some(render_meta),
         false,
         false,
         overwrite,
-        &staging.manifest,
-    );
-    on_progress(total, total, "");
-    Ok(staging.outcome)
+        total,
+        &mut on_progress,
+    ))
 }
 
 /// 前端传来的水印选项（`batch_render_export_cmd` 的第九个参数）。
@@ -918,7 +953,6 @@ pub async fn batch_render_export_cmd(
     let app_for_progress = app.clone();
 
     blocking("渲染导出任务异常", move || {
-        let mut throttle = ProgressThrottle::new();
         let plan = resolve_watermark(&format, watermark.as_ref(), quality)?;
         render_export_items(
             items,
@@ -940,18 +974,7 @@ pub async fn batch_render_export_cmd(
                 .map(|_| ())
                 .map_err(|e| e.to_string())
             },
-            |processed, total, current| {
-                if throttle.should_emit("export", processed, total) {
-                    let _ = app_for_progress.emit(
-                        "export-progress",
-                        ExportProgress {
-                            processed,
-                            total,
-                            current: current.to_string(),
-                        },
-                    );
-                }
-            },
+            make_export_progress_emitter(app_for_progress),
         )
     })
     .await
@@ -1186,6 +1209,194 @@ mod tests {
             fs::read(dst_dir.join("IMG_0007.jpg")).unwrap(),
             b"CONTENT-7"
         );
+
+        let _ = fs::remove_dir_all(&src_dir);
+        let _ = fs::remove_dir_all(&dst_dir);
+    }
+
+    /// #132：RAW 旁存在 `.xmp` 时跟 RAW 一起复制进目标目录。
+    ///
+    /// 前端 `useExportForm.ts:270-278` 的 `expectedFileCount` 把第三个文件
+    ///（RAW + XMP + JPG）算进了 footer「共 N 个文件」；后端这边要在真盘上
+    /// 把它钉住，删掉 XMP 段 `stage`（`export_items` 544-548）必须变红。
+    #[test]
+    fn export_copies_xmp_sidecar_alongside_raw() {
+        let src_dir = unique_dir("xmp_src");
+        let dst_dir = unique_dir("xmp_dst");
+
+        let raw = src_dir.join("IMG_0009.NEF");
+        fs::write(&raw, b"RAW-9").unwrap();
+        let xmp = src_dir.join("IMG_0009.xmp");
+        fs::write(&xmp, b"XMP-9").unwrap();
+        let jpg = src_dir.join("IMG_0009.jpg");
+        fs::write(&jpg, b"JPG-9").unwrap();
+
+        let items = vec![ExportItem {
+            base_name: "IMG_0009".to_string(),
+            jpg_path: Some(jpg.to_string_lossy().to_string()),
+            raw_path: Some(raw.to_string_lossy().to_string()),
+        }];
+        let no_cancel = AtomicBool::new(false);
+        let outcome = export_items(items, &dst_dir, true, true, false, &no_cancel, |_, _, _| {})
+            .expect("不应报错");
+
+        assert_eq!(outcome.exported, 3, "RAW + XMP + JPG 应各计一次");
+        assert!(outcome.failed.is_empty(), "不应有失败");
+        assert_eq!(fs::read(dst_dir.join("IMG_0009.NEF")).unwrap(), b"RAW-9");
+        assert_eq!(
+            fs::read(dst_dir.join("IMG_0009.xmp")).unwrap(),
+            b"XMP-9",
+            "侧车内容必须原样落地"
+        );
+        assert_eq!(fs::read(dst_dir.join("IMG_0009.jpg")).unwrap(), b"JPG-9");
+
+        // 清单里应有三条 `copied`，XMP 不是附赠品而是正式账目
+        let json = read_manifest(&dst_dir);
+        assert_eq!(json["items"].as_array().unwrap().len(), 3);
+
+        let _ = fs::remove_dir_all(&src_dir);
+        let _ = fs::remove_dir_all(&dst_dir);
+    }
+
+    /// #132：RAW 旁无 `.xmp` 时不凭空产生第三个文件。
+    ///
+    /// 与上条同夹具只删 `.xmp`：`exported` 应从 3 降到 2，目标目录不得出现
+    /// `.xmp`。两条合起来锁死「有则 +1、无则 +0」，变异删 `stage` 分支时
+    /// 第一条必红、第二条不受影响（仍绿），不会误报。
+    #[test]
+    fn export_without_xmp_copies_only_raw_and_jpg() {
+        let src_dir = unique_dir("xmp_none_src");
+        let dst_dir = unique_dir("xmp_none_dst");
+
+        let raw = src_dir.join("IMG_0010.NEF");
+        fs::write(&raw, b"RAW-10").unwrap();
+        let jpg = src_dir.join("IMG_0010.jpg");
+        fs::write(&jpg, b"JPG-10").unwrap();
+
+        let items = vec![ExportItem {
+            base_name: "IMG_0010".to_string(),
+            jpg_path: Some(jpg.to_string_lossy().to_string()),
+            raw_path: Some(raw.to_string_lossy().to_string()),
+        }];
+        let no_cancel = AtomicBool::new(false);
+        let outcome = export_items(items, &dst_dir, true, true, false, &no_cancel, |_, _, _| {})
+            .expect("不应报错");
+
+        assert_eq!(outcome.exported, 2, "无 XMP 时只剩 RAW + JPG");
+        assert!(
+            !dst_dir.join("IMG_0010.xmp").exists(),
+            "目标目录不得出现 .xmp"
+        );
+
+        let _ = fs::remove_dir_all(&src_dir);
+        let _ = fs::remove_dir_all(&dst_dir);
+    }
+
+    /// #132 跨语言契约（后端侧）：前端 `expectedFileCount` == 本端 `exported`。
+    ///
+    /// 同一张输入表在 `useExportForm.test.ts` 的 `expectedFileCount 跨语言契约`
+    /// 里各写一份（不做代码生成，只对同一组数字各自断言）。 steady 状态下
+    /// 扫描快照 `hasXmp` == 落盘 `exists()` 时两端数字必须相等。
+    ///
+    /// 分叉裁决：`hasXmp=false` 但盘上有 `.xmp`（扫描后新增侧车）时，
+    /// **以后端 `exists()` 为准**——前端 footer 会少算一张直到下次扫描，
+    /// 这是两套实现的已知可观察分叉，不是 bug。本表最后一行 pin 住该裁决。
+    #[test]
+    fn export_expected_file_count_contract_table() {
+        // (有 JPG, 有 RAW, 盘上有 XMP 的 RAW 同名 .xmp, 勾 RAW, 勾 JPG, 期望 exported)
+        // 期望数 = 前端 useExportForm.ts:273-275 规则：raw=勾RAW&&有RAW?1:0,
+        // xmp=勾RAW&&有RAW&&有XMP?1:0, jpg=勾JPG&&有JPG?1:0，三者相加。
+        let cases: &[(bool, bool, bool, bool, bool, usize)] = &[
+            (true, true, true, true, true, 3),   // RAW+XMP+JPG 全在、全勾
+            (true, true, false, true, true, 2),  // 无 XMP
+            (true, true, true, false, true, 1),  // 不勾 RAW 时 XMP 跟 RAW 一起消失
+            (true, false, false, true, true, 1), // 无 RAW 的组：只剩 JPG（XMP 只跟 RAW 走）
+            (false, true, true, true, false, 2), // 无 JPG：RAW + XMP
+            (true, true, true, true, false, 2),  // 不勾 JPG：RAW + XMP
+        ];
+        for (i, &(_has_jpg, has_raw, xmp_on_disk, include_raw, include_jpg, expected)) in
+            cases.iter().enumerate()
+        {
+            let tag = format!("contract_{}", i);
+            let src_dir = unique_dir(&format!("{}_src", tag));
+            let dst_dir = unique_dir(&format!("{}_dst", tag));
+            let base = format!("IMG_C{}", i);
+            let jpg_path = if _has_jpg {
+                let p = src_dir.join(format!("{}.jpg", base));
+                fs::write(&p, b"JPG").unwrap();
+                Some(p.to_string_lossy().to_string())
+            } else {
+                None
+            };
+            let raw_path = if has_raw {
+                let p = src_dir.join(format!("{}.NEF", base));
+                fs::write(&p, b"RAW").unwrap();
+                if xmp_on_disk {
+                    fs::write(src_dir.join(format!("{}.xmp", base)), b"XMP").unwrap();
+                }
+                Some(p.to_string_lossy().to_string())
+            } else {
+                None
+            };
+            let items = vec![ExportItem {
+                base_name: base,
+                jpg_path,
+                raw_path,
+            }];
+            let no_cancel = AtomicBool::new(false);
+            let outcome = export_items(
+                items,
+                &dst_dir,
+                include_raw,
+                include_jpg,
+                false,
+                &no_cancel,
+                |_, _, _| {},
+            )
+            .expect("不应报错");
+            assert_eq!(
+                outcome.exported, expected,
+                "表行 {} 前端预测应与后端 exported 相等",
+                i
+            );
+            assert!(outcome.failed.is_empty(), "表行 {} 不应有失败", i);
+            let _ = fs::remove_dir_all(&src_dir);
+            let _ = fs::remove_dir_all(&dst_dir);
+        }
+    }
+
+    /// #132 分叉裁决 pin：快照 `hasXmp=false` 但 `.xmp` 在可用例。
+    ///
+    /// 场景：扫描时组内无 XMP（前端 `hasXmp=false` 预测 2），随后用户用
+    /// 其他工具补了 `.xmp` 未重扫。后端以落盘 `exists()` 为准导出 3 个，
+    /// 与前端预测分叉——**以后端为准**，footer 的少算等重扫后自然收敛。
+    /// 前端侧对应行在 `useExportForm.test.ts` 跨语言契约里 pin 住「预测是 2」，
+    /// 两行合起来证明分叉已知且已裁决，而非任一侧计数写错。
+    #[test]
+    fn export_xmp_divergence_prefers_disk_exists() {
+        let src_dir = unique_dir("diverge_src");
+        let dst_dir = unique_dir("diverge_dst");
+
+        let raw = src_dir.join("IMG_0011.NEF");
+        fs::write(&raw, b"RAW-11").unwrap();
+        fs::write(src_dir.join("IMG_0011.xmp"), b"XMP-11").unwrap();
+        let jpg = src_dir.join("IMG_0011.jpg");
+        fs::write(&jpg, b"JPG-11").unwrap();
+
+        let items = vec![ExportItem {
+            base_name: "IMG_0011".to_string(),
+            jpg_path: Some(jpg.to_string_lossy().to_string()),
+            raw_path: Some(raw.to_string_lossy().to_string()),
+        }];
+        let no_cancel = AtomicBool::new(false);
+        let outcome = export_items(items, &dst_dir, true, true, false, &no_cancel, |_, _, _| {})
+            .expect("不应报错");
+
+        assert_eq!(
+            outcome.exported, 3,
+            "以盘为准：快照 hasXmp=false 但 .xmp 在盘上，仍导出 3 个"
+        );
+        assert!(dst_dir.join("IMG_0011.xmp").exists(), "分叉时 XMP 必须落地");
 
         let _ = fs::remove_dir_all(&src_dir);
         let _ = fs::remove_dir_all(&dst_dir);

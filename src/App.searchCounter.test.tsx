@@ -9,8 +9,9 @@ import { describe, it, expect } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { mockInvokeCommand } from './test/setup';
-import type { FolderScanResult, ToneState } from './types';
 import { makeGroup } from './test/factories';
+import { makeSettings } from './test/settingsFactory';
+import type { FolderScanResult, ToneState } from './types';
 import { DEFAULT_TONE } from './utils/autoTone';
 
 // `DSC_1` 命中前两张；`DSC_2001` 只被用来证明「候选已离开可见集」。
@@ -34,17 +35,7 @@ const toneState: ToneState = {
 };
 
 function mockStartup() {
-  mockInvokeCommand('get_settings_cmd', {
-    defaultJpgFolder: 'D:/shoot/JPG',
-    defaultRawFolder: '',
-    photoshopPath: '',
-    thumbnailWidth: 200,
-    sortOrder: 'time_filename',
-    lumenEnabled: false,
-    lumenCliPath: '',
-    lumenGridThumbnails: false,
-    lumenExpectAi: false,
-  });
+  mockInvokeCommand('get_settings_cmd', makeSettings());
   mockInvokeCommand('save_settings_cmd', true);
   mockInvokeCommand('save_session_cmd', true);
   mockInvokeCommand('scan_folders_cmd', scanResult);

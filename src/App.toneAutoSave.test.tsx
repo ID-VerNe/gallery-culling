@@ -16,8 +16,9 @@ import {
   mockInvokeCommand,
   mockInvokeError,
 } from './test/setup';
-import type { FolderScanResult, PhotoGroupInfo, ToneState } from './types';
 import { makeGroup } from './test/factories';
+import { makeSettings } from './test/settingsFactory';
+import type { AppSettings, FolderScanResult, PhotoGroupInfo, ToneState } from './types';
 import { DEFAULT_TONE } from './utils/autoTone';
 
 const group = makeGroup('g1', { baseName: 'IMG_0001' });
@@ -50,21 +51,10 @@ const toneReport = {
  * `settingsOverride` 用来模拟「全新安装（缺键）」与「显式关闭」两种设置状态。
  */
 function mockStartup(
-  settingsOverride: Record<string, unknown> = {},
+  settingsOverride: Partial<AppSettings> = {},
   groups: PhotoGroupInfo[] = [group],
 ) {
-  mockInvokeCommand('get_settings_cmd', {
-    defaultJpgFolder: 'D:/shoot/JPG',
-    defaultRawFolder: '',
-    photoshopPath: '',
-    thumbnailWidth: 200,
-    sortOrder: 'time_filename',
-    lumenEnabled: false,
-    lumenCliPath: '',
-    lumenGridThumbnails: false,
-    lumenExpectAi: false,
-    ...settingsOverride,
-  });
+  mockInvokeCommand('get_settings_cmd', makeSettings(settingsOverride));
   mockInvokeCommand('save_settings_cmd', true);
   mockInvokeCommand('save_session_cmd', true);
   mockInvokeCommand('scan_folders_cmd', { ...scanResult, groups, totalCount: groups.length });

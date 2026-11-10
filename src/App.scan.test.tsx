@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { emitMockEvent, invokeCount, mockInvokeCommand } from './test/setup';
+import { makeSettings } from './test/settingsFactory';
 import { TASK_CANCELLED_SENTINEL } from './services/taskApi';
 import type { FolderScanResult, ToneState } from './types';
 import { makeGroup } from './test/factories';
@@ -36,17 +37,7 @@ const toneState: ToneState = {
 };
 
 function mockStartup() {
-  mockInvokeCommand('get_settings_cmd', {
-    defaultJpgFolder: 'D:/shoot/JPG',
-    defaultRawFolder: '',
-    photoshopPath: '',
-    thumbnailWidth: 200,
-    sortOrder: 'time_filename',
-    lumenEnabled: false,
-    lumenCliPath: '',
-    lumenGridThumbnails: false,
-    lumenExpectAi: false,
-  });
+  mockInvokeCommand('get_settings_cmd', makeSettings());
   mockInvokeCommand('save_settings_cmd', true);
   mockInvokeCommand('save_session_cmd', true);
   mockInvokeCommand('load_session_cmd', null);

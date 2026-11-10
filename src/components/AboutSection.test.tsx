@@ -8,6 +8,7 @@ import userEvent from '@testing-library/user-event';
 import { AboutSection, type UpdateCheckState } from './SettingsSections';
 import { SettingsModal } from './SettingsModal';
 import { mockInvokeCommand } from '../test/setup';
+import { makeSettings } from '../test/settingsFactory';
 
 const idle: UpdateCheckState = { status: 'idle' };
 
@@ -110,17 +111,7 @@ describe('AboutSection —— 撤销跳过', () => {
 
 describe('SettingsModal —— 接线', () => {
   it('设置弹窗里能看到「关于」段的检查更新入口', async () => {
-    mockInvokeCommand('get_settings_cmd', {
-      defaultJpgFolder: 'D:/shoot/JPG',
-      defaultRawFolder: 'D:/shoot/RAW',
-      photoshopPath: '',
-      thumbnailWidth: 200,
-      sortOrder: 'time_filename',
-      lumenEnabled: false,
-      lumenCliPath: '',
-      lumenGridThumbnails: false,
-      lumenExpectAi: false,
-    });
+    mockInvokeCommand('get_settings_cmd', makeSettings({ defaultRawFolder: 'D:/shoot/RAW' }));
     render(
       <SettingsModal
         isOpen

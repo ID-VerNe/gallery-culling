@@ -15,7 +15,7 @@
  *     node scripts/check-sidecar-lock.mjs
  */
 import fs from 'node:fs';
-import path from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   collectDirectory,
@@ -27,16 +27,16 @@ import {
   sha256File,
 } from './sidecar-lock.mjs';
 
-export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const RECOVER_HINT =
   '取回命令：$env:LUMEN_SIDECAR_SRC="<产物目录>"; node scripts/prepare-sidecar.mjs';
 
 /** 返回退出码；不直接 `process.exit`，单测可以复用整段判定。 */
 export function check({ root = ROOT, log = console.log, errorLog = console.error } = {}) {
-  const lockPath = path.join(root, 'src-tauri', 'sidecar.lock.json');
-  const dir = path.join(root, 'src-tauri', 'binaries', 'lumen-cli');
-  const lumenRs = path.join(root, 'src-tauri', 'src', 'lumen.rs');
+  const lockPath = join(root, 'src-tauri', 'sidecar.lock.json');
+  const dir = join(root, 'src-tauri', 'binaries', 'lumen-cli');
+  const lumenRs = join(root, 'src-tauri', 'src', 'lumen.rs');
 
   const locked = readLock(lockPath);
   if (!locked.ok) {
@@ -82,7 +82,7 @@ export function check({ root = ROOT, log = console.log, errorLog = console.error
     return 0;
   }
 
-  const exe = path.join(dir, 'lumen-cli.exe');
+  const exe = join(dir, 'lumen-cli.exe');
   if (!fs.existsSync(exe) || !fs.statSync(exe).isFile()) {
     errorLog(
       `FAIL: ${dir} 存在但缺少 lumen-cli.exe，产物不完整。\n` +
@@ -91,7 +91,7 @@ export function check({ root = ROOT, log = console.log, errorLog = console.error
     );
     return 1;
   }
-  if (!fs.existsSync(path.join(dir, '_internal'))) {
+  if (!fs.existsSync(join(dir, '_internal'))) {
     errorLog(
       `FAIL: ${dir} 存在但缺少 _internal/，PyInstaller onedir 产物不完整（只搬 exe 会一启动就崩）。\n` +
         RECOVER_HINT,
@@ -124,6 +124,6 @@ export function check({ root = ROOT, log = console.log, errorLog = console.error
   return 0;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   process.exit(check());
 }

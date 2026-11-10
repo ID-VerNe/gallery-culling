@@ -25,7 +25,7 @@
  * 收进 `scripts/gates.json`。门禁入口是 `scripts/check-sidecar-lock.mjs`。
  */
 import fs from 'node:fs';
-import path from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
@@ -40,7 +40,7 @@ import {
   sha256File,
 } from './sidecar-lock.mjs';
 
-export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const NO_PUBLIC_SOURCE =
   '脚本不再代为下载引擎（issue #75）：引擎改由应用运行时从独立 Release 资产拉取。\n' +
@@ -78,18 +78,18 @@ export function queryVersion(exe, spawn) {
  * 此时 `actual` 为 null（没有可写进锁文件的完整基线）。
  */
 export function inspectArtifact(dir, spawn) {
-  const exe = path.join(dir, 'lumen-cli.exe');
-  const internal = path.join(dir, '_internal');
+  const exe = join(dir, 'lumen-cli.exe');
+  const internal = join(dir, '_internal');
   if (!fs.existsSync(exe) || !fs.statSync(exe).isFile()) {
     return {
-      problems: [`缺少 ${path.join(dir, 'lumen-cli.exe')}`],
+      problems: [`缺少 ${join(dir, 'lumen-cli.exe')}`],
       actual: null,
     };
   }
   if (!fs.existsSync(internal) || !fs.statSync(internal).isDirectory()) {
     return {
       problems: [
-        `缺少 ${path.join(dir, '_internal')}（PyInstaller onedir 只复制 exe 会得到一个一启动就崩的坏包）`,
+        `缺少 ${join(dir, '_internal')}（PyInstaller onedir 只复制 exe 会得到一个一启动就崩的坏包）`,
       ],
       actual: null,
     };
@@ -111,7 +111,7 @@ export function inspectArtifact(dir, spawn) {
 
 /** 从 `src-tauri/src/lumen.rs` 取宿主钉死的版本；取不到视为仓库结构异常。 */
 function readPinnedVersion(root) {
-  const file = path.join(root, 'src-tauri', 'src', 'lumen.rs');
+  const file = join(root, 'src-tauri', 'src', 'lumen.rs');
   if (!fs.existsSync(file)) {
     return { ok: false, reason: `找不到 ${file}，无法核对宿主钉死的引擎版本` };
   }
@@ -124,11 +124,11 @@ function readPinnedVersion(root) {
 
 /** 把源目录复制到临时目录；返回临时目录路径，失败抛出带中文说明的错误。 */
 function copyToTemp(srcDir, destDir) {
-  const tempDir = path.join(
-    path.dirname(destDir),
+  const tempDir = join(
+    dirname(destDir),
     `lumen-cli.tmp-${process.pid}-${Date.now().toString(36)}`,
   );
-  fs.mkdirSync(path.dirname(destDir), { recursive: true });
+  fs.mkdirSync(dirname(destDir), { recursive: true });
   fs.cpSync(srcDir, tempDir, { recursive: true });
   return tempDir;
 }
@@ -174,7 +174,7 @@ function mismatchMessage(problems) {
 }
 
 function writeLock(lockPath, lock) {
-  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  fs.mkdirSync(dirname(lockPath), { recursive: true });
   fs.writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`, 'utf8');
 }
 
@@ -190,8 +190,8 @@ export function prepare({
   errorLog = console.error,
   now = () => new Date().toISOString(),
 } = {}) {
-  const destDir = path.join(root, 'src-tauri', 'binaries', 'lumen-cli');
-  const lockPath = path.join(root, 'src-tauri', 'sidecar.lock.json');
+  const destDir = join(root, 'src-tauri', 'binaries', 'lumen-cli');
+  const lockPath = join(root, 'src-tauri', 'sidecar.lock.json');
   const args = argv.slice(2);
   const updateLock = args.includes('--update-lock');
   const fetchRequested = args.includes('--fetch');
@@ -208,14 +208,14 @@ export function prepare({
     if (!fs.existsSync(srcEnv)) {
       return fail(errorLog, `LUMEN_SIDECAR_SRC 指向的路径不存在：${srcEnv}`);
     }
-    const srcDir = fs.statSync(srcEnv).isFile() ? path.dirname(srcEnv) : srcEnv;
-    if (path.resolve(srcDir) === path.resolve(destDir)) {
+    const srcDir = fs.statSync(srcEnv).isFile() ? dirname(srcEnv) : srcEnv;
+    if (resolve(srcDir) === resolve(destDir)) {
       return fail(
         errorLog,
         `LUMEN_SIDECAR_SRC 与目标目录相同（${destDir}），无需复制；直接跑校验即可。`,
       );
     }
-    if (!fs.existsSync(path.join(srcDir, 'lumen-cli.exe'))) {
+    if (!fs.existsSync(join(srcDir, 'lumen-cli.exe'))) {
       return fail(
         errorLog,
         `LUMEN_SIDECAR_SRC 指向的目录里没有 lumen-cli.exe：${srcDir}\n` +
@@ -382,6 +382,6 @@ function buildLock(actual, source, now) {
   };
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   process.exit(prepare({ argv: process.argv }));
 }

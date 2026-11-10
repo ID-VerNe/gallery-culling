@@ -355,6 +355,44 @@ describe('expectedFileCount（组 ≠ 文件）', () => {
   });
 });
 
+describe('expectedFileCount 跨语言契约（#132）', () => {
+  // 与后端 export.rs 的 `export_expected_file_count_contract_table` 同一张表，
+  // 两边各自断言同一组期望数（不做跨语言代码生成）。 steady 下扫描快照
+  // `hasXmp` == 落盘 `exists()` 时，前端预测必须等于后端 `exported`。
+  // 期望数 = useExportForm.ts:273-275 规则：
+  // raw=includeRaw&&hasRaw?1:0, xmp=includeRaw&&hasRaw&&hasXmp?1:0,
+  // jpg=includeJpg&&hasJpg?1:0，三者相加（hasJpg 在 mk 夹具里恒真）。
+  const cases = [
+    { name: '有 XMP、全勾 → 3', xmp: true, filter: 'all', includeRaw: true, includeJpg: true, expected: 3 },
+    { name: '无 XMP、全勾 → 2', xmp: false, filter: 'all', includeRaw: true, includeJpg: true, expected: 2 },
+    { name: '不勾 RAW 时 XMP 跟 RAW 一起消失 → 1', xmp: true, filter: 'all', includeRaw: false, includeJpg: true, expected: 1 },
+    { name: '不勾 JPG → RAW + XMP = 2', xmp: true, filter: 'all', includeRaw: true, includeJpg: false, expected: 2 },
+  ] as const;
+
+  it.each(cases)('$name', ({ xmp, filter, includeRaw, includeJpg, expected }) => {
+    const withCase = [mk('K', { rating: 5, xmp })];
+    const { result } = renderHook(() =>
+      useExportForm({ groups: withCase, lumenAvailable: true }),
+    );
+    act(() => result.current.setFilter(filter as never));
+    act(() => result.current.setIncludeRaw(includeRaw));
+    act(() => result.current.setIncludeJpg(includeJpg));
+    expect(result.current.expectedFileCount).toBe(expected);
+  });
+
+  // 分叉裁决 pin（前端侧）：扫描快照 hasXmp=false 但盘上有 .xmp 时，
+  // 前端预测是 2，而后端 export.rs `export_xmp_divergence_prefers_disk_exists`
+  // 以 `exists()` 为准导出 3。**以后端为准**，前端少算等重扫收敛。
+  // 这行 pin 住分叉已知且已裁决，不是任一侧计数写错。
+  it('分叉：快照 hasXmp=false 时前端预测 2（后端以盘为准导出 3）', () => {
+    const noXmpSnapshot = [mk('S', { rating: 5, xmp: false })];
+    const { result } = renderHook(() =>
+      useExportForm({ groups: noXmpSnapshot, lumenAvailable: true }),
+    );
+    expect(result.current.expectedFileCount).toBe(2);
+  });
+});
+
 describe('resetSignal（容器据此清空上次结果）', () => {
   it('任一输入变化都自增', () => {
     const { result } = setup();
