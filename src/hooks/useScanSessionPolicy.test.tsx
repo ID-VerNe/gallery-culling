@@ -8,18 +8,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { useScanSessionPolicy } from './useScanSessionPolicy';
+import { makeGroup } from '../test/factories';
 import type { PhotoGroupInfo } from '../types';
 import type { StartupHistory } from '../utils/scanSessionPolicy';
 
-const g = (id: string): PhotoGroupInfo => ({
-  id,
-  baseName: id.toUpperCase(),
-  status: 'JPG_ONLY',
-  rating: 0,
-  flag: 'none',
-  label: '',
-  hasXmp: false,
-});
+const g = (id: string): PhotoGroupInfo => makeGroup(id, { baseName: id.toUpperCase() });
 
 const five = ['a', 'b', 'c', 'd', 'e'].map(g);
 

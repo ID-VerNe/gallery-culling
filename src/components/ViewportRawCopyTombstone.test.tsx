@@ -20,6 +20,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { SplitCompareViewport } from './SplitCompareViewport';
 import { BeforeAfterViewport } from './BeforeAfterViewport';
 import { mockInvokeError } from '../test/setup';
+import { makeGroup } from '../test/factories';
 import type { LumenStatus, PhotoGroupInfo } from '../types';
 
 const VIEWPORT_SOURCES = [
@@ -71,16 +72,15 @@ describe('Split / BeforeAfter 解码失败分支（issue #121，收敛后双分�
   const UNAVAILABLE: LumenStatus = { ...AVAILABLE, available: false };
 
   function rawOnly(id: string): PhotoGroupInfo {
-    return {
-      id,
-      baseName: id,
+    // 默认字段（hasXmp / rating / flag / label 等）全交 makeGroup，只传差异：
+    // raw 显式注入 + status RAW_ONLY。jpg: undefined 是**真删键**（viewportImage
+    // 以 group.jpg?.path 判 rawOnly，默认补 jpg 会让 C2「无 JPG 的 RAW 分组不
+    // 回落 .NEF」语义失效，墓碑断言随红）。
+    return makeGroup(id, {
+      jpg: undefined,
       raw: { name: `${id}.NEF`, extension: 'NEF', path: `D:/shoot/${id}.NEF`, size: 1, mtime: 0 },
       status: 'RAW_ONLY',
-      rating: 0,
-      flag: 'none',
-      label: '',
-      hasXmp: false,
-    };
+    });
   }
 
   it('Split：引擎可用但解码失败 → 「RAW 预览暂不可用」（此前单分支会误报需启用）', async () => {
