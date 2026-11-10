@@ -1,30 +1,33 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
-  Star,
   Check,
   X,
   Columns3,
   Columns4,
-  Pin,
   Search,
   Images,
-  Target,
 } from 'lucide-react';
 import { PhotoGroupInfo } from '../types';
-import { api } from '../services/api';
 import { useGridKeyboard } from '../hooks/useGridKeyboard';
-import { LABEL_DOT_CLASS, LABEL_NAMES, isColorLabel } from '../utils/labels';
 import { QUERY_EXAMPLES, type QueryParseResult } from '../utils/queryMatch';
+import { GridPhotoCell, makeOptionId } from './GridPhotoCell';
+import { getSharedThumbnailLoader } from './thumbnailLoader';
+
+// issue #116：IO 层与 Cell 已移出本文件；旧导入路径经 re-export 保持兼容。
+export { GRID_THUMB_WIDTH, resetThumbnailLoaderForTest } from './thumbnailLoader';
+export type { ThumbnailLoader } from './thumbnailLoader';
 
 /**
  * 宫格子格子的高度（px）。
  *
- * **强绑定**：`GridPhotoCell` 的 `style.height` 直接用 `GRID_CELL_HEIGHT[columns]`；
- * 行容器（`grid gap-1.5 pb-1.5`）再贡献 `GRID_ROW_GAP_BOTTOM` 的底部内边距。
- * 两者相加即虚拟化要用的精确行高 `gridRowHeight()`。**改动任一高度（或 Tailwind
- * 的 `pb-*`）都必须同步改这里**，否则每行会产生固定偏差（1 万张 / 3 列累计
- * ≈ 6666px 的滚动漂移、scrollToIndex 落点偏移）。
+ * **强绑定**（issue #116）：`GridPhotoCell` 的 `style.height` 回到本表的
+ * `GRID_CELL_HEIGHT[columns]` —— Cell 侧通过父级传入的 `cellHeight` prop
+ * 拿到该值，不直接 import 本常量，避免 `ThumbnailGrid ↔ GridPhotoCell`
+ * 循环依赖。行容器（`grid gap-1.5 pb-1.5`）再贡献 `GRID_ROW_GAP_BOTTOM`
+ * 的底部内边距，两者相加即虚拟化要用的精确行高 `gridRowHeight()`。
+ * **改动任一高度（或 Tailwind 的 `pb-*`）都必须同步改这里**，否则每行会
+ * 产生固定偏差（1 万张 / 3 列累计 ≈ 6666px 的滚动漂移、scrollToIndex 落点偏移）。
  */
 const GRID_CELL_HEIGHT: Record<3 | 4, number> = { 3: 132, 4: 110 };
 
@@ -500,6 +503,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
                         index={itemIndex}
                         total={groups.length}
                         columns={columns}
+                        cellHeight={GRID_CELL_HEIGHT[columns]}
                         isSelected={isSelected}
                         isPinned={isPinned}
                         isCandidate={isCandidate}
@@ -575,399 +579,3 @@ const EmptyGridState: React.FC<{
     )}
   </div>
 );
-
-/* -------------------------------------------------------------------------- */
-
-/** Stable, valid HTML id for a grid option, derived from the group id. */
-function makeOptionId(groupId: string): string {
-  return `grid-opt-${groupId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-}
-
-/* -------------------------------------------------------------------------- */
-
-/**
- * 宫格缩略图请求宽度：**独立产品值**，恒为 200（issue #133 裁决）。
- *
- * 与后端/前端默认宽度（`DEFAULT_THUMBNAIL_WIDTH`）数值巧合一致，但语义独立：
- * 宫格格高固定（`GRID_CELL_HEIGHT`），只关心「够小格看清」的固定下限，
- * 不读设置页的缩略图宽度（100–600）。若将来要接跟随设置，须另提 feat issue
- * 并显式拆除 `ThumbnailGrid.test.tsx` 的「恒为 200」墓碑，不得静默改值。
- */
-export const GRID_THUMB_WIDTH = 200;
-
-/**
- * 缩略图请求的进程内「并发去重 + 结果缓存」。
- *
- * 每个进入虚拟窗口的格子都在挂载时请求缩略图；快速滚动/来回滚动会大量卸载与重挂，
- * 同一文件被反复请求。这把「同一路径 + 同宽度」收敛成一个 Promise：
- *  - **并发命中**：多个格子共享同一个 inflight Promise，只发一次 IPC；
- *  - **完成命中**：结果留在 cache，滚回来直接命中，不再发 IPC。
- *
- * 失败**不缓存**，并从 inflight 移除 —— 否则一次磁盘抖动会让该图永远空白、无法重试。
- * 作用域为模块级单例（issue #107）：跨 `ThumbnailGrid` 卸载存活，随进程结束释放。
- * 陈旧风险由缓存键承担：同路径同宽度即同图，路径不变则缓存仍对（与实例级
- * 「滚回来命中」同口径，只是命中的时间跨度从实例延长到进程）。
- *
- * 键用 `宽度|路径`：`group.jpg?.path` / `raw.path` 稳定，适合做键（见 §4 (b)）。
- */
-interface ThumbnailLoader {
-  /** EXIF 内嵌/缩放缩略图，resolve 已 `convertFileSrc` 的 URL。 */
-  thumbnail: (path: string, width: number) => Promise<string>;
-  /** LUMEN 预览路径；无预览视为失败（不缓存），触发调用方的内嵌回落。 */
-  lumenPreview: (path: string, width: number) => Promise<string>;
-}
-
-/** 通用去重器：命中缓存直接返回；命中 inflight 复用；否则发起并登记。 */
-function dedupeAsync<T>(
-  cache: Map<string, T>,
-  inflight: Map<string, Promise<T>>,
-  key: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  const cached = cache.get(key);
-  if (cached !== undefined) return Promise.resolve(cached);
-  const pending = inflight.get(key);
-  if (pending) return pending;
-  const p = run().then(
-    (value) => {
-      inflight.delete(key);
-      cache.set(key, value);
-      return value;
-    },
-    (err) => {
-      // 失败不缓存：移除 inflight 以便后续重挂能重试。
-      inflight.delete(key);
-      throw err;
-    },
-  );
-  inflight.set(key, p);
-  return p;
-}
-
-/** 模块级单例（issue #107）：懒初始化，进程内共享。 */
-let sharedLoader: ThumbnailLoader | null = null;
-
-function getSharedThumbnailLoader(): ThumbnailLoader {
-  if (!sharedLoader) sharedLoader = createThumbnailLoader();
-  return sharedLoader;
-}
-
-/**
- * 仅测试用：清掉模块级缓存，让每个用例从空缓存起测（`invokeCount` 按用例
- * 复位后，模块级缓存会跨用例残留 — 用唯一路径可避，但共用路径的用例需要它）。
- * 生产代码不得调用。
- */
-export function resetThumbnailLoaderForTest(): void {
-  sharedLoader = null;
-}
-
-function createThumbnailLoader(): ThumbnailLoader {
-  const thumbCache = new Map<string, string>();
-  const thumbInflight = new Map<string, Promise<string>>();
-  const lumenCache = new Map<string, string>();
-  const lumenInflight = new Map<string, Promise<string>>();
-
-  return {
-    thumbnail: (path, width) =>
-      dedupeAsync(thumbCache, thumbInflight, `${width}|${path}`, () =>
-        api.getThumbnail(path, width),
-      ),
-    lumenPreview: (path, width) =>
-      dedupeAsync(lumenCache, lumenInflight, `${width}|${path}`, async () => {
-        const r = await api.getLumenPreview(path, { width });
-        // 无预览路径 = 本次拿不到（引擎忙/失败），当作失败：不缓存、走内嵌回落。
-        if (!r.previewPath) throw new Error('lumen preview unavailable');
-        return r.previewPath;
-      }),
-  };
-}
-
-interface GridPhotoCellProps {
-  group: PhotoGroupInfo;
-  index: number;
-  total: number;
-  columns: 3 | 4;
-  isSelected: boolean;
-  isPinned: boolean;
-  /** 该格是否是对比候选（钉左基准时的右视口照片）。 */
-  isCandidate?: boolean;
-  /** B1：点击回调，携带事件以便识别 Ctrl/Shift 修饰键。 */
-  onClick: (e: React.MouseEvent) => void;
-  /** B6：该格写盘失败、尚未同步到 XMP。 */
-  isUnsynced?: boolean;
-  /** B6：点击"未同步"角标重试。 */
-  onRetrySync?: (group: PhotoGroupInfo) => void;
-  /** 见 ThumbnailGridProps.lumenThumbnails */
-  lumenThumbnails?: boolean;
-  /** 缩略图加载器（去重 + 缓存），模块级单例（issue #107）。 */
-  loader: ThumbnailLoader;
-}
-
-const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
-  group,
-  index,
-  total,
-  columns,
-  isSelected,
-  isPinned,
-  isCandidate = false,
-  onClick,
-  isUnsynced = false,
-  onRetrySync,
-  lumenThumbnails = false,
-  loader,
-}) => {
-  // 三态：`null` 加载中 · `undefined` 两条路都失败 · 字符串 有图。
-  // 之前用 null 同时表示"加载中"和"失败"，回落也失败时格子会永远显示加载中。
-  const [thumbSrc, setThumbSrc] = useState<string | null | undefined>(null);
-  // PB-3：按下即时反馈。原实现只有 onMouseDown preventDefault + onClick 选中，
-  // 按住期间零响应（用户感知「点了没反应」）。onPointerDown 立即加 pressed 态，
-  // pointerUp/Leave 复位 —— 选中态仍在 onClick 落定，避免与点击解耦。
-  const [pressed, setPressed] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    const targetPath = group.jpg?.path || group.raw?.path;
-    if (!targetPath) return;
-
-    // 走带去重/缓存的 loader：并发与滚动回来的重复请求共享同一 Promise，不再重复 IPC。
-    const { thumbnail, lumenPreview } = loader;
-
-    // 兜住「回落也失败」的错误：磁盘/权限问题会让两条路同时失败，没有 catch 的话
-    // 格子会永远停在"加载中"（这正是本模块要避免的整屏空洞）。失败态用 undefined。
-    const loadFallback = () =>
-      thumbnail(targetPath, GRID_THUMB_WIDTH)
-        .then((url) => {
-          if (active) setThumbSrc(url);
-        })
-        .catch(() => {
-          if (active) setThumbSrc(undefined);
-        });
-
-    if (lumenThumbnails && group.raw?.path) {
-      // 引擎路径：RAW 由 LUMEN RAW 真实解码渲染（200px）。
-      // 无预览或抛错都静默回落到内嵌缩略图 —— 引擎抖动不该让宫格出现空洞。
-      lumenPreview(group.raw.path, GRID_THUMB_WIDTH)
-        .then((previewPath) => {
-          if (active) setThumbSrc(api.toAssetUrl(previewPath));
-        })
-        .catch(loadFallback);
-    } else {
-      loadFallback();
-    }
-
-    return () => {
-      active = false;
-    };
-  }, [group.jpg?.path, group.raw?.path, lumenThumbnails, loader]);
-
-  const flagBorder =
-    group.flag === 'pick'
-      ? 'border-emerald-500/40'
-      : group.flag === 'reject'
-      ? 'border-rose-500/40'
-      : 'border-border-default';
-
-  // One sentence that tells a screen-reader user everything the cell shows.
-  const description = [
-    `第 ${index + 1} / ${total} 张`,
-    group.baseName,
-    group.rating > 0 ? `${group.rating} 星` : '未打分',
-    group.flag === 'pick' ? '已保留' : group.flag === 'reject' ? '已淘汰' : null,
-    isColorLabel(group.label) ? `色标${LABEL_NAMES[group.label]}` : null,
-    group.raw ? '含 RAW' : null,
-    group.hasXmp ? '含 XMP' : null,
-    group.tone ? '已调色' : null,
-    group.edited ? '含精修成果' : null,
-    isPinned ? '已设为对比基准' : null,
-    isCandidate && !isPinned ? '当前对比候选' : null,
-  ]
-    .filter(Boolean)
-    .join('，');
-
-  return (
-    <div
-      role="option"
-      aria-selected={isSelected}
-      aria-setsize={total}
-      aria-posinset={index + 1}
-      aria-label={description}
-      id={makeOptionId(group.id)}
-      // L-07：焦点模型收口为「容器 aria-activedescendant」一套。单元格**不再**
-      // 可聚焦（原先 tabIndex={-1} 会被 mousedown 抢焦点，导致焦点离开 listbox、
-      // activedescendant 契约失效）；同时在 mousedown 上 preventDefault，
-      // 阻止点击把焦点从容器移走 —— 点击后方向键仍能继续导航。
-      onMouseDown={(e) => e.preventDefault()}
-      onPointerDown={() => setPressed(true)}
-      onPointerUp={() => setPressed(false)}
-      onPointerLeave={() => setPressed(false)}
-      onClick={onClick}
-      className={`relative rounded-lg flex flex-col overflow-hidden cursor-pointer transition-[border-color,transform] border text-left bg-background-surface-hover hover:bg-white/10 ${
-        pressed ? 'scale-[0.985]' : ''
-      } ${
-        isPinned
-          ? 'border-white/90 ring-1 ring-inset ring-white/90'
-          : isSelected
-          ? 'border-white/60 ring-1 ring-inset ring-white/60'
-          : isCandidate
-          ? 'border-sky-400/60 ring-1 ring-inset ring-sky-400/40'
-          : `hover:border-white/30 ${flagBorder}`
-      }`}
-      style={{ height: `${GRID_CELL_HEIGHT[columns]}px` }}
-    >
-      {/* Thumbnail Container */}
-      <div className="relative flex-1 bg-background-base overflow-hidden flex items-center justify-center p-0.5">
-        {thumbSrc ? (
-          <img
-            src={thumbSrc}
-            alt=""
-            width={columns === 3 ? 128 : 88}
-            height={columns === 3 ? 128 : 88}
-            style={{ imageOrientation: 'from-image' }}
-            className="w-full h-full object-contain pointer-events-none"
-            loading="lazy"
-          />
-        ) : thumbSrc === undefined ? (
-          <div
-            className="text-[10px] text-white/60 font-mono"
-            title="缩略图不可用：引擎与内嵌预览都读取失败"
-            role="img"
-            aria-label="缩略图不可用"
-          >
-            无预览
-          </div>
-        ) : (
-          <div role="status" aria-label="缩略图加载中" className="text-[10px] text-white/60 font-mono">加载中</div>
-        )}
-
-        {/* Top-Right Index */}
-        <div className="absolute top-1 right-1 bg-background-base/75 backdrop-blur px-1 py-[2px] rounded text-[10px] font-mono text-white/80 tabular-nums">
-          #{index + 1}
-        </div>
-
-        {/* B6：写盘失败 = 持久「未同步」角标（不随 toast 消失），点击可重试 */}
-        {isUnsynced && onRetrySync && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onRetrySync(group);
-            }}
-            className="focus-ring absolute top-6 right-1 bg-rose-500/90 hover:bg-rose-500 text-white rounded px-1 min-h-6 text-[10px] font-medium shadow-sm"
-            title="未同步到 XMP 侧边栏，点击重试"
-            aria-label="未同步到 XMP 侧边栏，点击重试同步"
-          >
-            未同步
-          </button>
-        )}
-
-        {/* Top-Left: Pinned / Pick / Reject badge + 色标色点 */}
-        <div className="absolute top-1 left-1 flex items-center gap-1">
-          {isPinned ? (
-            <div className="bg-white text-black rounded px-1 py-[2px] flex items-center gap-0.5 text-[10px] font-medium">
-              <Pin className="w-2.5 h-2.5 fill-black" aria-hidden="true" />
-              <span>基准</span>
-            </div>
-          ) : group.flag === 'pick' ? (
-            <div
-              className="bg-emerald-500/15 border border-emerald-500/30 text-emerald-500 rounded p-0.5"
-              aria-label="已标记保留"
-              role="img"
-            >
-              <Check className="w-2.5 h-2.5 stroke-[3]" aria-hidden="true" />
-            </div>
-          ) : group.flag === 'reject' ? (
-            <div
-              className="bg-rose-500/15 border border-rose-500/30 text-rose-500 rounded p-0.5"
-              aria-label="已标记淘汰"
-              role="img"
-            >
-              <X className="w-2.5 h-2.5 stroke-[3]" aria-hidden="true" />
-            </div>
-          ) : null}
-
-          {/* 色标色点：与旗标角标并排，而不是替换它 —— 红标和淘汰是两回事 */}
-          {isColorLabel(group.label) && (
-            <span
-              className={`w-2.5 h-2.5 rounded-full ring-1 ring-black/50 shadow-sm ${LABEL_DOT_CLASS[group.label]}`}
-              role="img"
-              aria-label={`色标：${LABEL_NAMES[group.label]}`}
-              title={`色标：${LABEL_NAMES[group.label]}`}
-            />
-          )}
-        </div>
-
-        {/* Bottom-Right Rating */}
-        {group.rating > 0 && (
-          <div className="absolute bottom-1 right-1 bg-background-base/85 backdrop-blur px-1 py-[2px] rounded flex items-center text-[10px] text-amber-300 font-medium gap-0.5 tabular-nums border border-border-default">
-            <Star
-              className="w-2.5 h-2.5 fill-amber-400 text-amber-400"
-              aria-hidden="true"
-            />
-            <span>{group.rating}</span>
-          </div>
-        )}
-
-        {/* Bottom-Left: 对比候选（与「基准」是不同角色，样式刻意区分） */}
-        {isCandidate && !isPinned && (
-          <div
-            className="absolute bottom-1 left-1 bg-sky-500/20 border border-sky-400/50 text-sky-200 rounded px-1 py-[2px] flex items-center gap-0.5 text-[10px] font-medium"
-            role="img"
-            aria-label="当前对比候选"
-          >
-            <Target className="w-2.5 h-2.5" aria-hidden="true" />
-            <span>候选</span>
-          </div>
-        )}
-      </div>
-
-      {/* Bottom Minimal File Stem & Badges */}
-      <div className="px-1.5 py-1 bg-background-base border-t border-border-default flex items-center justify-between text-[10px] font-mono shrink-0 gap-1">
-        <span
-          className="text-white/80 truncate min-w-0"
-          title={group.baseName}
-        >
-          {group.baseName}
-        </span>
-        <div className="flex items-center gap-0.5 shrink-0">
-          {group.raw && (
-            <span
-              className="text-[9px] tracking-[0.02em] text-white font-medium"
-              title="RAW 原片"
-              aria-hidden="true"
-            >
-              R
-            </span>
-          )}
-          {group.hasXmp && (
-            <span
-              className="text-[9px] tracking-[0.02em] text-amber-400 font-medium"
-              title="包含 XMP 调色/标记"
-              aria-hidden="true"
-            >
-              X
-            </span>
-          )}
-          {group.tone && (
-            <span
-              className="text-[9px] tracking-[0.02em] text-emerald-400 font-medium"
-              title="已调色"
-              aria-hidden="true"
-            >
-              T
-            </span>
-          )}
-          {group.edited && (
-            <span
-              className="text-[9px] tracking-[0.02em] text-purple-400 font-medium"
-              title="包含精修成果 (Luminar AI)"
-              aria-hidden="true"
-            >
-              E
-            </span>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-};
