@@ -79,6 +79,12 @@
       "why": "出厂镜头预设前后端一致（issue #125）：解析 TS 的 BUILTIN_LENS_PRESETS 与 Rust 的 builtin_lens_presets() 渲染成有序三元组逐条比对；改后端默认值而前端未同步时兜底/恢复默认会把旧表写回 DB，只有这条能变红"
     },
     {
+      "name": "check-watermark.mjs",
+      "cmd": ["node", "scripts/check-watermark.mjs"],
+      "shard": "static",
+      "why": "水印预设名四份一致 + 尺寸 8/35/14（issue #126）：解析 Rust 的 PRESET_NAMES/parse 臂/SIZE_MIN·MAX，与 TS 的 WATERMARK_PRESETS/WatermarkPresetName/三尺寸常量逐字比对；前端多加一名后端未改即整批拒绝，只有这条能提前变红"
+    },
+    {
       "name": "vitest",
       "cmd": ["node", "node_modules/vitest/vitest.mjs", "run", "--pool=vmForks"],
       "shard": "unit",
