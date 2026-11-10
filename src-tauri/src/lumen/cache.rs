@@ -9,6 +9,7 @@ use std::time::SystemTime;
 use serde_json::Value;
 
 use crate::cachekey::sha256_hex16;
+use crate::pathutil::canonicalize_or_self;
 
 use super::LumenError;
 use super::PreviewVariant;
@@ -61,7 +62,7 @@ pub fn lumen_cache_key_with_recipe(
     recipe: Option<&Value>,
 ) -> String {
     // 相对路径 canonicalize，保证同一文件不同写法同 key。
-    let abs = src.canonicalize().unwrap_or_else(|_| src.to_path_buf());
+    let abs = canonicalize_or_self(src);
     let variant_tag = match variant {
         PreviewVariant::Edited => "edited",
         PreviewVariant::Original => "orig",
