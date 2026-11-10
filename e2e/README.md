@@ -20,6 +20,7 @@ npm run e2e:render    # 真窗口：调色成片导出
 npm run e2e:preset    # 真窗口：LUMEN 预设 + 自动调色
 npm run e2e:detail    # 真窗口：RAW-only 1:1 细节（需要真实 ARW，见下）
 npm run e2e:ui        # 真窗口：状态栏常驻 / 按钮命中 / 左手别名（issue #53 → #62）
+npm run e2e:external  # 真窗口：外部打开回落链三条 toast 可见（issue #106 非提权半壁）
 npm run e2e           # 全档串起来（unit + rust + render + ui），全绿才算过
 ```
 
@@ -29,6 +30,7 @@ npm run e2e           # 全档串起来（unit + rust + render + ui），全绿�
 node e2e/run-inapp.mjs --scenario=render-export
 node e2e/run-inapp.mjs --scenario=lumen-preset
 node e2e/run-inapp.mjs --scenario=ui-contract
+node e2e/run-inapp.mjs --scenario=external-fallback
 node e2e/run-inapp.mjs --scenario=render-export --timeout=600000
 
 # detail-1to1 必须用**真实 ARW**：夹具里的 RAW 是 JPEG 改后缀，photo.export
@@ -115,6 +117,18 @@ Tauri 的 WebView2 不把 DOM 暴露给 Windows UI Automation，所以界面断�
   松开后必须消失。
 
 更新装完不自动重启（#49）依赖 NSIS 安装器与提权进程，应用内驱动够不到，仍留人工回签。
+
+## `external-fallback` 覆盖什么（issue #106 · 非提权半壁）
+
+外部打开的回落链（`useExternalApps.ts`）三条 toast 在**真窗口 DOM** 里可见：
+
+- F1：`api.openInPhotoshop` 回 `false`（PS 路径未配置/不存在，Rust 已回落默认程序）→ `role="status"` 出现「Photoshop 路径未配置或不存在，已改用默认程序打开。」；
+- F2：`openInPhotoshop` 抛错（catch 分支）→ 替身记账证明 `openInDefaultApp` 真被调，且 `role="status"` 出现「Photoshop 打开失败，已改用默认程序打开。」；
+- F3：回落也抛错 → `role="alert"` 出现「无法打开该照片」（错误级不自动消失）。
+
+场景在 dev bundle 里 monkey-patch `api.openInPhotoshop` / `api.openInDefaultApp`（同模块单例，调用点取属性即生效），既驱动前端完整分支，又把 `explorer.exe` 副作用挡在窗外。实现层的 jsdom 用例在 `src/hooks/useExternalApps.test.tsx`，本场景补真窗层。
+
+issue #106 的提权两场景（已开 PS 收不到 RAW / 新起 PS 未提权）要管理员真机 + UAC + 进程 IL 实测，应用内 e2e 够不到，仍留人工回签（issue 保持 OPEN）。
 
 ## 目录
 

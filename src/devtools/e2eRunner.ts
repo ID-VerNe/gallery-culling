@@ -17,6 +17,7 @@
  *     `VITE_E2E_NAMES` 给两张的 baseName）
  *   - `ui-contract`：主视口底栏的命中 / 静息收起 / 左手别名真窗口契约（issue #53）
  *     + 几何三件真窗断言（#100 色点白环同心 / #105 格头 5 控件单行 / #99 窄窗状态栏不压盖）
+ *   - `external-fallback`：外部打开回落链三条 toast 的真窗可见性（issue #106 非提权半壁）
  *   - `engine-download`：引擎缓存缺失 + 下载失败时，主界面可用并给出中文失败与重试（issue #75）
  *
  * 触发：`npm run e2e:render` / `npm run e2e:preset` / `npm run e2e:ui`（见 `e2e/run-inapp.mjs`），
@@ -24,9 +25,67 @@
  * 生产构建不包含本模块（`import.meta.env.DEV` 为 false 时被 tree-shake）。
  */
 
+import { api } from '../services/api';
+
 const LOG_ENDPOINT = '/__e2e_log';
 
 let seq = 0;
+
+/**
+ * 真窗场景里替换 `api.openInPhotoshop` / `api.openInDefaultApp` 的受控替身。
+ *
+ * 为什么能直接改：`api` 是普通对象（`src/services/api.ts` 的 `export const api = {…}`），
+ * 调用点 `api.openInPhotoshop(…)` 是**取值即取属性**，patch 在触发前完成即可生效；
+ * 且 e2eRunner 与应用同 bundle，import 到的是同一模块实例。
+ * 替身同时记账调用序列，让「回落真实发生」可断言，而不只是「弹了 toast」。
+ */
+interface ExternalApiFake {
+  /** `openInPhotoshop` 的行为：回 false（路径缺失回落）或 reject（启动抛错）。 */
+  photoshop: 'false' | 'reject';
+  /** `openInDefaultApp` 是否抛错（双失败分支）。 */
+  defaultAppRejects: boolean;
+  /** `openInPhotoshop` 收到的目标路径序列。 */
+  photoshopCalls: string[];
+  /** `openInDefaultApp` 收到的目标路径序列。 */
+  defaultAppCalls: string[];
+  /** 还原成真实实现（场景结束 / 出错时用）。 */
+  restore: () => void;
+}
+
+function installExternalApiFake(): ExternalApiFake {
+  const fake: ExternalApiFake = {
+    photoshop: 'false',
+    defaultAppRejects: false,
+    photoshopCalls: [],
+    defaultAppCalls: [],
+    restore: () => {},
+  };
+  const realPhotoshop = api.openInPhotoshop;
+  const realDefaultApp = api.openInDefaultApp;
+  api.openInPhotoshop = async (filePath: string, customPsPath?: string) => {
+    fake.photoshopCalls.push(filePath);
+    void customPsPath;
+    if (fake.photoshop === 'false') return false;
+    throw new Error('e2e: 模拟 openInPhotoshop 抛错（issue #106 F2/F3）');
+  };
+  api.openInDefaultApp = async (filePath: string) => {
+    fake.defaultAppCalls.push(filePath);
+    if (fake.defaultAppRejects) throw new Error('e2e: 模拟 openInDefaultApp 抛错（issue #106 F3）');
+    return true;
+  };
+  fake.restore = () => {
+    api.openInPhotoshop = realPhotoshop;
+    api.openInDefaultApp = realDefaultApp;
+  };
+  return fake;
+}
+
+/** 某一类 toast 区的全部文本（去空白折叠，`\n` 文案也能匹配）。 */
+function toastRegionText(role: 'status' | 'alert'): string {
+  return Array.from(document.querySelectorAll<HTMLElement>(`[role="${role}"]`))
+    .map((n) => (n.textContent || '').replace(/\s+/g, ' '))
+    .join('\n');
+}
 
 /** 记一行日志：console + POST 落盘（顺序由 seq 保证可读）。 */
 function raw(msg: string) {
@@ -1614,6 +1673,81 @@ async function scenarioEngineDownload(el: () => string) {
   }
 }
 
+/**
+ * 场景：外部打开回落链的三条 toast 在真窗口里可见（issue #106 · 非提权半壁）。
+ *
+ * issue #106 的提权两场景（已开 PS 收不到 RAW / 新起 PS 未提权）需要管理员
+ * 真机 + UAC + 进程 IL 实测，应用内 e2e 够不到，留人工回签；这里锁的是
+ * #110 方向 D「静默回落必须可见」在**真窗 DOM** 里的三条分支：
+ *   F1  `openInPhotoshop` 回 false（PS 路径缺失/不存在，Rust 已回落默认程序）
+ *       → `role="status"` 出现「Photoshop 路径未配置或不存在…」；
+ *   F2  `openInPhotoshop` 抛错（catch 分支）→ 前端真实回落 `openInDefaultApp`
+ *       （替身记账可证），且 `role="status"` 出现「Photoshop 打开失败…」；
+ *   F3  回落也抛错 → `role="alert"` 出现「无法打开该照片」（错误不自动消失，
+ *       绝不把失败说成成功）。
+ *
+ * 为什么用替身而不是改设置走真 Rust：真回落会 `explorer.exe` 拉起系统看图器，
+ * 把副作用带进 e2e 环境；替身既驱动前端完整分支，又把账记下来。
+ * 实现层的 jsdom 用例在 `src/hooks/useExternalApps.test.tsx`，本场景补真窗层。
+ */
+async function scenarioExternalFallback(jpgFolder: string, el: () => string) {
+  if (!(await scanFolders(jpgFolder, '', 12, el))) return;
+  if (!(await clickCell('IMG_006', el))) return;
+
+  const fake = installExternalApiFake();
+  try {
+    const openExternalBtn = () => findButton('外部打开');
+    raw(`[${el()}] 「外部打开」按钮 = ${!!openExternalBtn()}`);
+    if (!openExternalBtn()) {
+      raw(`[${el()}] body 快照: ${document.body.innerText.replace(/\s+/g, ' ').slice(0, 400)}`);
+      return;
+    }
+
+    // ── F1：PS 路径缺失回落（openInPhotoshop 回 false）──────────
+    fake.photoshop = 'false';
+    fake.defaultAppRejects = false;
+    openExternalBtn()!.click();
+    const f1Seen = await waitFor(
+      () => (/Photoshop 路径未配置或不存在/.test(toastRegionText('status')) ? true : null),
+      10_000,
+      200,
+    );
+    raw(`[${el()}] >>> 断言F1 路径缺失回落 toast 可见 = ${!!f1Seen}`);
+    raw(
+      `[${el()}] F1 读数：openInPhotoshop 调用 ${fake.photoshopCalls.length} 次 · openInDefaultApp 调用 ${fake.defaultAppCalls.length} 次（Rust 侧已回落，前端不二次调用）`,
+    );
+
+    // ── F2：PS 抛错 → catch 分支回落默认程序 + toast ──────────
+    fake.photoshop = 'reject';
+    fake.defaultAppRejects = false;
+    openExternalBtn()!.click();
+    const f2Seen = await waitFor(
+      () => (/Photoshop 打开失败，已改用默认程序打开/.test(toastRegionText('status')) ? true : null),
+      10_000,
+      200,
+    );
+    const f2FallbackHit = fake.defaultAppCalls.some((p) => p.includes('IMG_006'));
+    raw(`[${el()}] >>> 断言F2 catch 分支回落 toast 可见 = ${!!f2Seen}`);
+    raw(`[${el()}] >>> 断言F2b 回落默认程序真实发生 = ${f2FallbackHit}`);
+
+    // ── F3：双失败 → error toast（role=alert，不自动消失）──────
+    fake.defaultAppRejects = true;
+    openExternalBtn()!.click();
+    const f3Seen = await waitFor(
+      () => (/无法打开该照片/.test(toastRegionText('alert')) ? true : null),
+      10_000,
+      200,
+    );
+    raw(`[${el()}] >>> 断言F3 双失败 error toast 可见 = ${!!f3Seen}`);
+
+    raw(
+      `[${el()}] 全部调用记账：photoshop=${fake.photoshopCalls.length} defaultApp=${fake.defaultAppCalls.length}`,
+    );
+  } finally {
+    fake.restore();
+  }
+}
+
 /** 场景的附加素材/输出目录（缺省为空串，场景自行判断是否必需）。 */
 export interface E2EScenarioOptions {
   /** RAW 原片目录；不填则只扫 JPG。 */
@@ -1681,6 +1815,8 @@ export async function runE2E(
       await scenarioDetailOneToOne(jpgFolder, opts.raw || '', opts.names || '', el);
     } else if (scenario === 'ui-contract') {
       await scenarioUiContract(jpgFolder, el, opts.mixed || '', opts.wide || '');
+    } else if (scenario === 'external-fallback') {
+      await scenarioExternalFallback(jpgFolder, el);
     } else if (scenario === 'engine-download') {
       await scenarioEngineDownload(el);
     } else {
