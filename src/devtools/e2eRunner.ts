@@ -17,11 +17,20 @@
  *     `VITE_E2E_NAMES` 给两张的 baseName）
  *   - `ui-contract`：主视口底栏的命中 / 静息收起 / 左手别名真窗口契约（issue #53）
  *   - `engine-download`：引擎缓存缺失 + 下载失败时，主界面可用并给出中文失败与重试（issue #75）
+ *   - `session-restore`：退出 → 重启 → 同目录断点恢复（issue #108）。**两段进程**：
+ *     phase 1 点选第 N 张并落盘，编排器优雅关窗并读库，phase 2 重启后断言
+ *     「启动防抖未把 last_index 覆盖成 0」且底栏回到「当前第 N 张」
+ *   - `thumb-cache`：冷启动 / 切面板 / 重开三场景的缩略图 IPC 计数与磁盘缓存
+ *     复用（issue #107）。同为两段进程：phase 1 建立冷启动基线 + 异写法探键 +
+ *     切面板计数；phase 2 重开后断言磁盘缓存 mtime / 文件集不变
  *
  * 触发：`npm run e2e:render` / `npm run e2e:preset` / `npm run e2e:ui`（见 `e2e/run-inapp.mjs`），
  * 或手动 `VITE_E2E_SCENARIO=<场景> … npm run tauri dev`。
  * 生产构建不包含本模块（`import.meta.env.DEV` 为 false 时被 tree-shake）。
  */
+
+import { invoke } from '@tauri-apps/api/core';
+import { api } from '../services/api';
 
 const LOG_ENDPOINT = '/__e2e_log';
 
@@ -1338,6 +1347,284 @@ async function scenarioEngineDownload(el: () => string) {
   }
 }
 
+/** 宫格当前挂载的单元格数（虚拟列表只渲染可见行 + overscan）。 */
+function gridCellCount(): number {
+  return document.querySelectorAll('[role="option"]').length;
+}
+
+/** 读底栏计数器「N / M」；没有时返回 null（与旧 CDP 套件 readCounter 同口径）。 */
+function readCounterInApp(): { text: string; index: number; total: number } | null {
+  for (const node of document.querySelectorAll<HTMLElement>('[role="status"]')) {
+    const m = /^(\d+)\s*\/\s*(\d+)$/.exec((node.textContent || '').trim());
+    if (m) return { text: m[0], index: Number(m[1]), total: Number(m[2]) };
+  }
+  return null;
+}
+
+/** 读底栏当前照片 baseName（span.font-semibold，与旧 CDP 套件 readBaseName 同口径）。 */
+function readBaseNameInApp(): string {
+  const el = Array.from(document.querySelectorAll<HTMLSpanElement>('span.font-semibold')).find(
+    (s) => /^[A-Z]+_\w+$/.test(s.innerText.trim()),
+  );
+  return el ? el.innerText.trim() : '(无)';
+}
+
+/** Windows 路径统一成正斜杠（与旧套件 toPosix 同口径，避免盘符/斜杠写法干扰比较）。 */
+function toPosixInApp(p: string): string {
+  return String(p).split('\\').join('/');
+}
+
+/**
+ * 等缩略图 IPC 计数稳定（连续 1.5s 不再增长，或超时）。
+ * 「扫描完成」信号 ≠ 请求收口：可见格子挂载是异步排队的，固定 sleep 会把
+ * 还在途中的请求算成「切面板重发」（假红）或漏掉重复发送（假绿）。
+ */
+async function waitForIpcStable(windowMs = 1500, timeoutMs = 30_000): Promise<number> {
+  const t0 = Date.now();
+  let last = -1;
+  let stableSince = 0;
+  for (;;) {
+    await sleep(250);
+    if (thumbIpcCount !== last) {
+      last = thumbIpcCount;
+      stableSince = Date.now();
+    }
+    if (last > 0 && Date.now() - stableSince >= windowMs) return last;
+    if (Date.now() - t0 > timeoutMs) return last;
+  }
+}
+
+/**
+ * 同一文件的异写法：盘符小写 + 正斜杠。
+ * 缓存键做了 canonicalize 归一时，它与宫格请求的写法同键（命中进程内索引 /
+ * 磁盘缓存，不新生成）；去掉归一就是两个键 → 多生成一份缓存文件。
+ * 注意：phase 1 的探键会被进程内索引吸收（PathBuf 组件比较在 Windows 上
+ * 大小写/斜杠不敏感），测不出键分裂；真正的跨进程探键在 phase 2（T7）。
+ * 编排器按「缓存文件集是否变大」对账这条（浏览器里读不到磁盘）。
+ */
+function altSpelling(folder: string, file: string): string {
+  return `${folder}\\${file}`
+    .replace(/\\/g, '/')
+    .replace(/^([A-Z]):/, (_m, d: string) => `${d.toLowerCase()}:`);
+}
+
+/**
+ * issue #107 的 IPC 计数注入（dev-only）。
+ *
+ * 口径取舍：计数器装在 e2eRunner 里包裹 `api.getThumbnail`（全仓只有
+ * `thumbnailLoader.ts` 调它），数的是**前端去重后实际发出的 invoke 数** ——
+ * 正是「重复 IPC」定义的那一面；生产文件零 diff（本模块随 import.meta.env.DEV
+ * 整体消除），也不碰 Rust。备选「Rust 侧发事件」口径是后端收到数，同样可行，
+ * 但要改生产代码加 emit + 前端订阅，链路更长且 emit 本身有开销，不值。
+ * 包裹必须在首次请求前完成：runE2E 先于一切扫描执行，满足。
+ */
+let thumbIpcCount = 0;
+
+function installThumbIpcCounter(): void {
+  const orig = api.getThumbnail;
+  api.getThumbnail = async (filePath: string, width?: number) => {
+    thumbIpcCount += 1;
+    return orig(filePath, width);
+  };
+}
+
+/**
+ * 场景：会话断点跨重启恢复（issue #108）。
+ *
+ * 两段进程（编排器在中间优雅关窗 + 重开）：
+ *   phase 1：扫描 → 点到第 N 张 → 等防抖落盘 → in-app loadSession 读回核对。
+ *   phase 2：重启后**先不动界面**越过启动防抖窗，读库确认历史 last_index 没被
+ *            启动初值 0 覆盖（核心硬断言，变异「去掉 hasScanned 门控」必红），
+ *            再手动扫描同目录，断底栏回到「当前第 N 张」、当前照片仍是关闭前那张。
+ *
+ * N 不写死：phase 1 实测 counter 推出（编排器解析日志注入 expectIndex），
+ * 夹具排序变化不会让用例假红；断的是「位置跨重启不变」这条契约本身。
+ */
+async function scenarioSessionRestore(
+  jpgFolder: string,
+  phase: string,
+  opts: E2EScenarioOptions,
+  el: () => string,
+) {
+  if (phase !== '2') {
+    // ── phase 1：建立断点 ─────────────────────────────────
+    if (!(await scanFolders(jpgFolder, '', 12, el))) return;
+    if (!(await clickCell('IMG_007', el))) return;
+    await sleep(600);
+    const c = readCounterInApp();
+    const base1 = readBaseNameInApp();
+    raw(`[${el()}] >>> 读数 S1 关闭前 counter=${c?.text ?? '?'} base=${base1}`);
+    raw(
+      `[${el()}] >>> 断言S1 关闭前停在第 N 张（counter 合法且 N>0） = ${
+        !!c && c.index > 0 && c.total > 0
+      }`,
+    );
+    // 500ms 防抖窗 + save_session IPC 落盘，再让编排器读库对账。
+    await sleep(1_500);
+    const h1 = await api.loadSession(jpgFolder);
+    raw(`[${el()}] >>> 读数 S2 关闭前 in-app loadSession.lastIndex=${h1 ? h1[0] : 'null'}`);
+    raw(
+      `[${el()}] >>> 断言S2 关闭前 last_index 已落盘且等于 N-1 = ${
+        !!c && !!h1 && h1[0] === c.index - 1
+      }`,
+    );
+    raw(`[${el()}] === e2e phase1 done (session-restore) ===`);
+    return;
+  }
+
+  // ── phase 2：重启后 ──────────────────────────────────
+  const expectIndex = opts.expectIndex;
+  const expectBase = opts.expectBase;
+  // 能硬断言（N 由 phase 1 实测注入）才硬断言；手动单段跑时降级为读数。
+  const canHard = expectIndex !== undefined && expectIndex >= 0;
+
+  const jpgInput = await waitFor(
+    () => {
+      // 不能只等输入框存在：settings 回填是异步 IPC，框先在、值后到，
+      // 拿到空串会把 S4 误判成红。等**值**落地再读。
+      const v = document.querySelector<HTMLInputElement>(
+        'input[aria-label="JPG 照片文件夹路径"]',
+      )?.value;
+      return v ? v : null;
+    },
+    20_000,
+    400,
+  );
+  const val = jpgInput ?? '';
+  raw(`[${el()}] 重启后 JPG 输入框回填 = "${val}"`);
+  raw(`[${el()}] >>> 断言S4 重启后记住 JPG 目录 = ${toPosixInApp(val) === toPosixInApp(jpgFolder)}`);
+
+  // 启动防抖窗（500ms）+ 任何错误写入都已在这一拍发生；2.5s 是留了余量的「启动写入已定型」。
+  await sleep(2_500);
+  const h0 = await api.loadSession(jpgFolder);
+  raw(`[${el()}] >>> 读数 S5 启动防抖窗后 in-app lastIndex=${h0 ? h0[0] : 'null'}`);
+  raw(
+    `[${el()}] >>> 断言S5 启动写入未把历史 last_index 覆盖成 0 = ${
+      canHard ? h0 !== null && h0[0] === expectIndex : h0 !== null
+    }`,
+  );
+  raw(`[${el()}] === e2e startup-settled (session-restore) ===`);
+
+  // 应用刻意不在启动时自动扫描（#81 决策）；手动扫描触发 load_session_cmd 恢复。
+  if (!(await scanFolders(jpgFolder, '', 12, el))) return;
+  await sleep(800); // 会话恢复应用 + 底栏重渲染
+  const c2 = readCounterInApp();
+  const base2 = readBaseNameInApp();
+  const label =
+    document
+      .querySelector<HTMLElement>('[data-status-bar] [role="status"]')
+      ?.getAttribute('aria-label') ?? '';
+  raw(`[${el()}] >>> 读数 S7 重启后 counter=${c2?.text ?? '?'} base=${base2}`);
+  raw(
+    `[${el()}] >>> 断言S7 重启后底栏回到第 N 张 = ${
+      !!c2 && c2.index > 0 && (!canHard || c2.index === (expectIndex as number) + 1)
+    }`,
+  );
+  raw(
+    `[${el()}] >>> 断言S7b 底栏文案含「当前第 N 张」 = ${
+      canHard ? new RegExp(`当前第 ${(expectIndex as number) + 1} 张`).test(label) : !!label
+    }`,
+  );
+  raw(`[${el()}] >>> 断言S8 重启后当前照片仍是关闭前那张 = ${canHard ? base2 === expectBase : base2 !== '(无)'}`);
+  const h2 = await api.loadSession(jpgFolder);
+  raw(`[${el()}] >>> 读数 S9 扫描恢复后 lastIndex=${h2 ? h2[0] : 'null'}`);
+  raw(
+    `[${el()}] >>> 断言S9 扫描恢复路径未改写 last_index = ${
+      canHard ? !!h2 && h2[0] === expectIndex : h2 !== null
+    }`,
+  );
+  raw(`[${el()}] 场景结束`);
+}
+
+/**
+ * 场景：缩略图缓存三场景硬断言（issue #107）。
+ *
+ *   T1 冷启动：可见格子每格恰好一次 IPC（模块级 loader 去重，无重复发送）；
+ *   T3 phase 1 异写法直调：前端不重复发请求（同进程不变量 —— 进程内索引
+ *      ThumbIndexKey 的 PathBuf 按组件比较，会吸收拼写差异，测不出键分裂）；
+ *   T4 切调色面板再切回：宫格整树卸载重挂，IPC 计数不涨（模块级 loader 吸收）；
+ *   T5/T5b 重开后：前端进程内索引随进程清零、会重发（每格仍恰好一次）；
+ *   T7 phase 2 异写法探键（**跨进程主断言**，放在 scanFolders 之前抢冷索引窗口）：
+ *      全新进程索引为空，异写法只能靠「磁盘缓存键归一」命中既有缓存；变异
+ *      「file_fingerprint 去掉 canonicalize」在这里算出不同键 → 直调生成第 13
+ *      份缓存文件 → T7（返回值必须与正写法同一文件）与编排器 T6/T6b（磁盘文件集
+ *      + mtime 快照对账）双红。探键若放在宫格预热之后，会被进程内索引吸收而假绿
+ *      （2026-11-10 三次实测：变异在二进制里活着 —— exe sha c5584ce1→1ce16234 ——
+ *      但 T3/T7 仍同哈希返回，PathBuf 组件比较吸收拼写差异）；
+ *   T2/T4/T6/T6b 由编排器在磁盘上对账（浏览器里读不到磁盘）。
+ */
+async function scenarioThumbCache(jpgFolder: string, phase: string, el: () => string) {
+  if (phase !== '2') {
+    // ── phase 1：冷启动基线 + 异写法探键 + 切面板 ────────
+    if (!(await scanFolders(jpgFolder, '', 12, el))) return;
+    // 先等请求收口再数格子：虚拟列表布局稳定后二者都是定值，顺序反过来会
+    // 把「布局稳定前快照的格子数」与「收口后的请求数」错配成假红。
+    const c1 = await waitForIpcStable();
+    const cells = gridCellCount();
+    raw(`[${el()}] >>> 读数 T1 冷启动 IPC=${c1} 可见格子=${cells}`);
+    raw(`[${el()}] >>> 断言T1 冷启动每格恰好一次 IPC（无重复发送） = ${c1 === cells && c1 > 0}`);
+
+    // 异写法探键（phase 1 同进程）：canonicalize 归一时命中同键，不新增文件。
+    // 注意本段探键会被进程内索引吸收（PathBuf 组件比较大小写/斜杠不敏感），
+    // 锁的是「前端不发重复请求」+ 同进程不变量；跨进程的键归一由 phase 2 T7 锁。
+    const alt = altSpelling(jpgFolder, 'IMG_001.jpg');
+    const altPath = await invoke<string>('get_thumbnail_cmd', { filePath: alt, width: 200 });
+    const cAlt = thumbIpcCount;
+    raw(`[${el()}] >>> 读数 T3 异写法（${alt}）直调返回 ${altPath.split(/[\\/]/).pop()}`);
+    raw(`[${el()}] >>> 断言T3 异写法未引起宫格重复请求 = ${cAlt === c1}`);
+
+    // 切调色面板再切回：宫格整树卸载重挂（useSidebarCrossFade，EXIT_MS=200）。
+    if (!(await clickCell('IMG_006', el))) return;
+    pressKey('e');
+    await sleep(800); // 退场卸载
+    pressKey('e');
+    await sleep(800); // 重挂 + 交叉淡入
+    const cellsBack = await waitFor(
+      () => (gridCellCount() >= cells ? gridCellCount() : null),
+      15_000,
+      300,
+    );
+    const c2 = thumbIpcCount;
+    raw(`[${el()}] >>> 读数 T4 切面板回来 IPC=${c2}（切前 ${cAlt}）格子=${cellsBack}`);
+    raw(
+      `[${el()}] >>> 断言T4 切面板回来不重发 IPC（模块级 loader 吸收） = ${
+        c2 === cAlt && !!cellsBack
+      }`,
+    );
+    raw(`[${el()}] === e2e phase1 done (thumb-cache) ===`);
+    return;
+  }
+
+  // ── phase 2：重开（全新进程）─────────────────────────
+  // 跨进程异写法探键（issue #107 核心）必须抢在 scanFolders 之前：本进程索引
+  // 一被宫格 12 次 IPC 喂暖，ThumbIndexKey 的 PathBuf 按组件比较（Windows 上
+  // 大小写/斜杠不敏感）就会吸收异写法，让探键短路在进程内索引、永远碰不到
+  // 磁盘键（2026-11-10 三次实测：变异在二进制里活着，T3/T7 仍同哈希返回）。
+  // 冷索引窗口里异写法直调只能靠「磁盘缓存键归一」命中既有缓存；变异
+  // 「file_fingerprint 去掉 canonicalize」会在这里算出不同键 → 直调生成第 13
+  // 份缓存文件 → T7 与编排器 T6/T6b 快照对账双红。
+  const alt2 = altSpelling(jpgFolder, 'IMG_001.jpg');
+  const altPath2 = await invoke<string>('get_thumbnail_cmd', { filePath: alt2, width: 200 });
+  const directPath = await invoke<string>('get_thumbnail_cmd', {
+    filePath: `${jpgFolder}\\IMG_001.jpg`,
+    width: 200,
+  });
+  raw(`[${el()}] >>> 读数 T7 跨进程异写法（${alt2}）直调返回 ${altPath2.split(/[\\/]/).pop()}`);
+  raw(
+    `[${el()}] >>> 断言T7 跨进程异写法与正写法同键（返回同一缓存文件） = ${
+      altPath2 === directPath
+    }`,
+  );
+  if (!(await scanFolders(jpgFolder, '', 12, el))) return;
+  const c3 = await waitForIpcStable();
+  const cells2 = gridCellCount();
+  raw(`[${el()}] >>> 读数 T5 重开后 IPC=${c3} 可见格子=${cells2}`);
+  raw(`[${el()}] >>> 断言T5 重开后每格仍恰好一次 IPC = ${c3 === cells2 && c3 > 0}`);
+  raw(`[${el()}] === e2e thumb restart-settled ===`);
+  await sleep(800);
+  raw(`[${el()}] 场景结束`);
+}
+
 /** 场景的附加素材/输出目录（缺省为空串，场景自行判断是否必需）。 */
 export interface E2EScenarioOptions {
   /** RAW 原片目录；不填则只扫 JPG。 */
@@ -1348,6 +1635,12 @@ export interface E2EScenarioOptions {
   out?: string;
   /** 逗号分隔的 baseName 清单（`detail-1to1` 用它锁定两张真实 RAW）。 */
   names?: string;
+  /** 重启套件：'1' 首启 / '2' 重启后（编排器经 VITE_E2E_PHASE 注入）。 */
+  phase?: string | number;
+  /** session-restore：phase 1 实测的 last_index（N-1）；phase 2 硬断言用。 */
+  expectIndex?: number;
+  /** session-restore：phase 1 实测的当前照片 baseName。 */
+  expectBase?: string;
 }
 
 /** 入口：由 main.tsx 在 dev 下从 Vite 的 `/__e2e_scenario` 取到配置后调用。 */
@@ -1405,6 +1698,11 @@ export async function runE2E(
       await scenarioUiContract(jpgFolder, el, opts.mixed || '');
     } else if (scenario === 'engine-download') {
       await scenarioEngineDownload(el);
+    } else if (scenario === 'session-restore') {
+      await scenarioSessionRestore(jpgFolder, String(opts.phase ?? '1'), opts, el);
+    } else if (scenario === 'thumb-cache') {
+      installThumbIpcCounter();
+      await scenarioThumbCache(jpgFolder, String(opts.phase ?? '1'), el);
     } else {
       raw(`[${el()}] 未知场景: ${scenario}`);
     }

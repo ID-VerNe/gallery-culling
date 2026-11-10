@@ -13,6 +13,8 @@
  * 用法：
  *   node e2e/run-inapp.mjs --scenario=render-export
  *   node e2e/run-inapp.mjs --scenario=lumen-preset
+ *   node e2e/run-inapp.mjs --scenario=session-restore
+ *   node e2e/run-inapp.mjs --scenario=thumb-cache
  *   node e2e/run-inapp.mjs --scenario=render-export --timeout=600000
  *
  * 退出码：全绿 0，断言失败 1，启动/超时 2。
@@ -24,9 +26,11 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import {
   spawnDevTree,
   killApp,
+  killDevTree,
   closeAppGracefully,
   waitForLog,
   resetE2eDataDir,
@@ -74,6 +78,70 @@ function tailOf(file, n = 2000) {
     return '';
   }
 }
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 用 python sqlite3 读 sessions 表（issue #108 复现命令的同一口径）。
+ *
+ * 编排器侧读库，不经浏览器 —— 浏览器里读不到目录，账实对账必须在这边做。
+ * 返回 [[jpg_folder, last_index], …]；库文件不存在返回 []。
+ */
+function readSessionsTable() {
+  const db = path.join(E2E_DATA_DIR, 'gallery_culling.db');
+  if (!fs.existsSync(db)) return [];
+  const script = [
+    'import sqlite3,sys,json',
+    'rows = sqlite3.connect(sys.argv[1]).execute(',
+    '  "select jpg_folder,last_index from sessions").fetchall()',
+    'print(json.dumps(rows))',
+  ].join('\n');
+  const out = execFileSync('python', ['-c', script, db], { encoding: 'utf8' });
+  return JSON.parse(out);
+}
+
+/**
+ * sessions 表里某目录的 last_index。
+ *
+ * 键归一化与 Rust `normalize_session_key` 同口径（正斜杠 + 去尾分隔符 + 小写），
+ * 否则 Windows 下 `C:\...` 与库里存的小写正斜杠键对不上，会误判成「没有记录」。
+ */
+function sessionLastIndex(jpgFolder) {
+  const norm = (p) =>
+    String(p).trim().replace(/[/\\]+$/, '').replace(/\\/g, '/').toLowerCase();
+  const row = readSessionsTable().find((r) => norm(r[0]) === norm(jpgFolder));
+  return row ? row[1] : null;
+}
+
+/** 缩略图缓存目录快照：文件名 -> `size:mtimeMs`（mtime 变 = 重新生成过）。 */
+function snapshotCacheDir() {
+  const dir = path.join(E2E_DATA_DIR, 'cache');
+  const snap = {};
+  if (!fs.existsSync(dir)) return snap;
+  for (const f of fs.readdirSync(dir)) {
+    const p = path.join(dir, f);
+    try {
+      const st = fs.statSync(p);
+      if (st.isFile()) snap[f] = `${st.size}:${st.mtimeMs}`;
+    } catch {
+      /* 竞态删除忽略 */
+    }
+  }
+  return snap;
+}
+
+const sameSnap = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+/** 超时 / 失败路径的诊断输出 + 硬收尾（与既有超时分支同口径）。 */
+async function dumpTailsAndKill() {
+  console.error('--- e2e-app.log 尾部 ---\n' + (tailOf(LOG_FILE, 1500) || '(空)'));
+  console.error('--- tauri-dev.log 尾部 ---\n' + (tailOf(DEV_LOG) || '(空)'));
+  await closeAppGracefully().catch(() => {});
+  killApp();
+}
+
+/** 需要两段进程（首启 → 优雅关闭 → 同数据目录重开）的场景。 */
+const RESTART_SCENARIOS = ['session-restore', 'thumb-cache'];
 
 /**
  * 真实开发库的指纹：`size + mtimeMs + sha256`（issue #81）。
@@ -234,6 +302,167 @@ function checkDetailCache(R) {
   R.check('没有残留的临时文件', leftovers.length === 0, leftovers.join(','));
 }
 
+/**
+ * 两段进程场景的编排（issue #108 / #107 的「重启」接线）。
+ *
+ * 为什么不走 `lib/app.mjs` 的 `restartApp`：它靠 CDP 重连页面，而本机 WebView2
+ * 的 CDP 端口只服务第一个请求（见文件头说明）。这里走**应用内驱动的零 CDP
+ * 重启路径**：`closeAppGracefully`（真窗口优雅关窗，触发 onCloseRequested →
+ * 会话 flush）→ `killDevTree`（整棵回收，否则 npm/vite 残留抢 1420）→
+ * `spawnDevTree` 同数据目录重开。**数据目录中途不能重置** —— 会话恢复与缓存
+ * 复用要证明的正是「跨进程活着」。
+ *
+ * 段间硬断言（python 读库 / 磁盘缓存快照）由本函数直接做并写进同一个 R；
+ * 返回拼接后的全量日志（两段都在同一份 e2e-app.log 里）供 [A] 段解析。
+ * 超时返回 null（调用方 exit 2）。
+ */
+async function runRestartScenario(scenario, commonEnv, R, timeoutMs) {
+  const envFor = (phase) => ({
+    ...commonEnv,
+    VITE_E2E_PHASE: phase,
+  });
+
+  console.log('--- 启动应用（phase 1 / 首启）---');
+  await spawnDevTree({ logFile: DEV_LOG, extraEnv: envFor('1') });
+  let hit = await waitForLog(LOG_FILE, (c) => /=== e2e phase1 done \(/.test(c), { timeoutMs });
+  if (!hit) {
+    console.error(`\nphase 1 未在 ${Math.round(timeoutMs / 1000)}s 内结束。`);
+    await dumpTailsAndKill();
+    return null;
+  }
+  const log1 = hit.content;
+  console.log(`phase 1 结束（${Math.round(hit.elapsedMs / 1000)}s）`);
+
+  let expectIndex = -1;
+  let expectBase = '';
+  let snap1 = null;
+
+  console.log('\n[B\'] 段间硬断言（python sqlite / 磁盘缓存快照）');
+  if (scenario === 'session-restore') {
+    const s1 = log1.match(/counter=(\d+) \/ (\d+) base=(\S+)/);
+    R.check(
+      'S1 解析到 phase 1 实测读数（counter / base）',
+      !!s1,
+      s1 ? `${s1[1]} / ${s1[2]} base=${s1[3]}` : '日志里没有 S1 读数行',
+    );
+    if (s1) {
+      expectIndex = Number(s1[1]) - 1;
+      expectBase = s1[3];
+    }
+    const preClose = sessionLastIndex(JPG);
+    R.check(
+      'S2 关闭前 python sqlite 读 last_index = N-1',
+      preClose === expectIndex,
+      `db=${preClose} 期望=${expectIndex}`,
+    );
+  } else {
+    snap1 = snapshotCacheDir();
+    const t1 = log1.match(/冷启动 IPC=(\d+) 可见格子=(\d+)/);
+    R.check('T1 解析到冷启动读数', !!t1, t1 ? `IPC=${t1[1]} 格子=${t1[2]}` : '日志里没有 T1 读数行');
+    if (t1) {
+      R.check(
+        'T2 磁盘缓存文件数 = 冷启动 IPC 数（phase 1 不变量；变异杀灭在 T7/T6）',
+        Object.keys(snap1).length === Number(t1[1]),
+        `磁盘=${Object.keys(snap1).length} IPC=${t1[1]}`,
+      );
+    }
+    const t4 = log1.match(/切面板回来 IPC=(\d+)（切前 (\d+)）/);
+    R.check(
+      'T4 切面板回来 IPC 计数不涨（编排器侧重读日志对账）',
+      !!t4 && Number(t4[1]) === Number(t4[2]),
+      t4 ? `${t4[1]} vs ${t4[2]}` : '日志里没有 T4 读数行',
+    );
+  }
+
+  console.log('--- 优雅关闭并重启（in-app 路径，零 CDP）---');
+  await closeAppGracefully();
+  killDevTree();
+  await sleep(1500);
+
+  if (scenario === 'session-restore') {
+    const postClose = sessionLastIndex(JPG);
+    R.check(
+      'S3 优雅关闭后 last_index 仍 = N-1（close flush 未丢未覆盖）',
+      postClose === expectIndex,
+      `db=${postClose} 期望=${expectIndex}`,
+    );
+  }
+
+  const phase2Env = envFor('2');
+  if (scenario === 'session-restore') {
+    phase2Env.VITE_E2E_EXPECT_INDEX = String(expectIndex);
+    phase2Env.VITE_E2E_EXPECT_BASE = expectBase;
+  }
+  console.log('--- 启动应用（phase 2 / 重启后）---');
+  await spawnDevTree({ logFile: DEV_LOG, extraEnv: phase2Env });
+
+  if (scenario === 'session-restore') {
+    // 核心断言窗口：启动防抖（500ms）早已定型，此刻读库最能说明「未被 0 覆盖」。
+    hit = await waitForLog(
+      LOG_FILE,
+      (c) => /=== e2e startup-settled \(session-restore\) ===/.test(c),
+      { timeoutMs: 90_000 },
+    );
+    if (!hit) {
+      console.error('\nphase 2 未等到 startup-settled 标记。');
+      await dumpTailsAndKill();
+      return null;
+    }
+    const startup = sessionLastIndex(JPG);
+    R.check(
+      'S5 启动防抖窗后 python sqlite 读 last_index 仍 = N-1（未被 0 覆盖）',
+      startup === expectIndex,
+      `db=${startup} 期望=${expectIndex}`,
+    );
+  } else {
+    hit = await waitForLog(LOG_FILE, (c) => /=== e2e thumb restart-settled ===/.test(c), {
+      timeoutMs: 120_000,
+    });
+    if (!hit) {
+      console.error('\nphase 2 未等到 thumb restart-settled 标记。');
+      await dumpTailsAndKill();
+      return null;
+    }
+    const snapMid = snapshotCacheDir();
+    R.check(
+      'T6 磁盘缓存跨重启复用（文件集 + size + mtime 全不变）',
+      !!snap1 && sameSnap(snap1, snapMid),
+      `phase1=${JSON.stringify(snap1).slice(0, 240)} phase2=${JSON.stringify(snapMid).slice(0, 240)}`,
+    );
+  }
+
+  hit = await waitForLog(LOG_FILE, (c) => /=== e2e done \(/.test(c), { timeoutMs });
+  if (!hit) {
+    console.error(`\nphase 2 未在 ${Math.round(timeoutMs / 1000)}s 内结束。`);
+    await dumpTailsAndKill();
+    return null;
+  }
+  console.log(`phase 2 结束（${Math.round(hit.elapsedMs / 1000)}s）`);
+
+  if (scenario === 'thumb-cache') {
+    const t5 = hit.content.match(/重开后 IPC=(\d+) 可见格子=(\d+)/);
+    R.check('T5 解析到重开读数', !!t5, t5 ? `IPC=${t5[1]} 格子=${t5[2]}` : '日志里没有 T5 读数行');
+    if (t5) {
+      R.check(
+        'T5b 重开后每格仍恰好一次 IPC（前端重发但无重复）',
+        Number(t5[1]) === Number(t5[2]),
+        `IPC=${t5[1]} 格子=${t5[2]}`,
+      );
+    }
+    const snapFinal = snapshotCacheDir();
+    R.check('T6b 场景收尾时磁盘缓存仍未变', sameSnap(snap1, snapFinal), '见 T6 明细');
+  } else {
+    const final = sessionLastIndex(JPG);
+    R.check(
+      'S10 场景收尾 python sqlite 读 last_index 仍 = N-1',
+      final === expectIndex,
+      `db=${final} 期望=${expectIndex}`,
+    );
+  }
+
+  return hit.content;
+}
+
 async function main() {
   const t0 = Date.now();
   console.log(`=== 应用内 e2e：${scenario} ===`);
@@ -316,46 +545,50 @@ async function main() {
   fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
   fs.writeFileSync(LOG_FILE, '', 'utf8');
 
-  console.log('--- 启动应用（首次/改动 Rust 要编译，耐心等）---');
-  await spawnDevTree({
-    logFile: DEV_LOG,
-    extraEnv: {
-      VITE_E2E_SCENARIO: scenario,
-      VITE_E2E_JPG: JPG,
-      VITE_E2E_RAW: scenario === 'detail-1to1' ? detailRaw : RAW,
-      VITE_E2E_MIXED: fx.mixedDir,
-      VITE_E2E_OUT: OUT,
-      VITE_E2E_NAMES: detailNames,
-      // issue #75：只有 engine-download 场景才覆盖下载源与缓存根目录；
-      // 其余场景保持真实应用行为（缓存缺失时从 Release 资产下载）。
-      ...(engineUrl
-        ? {
-            GALLERY_ENGINE_URL: engineUrl,
-            GALLERY_ENGINE_CACHE_DIR: engineCacheDir,
-          }
-        : {}),
-      // 刻意**不传** WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS：
-      //   1. 应用内驱动不需要 CDP（本机 CDP 也只服务第一个请求，连不上）；
-      //   2. main.rs 只在变量**未设置**时才写 `--in-process-gpu`，这里一旦传了
-      //      别的值就会把它抹掉 → GPU 子进程 9 连崩 → 白屏 +
-      //      `msedgewebview2 has stopped working`（2026-10-17 实际踩到的回归）。
-      // 需要加参数时请用 `webviewArgs()`，它会显式带上 `--in-process-gpu`。
-    },
-  });
+  const commonEnv = {
+    VITE_E2E_SCENARIO: scenario,
+    VITE_E2E_JPG: JPG,
+    VITE_E2E_RAW: scenario === 'detail-1to1' ? detailRaw : RAW,
+    VITE_E2E_MIXED: fx.mixedDir,
+    VITE_E2E_OUT: OUT,
+    VITE_E2E_NAMES: detailNames,
+    // issue #75：只有 engine-download 场景才覆盖下载源与缓存根目录；
+    // 其余场景保持真实应用行为（缓存缺失时从 Release 资产下载）。
+    ...(engineUrl
+      ? {
+          GALLERY_ENGINE_URL: engineUrl,
+          GALLERY_ENGINE_CACHE_DIR: engineCacheDir,
+        }
+      : {}),
+    // 刻意**不传** WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS：
+    //   1. 应用内驱动不需要 CDP（本机 CDP 也只服务第一个请求，连不上）；
+    //   2. main.rs 只在变量**未设置**时才写 `--in-process-gpu`，这里一旦传了
+    //      别的值就会把它抹掉 → GPU 子进程 9 连崩 → 白屏 +
+    //      `msedgewebview2 has stopped working`（2026-10-17 实际踩到的回归）。
+    // 需要加参数时请用 `webviewArgs()`，它会显式带上 `--in-process-gpu`。
+  };
 
-  console.log('--- 等待场景跑完（e2e/.tmp/e2e-app.log）---');
-  const hit = await waitForLog(LOG_FILE, (c) => /=== e2e done \(/.test(c), { timeoutMs });
-  if (!hit) {
-    console.error(`\n场景未在 ${Math.round(timeoutMs / 1000)}s 内结束。`);
-    console.error('--- e2e-app.log 尾部 ---\n' + (tailOf(LOG_FILE, 1500) || '(空)'));
-    console.error('--- tauri-dev.log 尾部 ---\n' + (tailOf(DEV_LOG) || '(空)'));
-    await closeAppGracefully().catch(() => {});
-    // 只关窗口会留下 npm/vite（见 lib/app.mjs 的重启注释）；超时路径同样要硬收尾，
-    // 否则随后的签名构建可能被残留进程占着 1420 端口 / 锁住 target 目录。
-    killApp();
-    return 2;
+  const R = createReporter();
+
+  let log = '';
+  if (RESTART_SCENARIOS.includes(scenario)) {
+    console.log('--- 两段进程：首启 → 优雅关闭 → 同数据目录重开 ---');
+    log = await runRestartScenario(scenario, commonEnv, R, timeoutMs);
+    if (log === null) return 2;
+  } else {
+    console.log('--- 启动应用（首次/改动 Rust 要编译，耐心等）---');
+    await spawnDevTree({ logFile: DEV_LOG, extraEnv: commonEnv });
+
+    console.log('--- 等待场景跑完（e2e/.tmp/e2e-app.log）---');
+    const hit = await waitForLog(LOG_FILE, (c) => /=== e2e done \(/.test(c), { timeoutMs });
+    if (!hit) {
+      console.error(`\n场景未在 ${Math.round(timeoutMs / 1000)}s 内结束。`);
+      await dumpTailsAndKill();
+      return 2;
+    }
+    console.log(`场景结束（${Math.round(hit.elapsedMs / 1000)}s）`);
+    log = hit.content;
   }
-  console.log(`场景结束（${Math.round(hit.elapsedMs / 1000)}s）`);
 
   console.log('--- 关闭应用 ---');
   await closeAppGracefully().catch(() => {});
@@ -366,9 +599,6 @@ async function main() {
     await new Promise((resolve) => badEngineServer.close(resolve));
     badEngineServer = null;
   }
-
-  const log = hit.content;
-  const R = createReporter();
 
   // ── A. UI 层（读场景日志）─────────────────────────────────
   console.log('\n[A] 场景日志断言');
