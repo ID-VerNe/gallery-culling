@@ -69,14 +69,14 @@ function mockStartup() {
   mockInvokeCommand('save_album_cmd', { path: 'D:/shoot/pick.galleryalbum', saved: 1 });
 }
 
-async function openAlbum() {
+async function openAlbum(path = 'D:/shoot/pick.galleryalbum') {
   render(<App />);
   // 等设置回填完成（扫描按钮可用 = settings 已到）
   const scanBtn = await screen.findByRole('button', { name: '扫描照片目录' });
   await waitFor(() => expect(scanBtn).toBeEnabled());
 
   fireEvent.click(screen.getByRole('button', { name: '选片集' }));
-  openMock.mockResolvedValueOnce('D:/shoot/pick.galleryalbum');
+  openMock.mockResolvedValueOnce(path);
   fireEvent.click(await screen.findByRole('button', { name: '打开选片集' }));
 }
 
@@ -90,6 +90,22 @@ describe('App —— 选片集', () => {
     expect((await screen.findAllByText('DSC04339')).length).toBeGreaterThan(0);
     expect(screen.queryAllByText('IMG_0001')).toHaveLength(0);
     expect(screen.getByText('选片集 pick.galleryalbum')).toBeInTheDocument();
+  });
+
+  // issue #122：后端经 Tauri 文件对话框回原生 Windows 路径（反斜杠是常态），
+  // 顶栏芯片必须只显示文件名。整串 `D:\shoot\album.galleryalbum` 露出就是
+  // 旧 baseNameOfPath 只切正斜杠的 bug 签名——正斜杠用例下它与 fileNameOf
+  // 等价、永远不会红，所以这条反斜杠×顶栏组合是唯一的红网。
+  it('顶栏选集名对 Windows 反斜杠路径只显示文件名，不露整串路径（issue #122）', async () => {
+    mockStartup();
+    const winPath = 'D:\\shoot\\album.galleryalbum';
+    mockInvokeCommand('open_album_cmd', { ...albumResult, path: winPath });
+    await openAlbum(winPath);
+
+    // 芯片是 fileNameOf 口径：只有文件名
+    expect(await screen.findByText('选片集 album.galleryalbum')).toBeInTheDocument();
+    // 反斜杠整串路径不得出现在任何渲染文本里
+    expect(screen.queryByText(/D:\\shoot/)).not.toBeInTheDocument();
   });
 
   it('选片集视图里改排序是本地排序，**不会**按旧目录重扫', async () => {
