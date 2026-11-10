@@ -166,7 +166,9 @@ describe('B8 P2 收敛（issue #18）', () => {
 
   describe('PD-7 ThumbnailGrid 可重试角标补 focus-ring', () => {
     it('「未同步」重试角标按钮的 className 含 focus-ring', () => {
-      const grid = readSrc('src/components/ThumbnailGrid.tsx');
+      // issue #116：Cell 已移出 ThumbnailGrid.tsx，角标按钮现存于 GridPhotoCell.tsx；
+      // 断言位置跟随搬家，语义不变。
+      const grid = readSrc('src/components/GridPhotoCell.tsx');
       // 该按钮在 :793，title 在 :800「未同步到 XMP 侧边栏，点击重试」，审计原
       // 证据无 focus-ring。从 title 反向取它所在的 className 行：title 行往前
       // 最近的 className= 即是它的。避免 [\s\S]* 跨标签匹配到更早的按钮。

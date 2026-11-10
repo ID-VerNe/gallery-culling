@@ -109,13 +109,15 @@ describe('validateLensPresetDraft', () => {
 });
 
 describe('出厂预设', () => {
-  it('6 条，与 Rust 侧 builtin_lens_presets() 同序', () => {
-    expect(BUILTIN_LENS_PRESETS).toHaveLength(6);
-    expect(BUILTIN_LENS_PRESETS[0]).toEqual({
-      name: 'Voigtlander APO-LANTHAR 50mm F2',
-      focal: '50mm',
-      aperture: 'f/2.0',
-    });
+  it('6 条全表锁死，与 Rust 侧 builtin_lens_presets() 同值同序（issue #125）', () => {
+    expect(BUILTIN_LENS_PRESETS).toEqual([
+      { name: 'Voigtlander APO-LANTHAR 50mm F2', focal: '50mm', aperture: 'f/2.0' },
+      { name: 'Voigtlander NOKTON 35mm F1.2', focal: '35mm', aperture: 'f/1.2' },
+      { name: 'TTArtisan 28mm F5.6', focal: '28mm', aperture: 'f/5.6' },
+      { name: '7Artisans 35mm F0.95', focal: '35mm', aperture: 'f/0.95' },
+      { name: 'Leica Summicron-M 50mm f/2', focal: '50mm', aperture: 'f/2.0' },
+      { name: 'Zeiss Planar T* 50mm f/1.4', focal: '50mm', aperture: 'f/1.4' },
+    ]);
   });
 
   it('空草稿三项皆空', () => {

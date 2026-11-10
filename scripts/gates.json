@@ -73,6 +73,12 @@
       "why": "三处手写导出名一致性（issue #124）：解析 Rust 的 EXPORT_MANIFEST_NAME/EXPORT_TMP_PREFIX，与 TS exportMessages.ts 及 e2e 字面量逐个比对；改任一处后只有这条能变红"
     },
     {
+      "name": "check-lens-parity.mjs",
+      "cmd": ["node", "scripts/check-lens-parity.mjs"],
+      "shard": "static",
+      "why": "出厂镜头预设前后端一致（issue #125）：解析 TS 的 BUILTIN_LENS_PRESETS 与 Rust 的 builtin_lens_presets() 渲染成有序三元组逐条比对；改后端默认值而前端未同步时兜底/恢复默认会把旧表写回 DB，只有这条能变红"
+    },
+    {
       "name": "check-watermark.mjs",
       "cmd": ["node", "scripts/check-watermark.mjs"],
       "shard": "static",
