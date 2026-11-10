@@ -3,8 +3,9 @@
  *
  * ## 防的是什么
  *
- * `BUILTIN_LENS_PRESETS` 在前端 `lensPresets.ts` 与后端 `models.rs` 的
- * `builtin_lens_presets()` 各存一份且注释自承「同源同序」：
+ * `BUILTIN_LENS_PRESETS` 在前端 `lensPresets.ts` 与后端的
+ * `builtin_lens_presets()` 各存一份且注释自承「同源同序」（issue #145 拆分后
+ * 该函数落在 `models/settings.rs`，façade `models.rs` 只做 re-export）：
  *
  * - 改后端默认值而前端未同步 → 前端读失败兜底（`useLensPresets.ts:40`）与
  *   「恢复默认」（`useLensPresets.ts:92`）会把旧列表写回 DB 覆盖新默认
@@ -21,14 +22,18 @@
  * 漂移变成红灯。渲染失败（解析不到定义、条目为零）同样判红——门禁的价值就在于
  * 「定义被删了」也被看见，不拿半份数据判绿。
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const TS_REL = join('src', 'utils', 'lensPresets.ts');
+// issue #145 把 models.rs 按域拆分后，builtin_lens_presets() 落在 models/settings.rs。
+// 这里扫 façade + models/ 域文件，定义在且仅在一个文件里才解析，避免再硬编码路径。
 const RUST_REL = join('src-tauri', 'src', 'models.rs');
+const RUST_DOMAIN_DIR = join('src-tauri', 'src', 'models');
+const RUST_LABEL = 'models.rs / models/*.rs';
 
 const TS_ENTRY_RE =
   /\{\s*name:\s*(?:'([^']*)'|"([^"]*)")\s*,\s*focal:\s*(?:'([^']*)'|"([^"]*)")\s*,\s*aperture:\s*(?:'([^']*)'|"([^"]*)")\s*\}/g;
@@ -68,14 +73,14 @@ export function parseTsLensPresets(source) {
 }
 
 /**
- * 从 `models.rs` 解析 `builtin_lens_presets()`。返回 `{ presets, problems }`。
+ * 从 `models.rs`（façade）或其 `models/` 域文件解析 `builtin_lens_presets()`。返回 `{ presets, problems }`。
  */
 export function parseRustLensPresets(source) {
   const start = source.search(/pub\s+fn\s+builtin_lens_presets\b/);
   if (start === -1) {
     return {
       presets: [],
-      problems: ['Rust 里解析不到 `pub fn builtin_lens_presets`（`models.rs`）'],
+      problems: [`Rust 里解析不到 \`pub fn builtin_lens_presets\`（${RUST_LABEL}）`],
     };
   }
   const suffix = source.slice(start);
@@ -88,10 +93,41 @@ export function parseRustLensPresets(source) {
   if (presets.length === 0) {
     return {
       presets,
-      problems: ['Rust `builtin_lens_presets()` 里解析不到条目（`models.rs`）'],
+      problems: [`Rust \`builtin_lens_presets()\` 里解析不到条目（${RUST_LABEL}）`],
     };
   }
   return { presets, problems: [] };
+}
+
+/**
+ * 定位 `pub fn builtin_lens_presets` 实际所在文件。issue #145 拆分后该函数在
+ * `models/settings.rs`，façade `models.rs` 只 re-export——两者都扫，命中且仅命中
+ * 一个文件才交给解析层；0 处 / 多处都交由调用方判红。返回路径数组（相对 root）。
+ */
+export function findRustLensPresetsPaths({
+  root = ROOT,
+  read = (path) => readFileSync(path, 'utf8'),
+  list = (dir) => readdirSync(dir),
+} = {}) {
+  const candidates = [join(root, RUST_REL)];
+  try {
+    for (const name of list(join(root, RUST_DOMAIN_DIR))) {
+      if (name.endsWith('.rs')) candidates.push(join(root, RUST_DOMAIN_DIR, name));
+    }
+  } catch {
+    /* models/ 尚未拆出时只有 façade */
+  }
+  const found = [];
+  for (const path of candidates) {
+    let source;
+    try {
+      source = read(path);
+    } catch {
+      continue;
+    }
+    if (/pub\s+fn\s+builtin_lens_presets\b/.test(source)) found.push(path);
+  }
+  return found;
 }
 
 /**
@@ -110,7 +146,7 @@ export function judgeLensParity({ ts, rust }) {
     if (tsList.length !== rustList.length) {
       problems.push(
         `条数不一致：TS ${tsList.length} 条、Rust ${rustList.length} 条` +
-          '（`lensPresets.ts` / `models.rs`）',
+          `（lensPresets.ts / ${RUST_LABEL}）`,
       );
     }
     const count = Math.max(tsList.length, rustList.length);
@@ -133,7 +169,7 @@ export function judgeLensParity({ ts, rust }) {
         if (tsItem[field] !== rustItem[field]) {
           problems.push(
             `第 ${index + 1} 条 ${field} 不一致：TS \`${tsItem[field]}\` 与 Rust \`${rustItem[field]}\`` +
-              '（`lensPresets.ts` / `models.rs`）',
+              `（lensPresets.ts / ${RUST_LABEL}）`,
           );
         }
       }
@@ -154,7 +190,7 @@ export function judgeLensParity({ ts, rust }) {
       `FAIL: 出厂镜头预设前后端不一致（${problems.length} 处）：\n` +
       problems.map((problem) => `  - ${problem}`).join('\n') +
       '\n  处置：确认哪一侧是新出厂表，把 `src/utils/lensPresets.ts` 的 ' +
-      '`BUILTIN_LENS_PRESETS` 与 `src-tauri/src/models.rs` 的 `builtin_lens_presets()` ' +
+      '`BUILTIN_LENS_PRESETS` 与后端的 `builtin_lens_presets()` ' +
       '同步到同值同序，别只改一边。单存（共享 JSON）另开 issue。',
   };
 }
@@ -163,24 +199,29 @@ export function judgeLensParity({ ts, rust }) {
 export function checkLensParity({
   root = ROOT,
   read = (path) => readFileSync(path, 'utf8'),
+  list = (dir) => readdirSync(dir),
 } = {}) {
   const tsPath = join(root, TS_REL);
-  const rustPath = join(root, RUST_REL);
   let tsSource;
-  let rustSource;
   try {
     tsSource = read(tsPath);
   } catch {
     return { ok: false, message: `FAIL: 读不到 ${relative(root, tsPath)}` };
   }
-  try {
-    rustSource = read(rustPath);
-  } catch {
-    return { ok: false, message: `FAIL: 读不到 ${relative(root, rustPath)}` };
+  const found = findRustLensPresetsPaths({ root, read, list });
+  let rust;
+  if (found.length !== 1) {
+    rust = {
+      presets: [],
+      problems: [
+        `Rust 里 \`pub fn builtin_lens_presets\` 命中 ${found.length} 处` +
+          `（${RUST_LABEL}；应为恰好 1 处）`,
+      ],
+    };
+  } else {
+    rust = parseRustLensPresets(read(found[0]));
   }
-  const ts = parseTsLensPresets(tsSource);
-  const rust = parseRustLensPresets(rustSource);
-  return judgeLensParity({ ts, rust });
+  return judgeLensParity({ ts: parseTsLensPresets(tsSource), rust });
 }
 
 function main() {
