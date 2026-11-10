@@ -143,16 +143,17 @@ fn union_stems(
     seen.into_iter().map(|s| s.to_string()).collect()
 }
 
-/// Scan a directory and collect file info.
+/// 枚举骨架共用：`read_dir`/`flatten`/取消检查点/`is_file`/扩展名小写提取。
 ///
 /// `cancel` 是协作式取消标志：枚举循环内每个 entry 前检查一次，置位即提前收工
 /// （返回部分结果；上层会在枚举后立即检查标志并短路为取消）。
-fn scan_directory(
+/// 回调收 `(entry, path, ext_lower)`，由调用方决定白名单过滤与单/双分类；
+/// dual 的单轮双分类约束（见 `scan_directory_dual`）由调用方保证。
+fn for_each_photo_file(
     dir_path: &Path,
-    allowed_exts: &[&str],
     cancel: &AtomicBool,
-) -> HashMap<String, PhotoFileInfo> {
-    let mut map = HashMap::new();
+    mut f: impl FnMut(&fs::DirEntry, &Path, &str),
+) {
     if let Ok(entries) = fs::read_dir(dir_path) {
         for entry in entries.flatten() {
             // 取消检查点：枚举阶段（每处理一个 entry）
@@ -165,15 +166,27 @@ fn scan_directory(
             }
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                 let ext_lower = ext.to_lowercase();
-                if allowed_exts.contains(&ext_lower.as_str()) {
-                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        let info = build_photo_file_info(&entry, &path, &ext_lower);
-                        map.insert(stem.to_lowercase(), info);
-                    }
-                }
+                f(&entry, &path, &ext_lower);
             }
         }
     }
+}
+
+/// Scan a directory and collect file info.
+fn scan_directory(
+    dir_path: &Path,
+    allowed_exts: &[&str],
+    cancel: &AtomicBool,
+) -> HashMap<String, PhotoFileInfo> {
+    let mut map = HashMap::new();
+    for_each_photo_file(dir_path, cancel, |entry, path, ext_lower| {
+        if allowed_exts.contains(&ext_lower) {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                let info = build_photo_file_info(entry, path, ext_lower);
+                map.insert(stem.to_lowercase(), info);
+            }
+        }
+    });
     map
 }
 
@@ -209,37 +222,21 @@ fn scan_directory_dual(
 ) {
     let mut jpg_map = HashMap::new();
     let mut raw_map = HashMap::new();
-    if let Ok(entries) = fs::read_dir(dir_path) {
-        for entry in entries.flatten() {
-            if cancel.load(Ordering::Relaxed) {
-                break;
-            }
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let Some(ext_lower) = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.to_lowercase())
-            else {
-                continue;
-            };
-            let target = if JPG_EXTENSIONS.contains(&ext_lower.as_str()) {
-                &mut jpg_map
-            } else if RAW_EXTENSIONS.contains(&ext_lower.as_str()) {
-                &mut raw_map
-            } else {
-                continue;
-            };
-            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                target.insert(
-                    stem.to_lowercase(),
-                    build_photo_file_info(&entry, &path, &ext_lower),
-                );
-            }
+    for_each_photo_file(dir_path, cancel, |entry, path, ext_lower| {
+        let target = if JPG_EXTENSIONS.contains(&ext_lower) {
+            &mut jpg_map
+        } else if RAW_EXTENSIONS.contains(&ext_lower) {
+            &mut raw_map
+        } else {
+            return;
+        };
+        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+            target.insert(
+                stem.to_lowercase(),
+                build_photo_file_info(entry, path, ext_lower),
+            );
         }
-    }
+    });
     (jpg_map, raw_map)
 }
 
@@ -323,6 +320,211 @@ pub fn probe_folder(folder: &str) -> Result<FolderProbe, String> {
     })
 }
 
+fn merge_xmp_metadata_into_exif(exif: &mut Option<ExifData>, xmp_meta: &XmpMetadata) {
+    if let Some(e) = exif.as_mut() {
+        if xmp_meta.lens_model.is_some() {
+            e.lens_model = xmp_meta.lens_model.clone();
+        }
+        if xmp_meta.focal_length.is_some() {
+            e.focal_length = xmp_meta.focal_length.clone();
+        }
+        if xmp_meta.aperture.is_some() {
+            e.aperture = xmp_meta.aperture.clone();
+        }
+    } else if xmp_meta.lens_model.is_some()
+        || xmp_meta.focal_length.is_some()
+        || xmp_meta.aperture.is_some()
+    {
+        *exif = Some(ExifData {
+            lens_model: xmp_meta.lens_model.clone(),
+            focal_length: xmp_meta.focal_length.clone(),
+            aperture: xmp_meta.aperture.clone(),
+            ..Default::default()
+        });
+    }
+}
+
+/// Assemble a single photo group from an optional JPG and RAW pair.
+///
+/// `is_viewer` is the mode switch: viewer reads the JPG sidecar only and
+/// maps flags through `legacy_flag_from_label`, pairing reads RAW sidecar
+/// first with JPG fallback and maps flags through `flag_from_xmp`. The
+/// sidecar double-read and flag bifurcation are load-bearing (issue #138
+/// hard constraints) and must not be unified.
+/// Returns `None` for `(None, None)` (caller skips, matching the old
+/// pairing `continue`).
+#[allow(clippy::too_many_arguments)]
+fn assemble_group(
+    stem_lower: &str,
+    jpg_opt: Option<PhotoFileInfo>,
+    raw_opt: Option<PhotoFileInfo>,
+    is_viewer: bool,
+    raw_store: &Store,
+    jpg_store: &Store,
+) -> Option<PhotoGroupInfo> {
+    let status = if is_viewer {
+        if jpg_opt.is_none() {
+            return None;
+        }
+        PhotoGroupStatus::JpgOnly
+    } else {
+        match (&jpg_opt, &raw_opt) {
+            (Some(_), Some(_)) => PhotoGroupStatus::Complete,
+            (Some(_), None) => PhotoGroupStatus::JpgOnly,
+            (None, Some(_)) => PhotoGroupStatus::RawOnly,
+            (None, None) => return None,
+        }
+    };
+
+    let mut has_xmp = false;
+    let mut rating = 0u8;
+    let mut xmp_meta: Option<XmpMetadata> = None;
+    let mut pairing_flag = "none".to_string();
+
+    if is_viewer {
+        let jpg = jpg_opt.as_ref().expect("viewer guarantees JPG");
+        let path_obj = Path::new(&jpg.path);
+        has_xmp = check_sidecar_exists(path_obj);
+        xmp_meta = if has_xmp {
+            let xmp_path = get_xmp_path(path_obj);
+            read_xmp_full(&xmp_path)
+        } else {
+            None
+        };
+    } else {
+        // Detect XMP from RAW first, then JPG
+        //
+        // 两条路径**各自独立判定**，不是 `if raw {} else if jpg {}`：
+        // 配了 RAW 目录后 sidecar 可能仍只存在于 JPG 旁（历史评级就是这么写的），
+        // 用 else 会把那份直接跳过，界面上表现为「配了 RAW 之后评的分全没了」。
+        // RAW 侧优先，JPG 侧兜底；两边都没有就不动。
+        let read_sidecar_of = |path: &str,
+                               has_xmp: &mut bool,
+                               rating: &mut u8,
+                               flag: &mut String,
+                               xmp_meta: &mut Option<XmpMetadata>| {
+            let p = Path::new(path);
+            if !check_sidecar_exists(p) {
+                return;
+            }
+            *has_xmp = true;
+            if let Some(m) = read_xmp_full(&get_xmp_path(p)) {
+                *rating = m.rating;
+                // 统一映射（Rating=-1 / Label 约定见 xmp::flag_from_xmp）
+                *flag = flag_from_xmp(&m);
+                *xmp_meta = Some(m);
+            }
+        };
+
+        if let Some(raw) = &raw_opt {
+            read_sidecar_of(
+                &raw.path,
+                &mut has_xmp,
+                &mut rating,
+                &mut pairing_flag,
+                &mut xmp_meta,
+            );
+        }
+        // JPG 侧仅在 RAW 侧没读到时才作为兜底，避免 RAW 侧的值被覆盖
+        if xmp_meta.is_none() {
+            if let Some(jpg) = &jpg_opt {
+                read_sidecar_of(
+                    &jpg.path,
+                    &mut has_xmp,
+                    &mut rating,
+                    &mut pairing_flag,
+                    &mut xmp_meta,
+                );
+            }
+        }
+    }
+
+    let base_name = jpg_opt
+        .as_ref()
+        .map(|j| {
+            Path::new(&j.path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(stem_lower)
+                .to_string()
+        })
+        .or_else(|| {
+            raw_opt.as_ref().map(|r| {
+                Path::new(&r.path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(stem_lower)
+                    .to_string()
+            })
+        })
+        .unwrap_or_else(|| stem_lower.to_string());
+
+    let flag = if is_viewer {
+        // 评级来自 XMP；旗标以本地 store 为准，旧文件回落 `Label` 约定。
+        // 注意「只有旗标、没有侧边栏」的照片：`xmp_meta` 为 None，也必须查 store，
+        // 否则 pick 会在下次扫描时消失。
+        let entry = store_entry(raw_store, jpg_store, &base_name);
+        let (flag_rating, resolved) = match &xmp_meta {
+            Some(m) => (
+                m.rating,
+                cullstore::resolve_flag(
+                    m.rejected,
+                    legacy_flag_from_label(&m.label),
+                    entry,
+                ),
+            ),
+            None => (0, cullstore::resolve_flag(false, "none", entry)),
+        };
+        rating = flag_rating;
+        resolved
+    } else {
+        // 旗标以本地 store 为准（旧文件回落 `Label` 约定）；`Rating=-1` 仍是
+        // 硬信号，外部工具写的淘汰必须立刻生效。
+        cullstore::resolve_flag(
+            xmp_meta.as_ref().map(|m| m.rejected).unwrap_or(false),
+            &pairing_flag,
+            store_entry(raw_store, jpg_store, &base_name),
+        )
+    };
+
+    // Read EXIF: prefer JPG (faster to read header), fallback to RAW
+    let mut exif = if let Some(jpg) = &jpg_opt {
+        read_exif_metadata(Path::new(&jpg.path))
+    } else if let Some(raw) = &raw_opt {
+        read_exif_metadata(Path::new(&raw.path))
+    } else {
+        None
+    };
+    if let Some(m) = &xmp_meta {
+        merge_xmp_metadata_into_exif(&mut exif, m);
+    }
+
+    let tone = xmp_meta.as_ref().and_then(extract_tone_from_xmp);
+    let edited = jpg_opt
+        .as_ref()
+        .and_then(|j| Path::new(&j.path).parent())
+        .or_else(|| raw_opt.as_ref().and_then(|r| Path::new(&r.path).parent()))
+        .and_then(|p| find_edited_version(p, &base_name));
+
+    Some(PhotoGroupInfo {
+        id: base_name.clone(),
+        base_name,
+        jpg: jpg_opt,
+        raw: raw_opt,
+        edited,
+        tone,
+        status,
+        rating,
+        flag,
+        // RAW 侧边栏优先、JPG 兜底 —— 与评级/旗标同一条读取路径，
+        // 不会出现「星级读 RAW、色标读 JPG」这种自相矛盾的组合。
+        label: xmp_meta.as_ref().map(|m| m.label.clone()).unwrap_or_default(),
+        has_xmp,
+        exif,
+        thumbnail_path: None,
+    })
+}
+
 /// Scan JPG and optional RAW folder and assemble pairs.
 ///
 /// - `cancel`：协作式取消标志。检查点位于：枚举循环内、逐组主循环每次迭代开头、
@@ -399,30 +601,6 @@ pub fn scan_folders(
         _ => Store::default(),
     };
 
-    fn merge_xmp_metadata_into_exif(exif: &mut Option<ExifData>, xmp_meta: &XmpMetadata) {
-        if let Some(e) = exif.as_mut() {
-            if xmp_meta.lens_model.is_some() {
-                e.lens_model = xmp_meta.lens_model.clone();
-            }
-            if xmp_meta.focal_length.is_some() {
-                e.focal_length = xmp_meta.focal_length.clone();
-            }
-            if xmp_meta.aperture.is_some() {
-                e.aperture = xmp_meta.aperture.clone();
-            }
-        } else if xmp_meta.lens_model.is_some()
-            || xmp_meta.focal_length.is_some()
-            || xmp_meta.aperture.is_some()
-        {
-            *exif = Some(ExifData {
-                lens_model: xmp_meta.lens_model.clone(),
-                focal_length: xmp_meta.focal_length.clone(),
-                aperture: xmp_meta.aperture.clone(),
-                ..Default::default()
-            });
-        }
-    }
-
     let mut groups: Vec<PhotoGroupInfo> = Vec::new();
 
     if is_viewer_mode || raw_files.is_empty() {
@@ -434,64 +612,17 @@ pub fn scan_folders(
             if cancel.load(Ordering::Relaxed) {
                 return Err(TASK_CANCELLED.to_string());
             }
-            let path_obj = Path::new(&jpg_info.path);
-            let has_xmp = check_sidecar_exists(path_obj);
-            let xmp_meta = if has_xmp {
-                let xmp_path = get_xmp_path(path_obj);
-                read_xmp_full(&xmp_path)
-            } else {
-                None
-            };
-
-            let base_name = path_obj
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or(&stem_lower)
-                .to_string();
-
-            // 评级来自 XMP；旗标以本地 store 为准，旧文件回落 `Label` 约定。
-            // 注意「只有旗标、没有侧边栏」的照片：`xmp_meta` 为 None，也必须查 store，
-            // 否则 pick 会在下次扫描时消失。
-            let entry = store_entry(&raw_store, &jpg_store, &base_name);
-            let (rating, flag) = match &xmp_meta {
-                Some(m) => (
-                    m.rating,
-                    cullstore::resolve_flag(
-                        m.rejected,
-                        legacy_flag_from_label(&m.label),
-                        entry,
-                    ),
-                ),
-                None => (0, cullstore::resolve_flag(false, "none", entry)),
-            };
-
-            let mut exif = read_exif_metadata(path_obj);
-            if let Some(m) = &xmp_meta {
-                merge_xmp_metadata_into_exif(&mut exif, m);
+            if let Some(group) = assemble_group(
+                &stem_lower,
+                Some(jpg_info),
+                None,
+                true,
+                &raw_store,
+                &jpg_store,
+            ) {
+                groups.push(group);
+                report("read", groups.len(), viewer_total);
             }
-
-            let tone = xmp_meta.as_ref().and_then(extract_tone_from_xmp);
-            let edited = path_obj
-                .parent()
-                .and_then(|p| find_edited_version(p, &base_name));
-
-            groups.push(PhotoGroupInfo {
-                id: base_name.clone(),
-                base_name,
-                jpg: Some(jpg_info),
-                raw: None,
-                edited,
-                tone,
-                status: PhotoGroupStatus::JpgOnly,
-                rating,
-                flag,
-                // 色标与评级同源（XMP），无色标就是空串
-                label: xmp_meta.as_ref().map(|m| m.label.clone()).unwrap_or_default(),
-                has_xmp,
-                exif,
-                thumbnail_path: None,
-            });
-            report("read", groups.len(), viewer_total);
         }
     } else {
         // Pairing mode: match JPG and RAW by stem
@@ -506,121 +637,17 @@ pub fn scan_folders(
             }
             let jpg_opt = jpg_files.get(&stem_lower).cloned();
             let raw_opt = raw_files.get(&stem_lower).cloned();
-
-            let status = match (&jpg_opt, &raw_opt) {
-                (Some(_), Some(_)) => PhotoGroupStatus::Complete,
-                (Some(_), None) => PhotoGroupStatus::JpgOnly,
-                (None, Some(_)) => PhotoGroupStatus::RawOnly,
-                (None, None) => continue,
-            };
-
-            // Detect XMP from RAW first, then JPG
-            //
-            // 两条路径**各自独立判定**，不是 `if raw {} else if jpg {}`：
-            // 配了 RAW 目录后 sidecar 可能仍只存在于 JPG 旁（历史评级就是这么写的），
-            // 用 else 会把那份直接跳过，界面上表现为「配了 RAW 之后评的分全没了」。
-            // RAW 侧优先，JPG 侧兜底；两边都没有就不动。
-            let mut has_xmp = false;
-            let mut rating = 0u8;
-            let mut flag = "none".to_string();
-            let mut xmp_meta: Option<XmpMetadata> = None;
-
-            let read_sidecar_of = |path: &str, has_xmp: &mut bool, rating: &mut u8,
-                                       flag: &mut String, xmp_meta: &mut Option<XmpMetadata>| {
-                let p = Path::new(path);
-                if !check_sidecar_exists(p) {
-                    return;
-                }
-                *has_xmp = true;
-                if let Some(m) = read_xmp_full(&get_xmp_path(p)) {
-                    *rating = m.rating;
-                    // 统一映射（Rating=-1 / Label 约定见 xmp::flag_from_xmp）
-                    *flag = flag_from_xmp(&m);
-                    *xmp_meta = Some(m);
-                }
-            };
-
-            if let Some(raw) = &raw_opt {
-                read_sidecar_of(&raw.path, &mut has_xmp, &mut rating, &mut flag, &mut xmp_meta);
+            if let Some(group) = assemble_group(
+                &stem_lower,
+                jpg_opt,
+                raw_opt,
+                false,
+                &raw_store,
+                &jpg_store,
+            ) {
+                groups.push(group);
+                report("read", groups.len(), pair_total);
             }
-            // JPG 侧仅在 RAW 侧没读到时才作为兜底，避免 RAW 侧的值被覆盖
-            if xmp_meta.is_none() {
-                if let Some(jpg) = &jpg_opt {
-                    read_sidecar_of(
-                        &jpg.path,
-                        &mut has_xmp,
-                        &mut rating,
-                        &mut flag,
-                        &mut xmp_meta,
-                    );
-                }
-            }
-
-            // Read EXIF: prefer JPG (faster to read header), fallback to RAW
-            let mut exif = if let Some(jpg) = &jpg_opt {
-                read_exif_metadata(Path::new(&jpg.path))
-            } else if let Some(raw) = &raw_opt {
-                read_exif_metadata(Path::new(&raw.path))
-            } else {
-                None
-            };
-            if let Some(m) = &xmp_meta {
-                merge_xmp_metadata_into_exif(&mut exif, m);
-            }
-
-            let base_name = jpg_opt
-                .as_ref()
-                .map(|j| {
-                    Path::new(&j.path)
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or(&stem_lower)
-                        .to_string()
-                })
-                .or_else(|| {
-                    raw_opt.as_ref().map(|r| {
-                        Path::new(&r.path)
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or(&stem_lower)
-                            .to_string()
-                    })
-                })
-                .unwrap_or_else(|| stem_lower.clone());
-
-            // 旗标以本地 store 为准（旧文件回落 `Label` 约定）；`Rating=-1` 仍是
-            // 硬信号，外部工具写的淘汰必须立刻生效。
-            let flag = cullstore::resolve_flag(
-                xmp_meta.as_ref().map(|m| m.rejected).unwrap_or(false),
-                &flag,
-                store_entry(&raw_store, &jpg_store, &base_name),
-            );
-
-            let tone = xmp_meta.as_ref().and_then(extract_tone_from_xmp);
-            let edited = jpg_opt
-                .as_ref()
-                .and_then(|j| Path::new(&j.path).parent())
-                .or_else(|| raw_opt.as_ref().and_then(|r| Path::new(&r.path).parent()))
-                .and_then(|p| find_edited_version(p, &base_name));
-
-            groups.push(PhotoGroupInfo {
-                id: base_name.clone(),
-                base_name,
-                jpg: jpg_opt,
-                raw: raw_opt,
-                edited,
-                tone,
-                status,
-                rating,
-                flag,
-                // RAW 侧边栏优先、JPG 兜底 —— 与评级/旗标同一条读取路径，
-                // 不会出现「星级读 RAW、色标读 JPG」这种自相矛盾的组合。
-                label: xmp_meta.as_ref().map(|m| m.label.clone()).unwrap_or_default(),
-                has_xmp,
-                exif,
-                thumbnail_path: None,
-            });
-            report("read", groups.len(), pair_total);
         }
     }
 
@@ -823,6 +850,125 @@ mod tests {
 
         let _ = fs::remove_dir_all(&jpg_dir);
         let _ = fs::remove_dir_all(&raw_dir);
+    }
+
+    /// sidecar 双读：RAW 侧单独有 sidecar 时，评级/旗标必须从 RAW 侧读回。
+    #[test]
+    fn raw_sidecar_is_read_in_pairing() {
+        let jpg_dir = unique_dir("raw_xmp_jpg");
+        let raw_dir = unique_dir("raw_xmp_raw");
+
+        fs::write(jpg_dir.join("B0001.jpg"), b"jpeg").unwrap();
+        fs::write(raw_dir.join("B0001.ARW"), b"raw").unwrap();
+        write_legacy_sidecar(&raw_dir, "B0001", "3", "Red");
+        assert!(!jpg_dir.join("B0001.xmp").exists(), "前提：JPG 旁不应有 sidecar");
+
+        let cancel = AtomicBool::new(false);
+        let res = scan_folders(
+            jpg_dir.to_str().unwrap(),
+            Some(raw_dir.to_str().unwrap()),
+            "filename",
+            &cancel,
+            |_, _, _| {},
+        )
+        .expect("扫描应成功");
+
+        let g = res
+            .groups
+            .iter()
+            .find(|g| g.base_name == "B0001")
+            .expect("应产出 B0001 组");
+        assert_eq!(g.rating, 3, "RAW 旁的星级必须被读到");
+        assert_eq!(g.flag, "reject", "RAW 旁的 Label=Red 应读回 reject");
+        assert!(g.has_xmp, "has_xmp 应为真");
+
+        let _ = fs::remove_dir_all(&jpg_dir);
+        let _ = fs::remove_dir_all(&raw_dir);
+    }
+
+    /// sidecar 双读：RAW 与 JPG 两侧都有 sidecar 时，RAW 侧优先，JPG 侧不得覆盖。
+    #[test]
+    fn raw_sidecar_takes_priority_over_jpg_sidecar() {
+        let jpg_dir = unique_dir("prio_xmp_jpg");
+        let raw_dir = unique_dir("prio_xmp_raw");
+
+        fs::write(jpg_dir.join("C0001.jpg"), b"jpeg").unwrap();
+        fs::write(raw_dir.join("C0001.ARW"), b"raw").unwrap();
+        write_legacy_sidecar(&jpg_dir, "C0001", "1", "Green");
+        write_legacy_sidecar(&raw_dir, "C0001", "5", "Red");
+
+        let cancel = AtomicBool::new(false);
+        let res = scan_folders(
+            jpg_dir.to_str().unwrap(),
+            Some(raw_dir.to_str().unwrap()),
+            "filename",
+            &cancel,
+            |_, _, _| {},
+        )
+        .expect("扫描应成功");
+
+        let g = res
+            .groups
+            .iter()
+            .find(|g| g.base_name == "C0001")
+            .expect("应产出 C0001 组");
+        assert_eq!(g.rating, 5, "RAW 侧 sidecar 必须优先于 JPG 侧");
+        assert_eq!(g.flag, "reject", "RAW 侧的 Label=Red 必须胜出");
+        assert!(g.has_xmp, "has_xmp 应为真");
+
+        let _ = fs::remove_dir_all(&jpg_dir);
+        let _ = fs::remove_dir_all(&raw_dir);
+    }
+
+    /// viewer RAW-only 守卫（issue #138 硬约束）：`is_viewer=true` 时即便误传了
+    /// raw 也必须返回 `None`——viewer 只产 JPG 组，RAW-only 组不得进 viewer 分支。
+    /// 回归锁：`assemble_group` 的 `if jpg_opt.is_none() { return None; }` 守卫。
+    #[test]
+    fn viewer_guard_drops_raw_only_group() {
+        let raw = Some(PhotoFileInfo {
+            name: "Z0001.ARW".to_string(),
+            extension: "arw".to_string(),
+            path: "/tmp/gallery_scan_test_z/Z0001.ARW".to_string(),
+            size: 0,
+            mtime: 0,
+        });
+
+        let g = assemble_group(
+            "z0001",
+            None,
+            raw,
+            true,
+            &Store::default(),
+            &Store::default(),
+        );
+        assert!(g.is_none(), "viewer 模式不得产出 RAW-only 组");
+
+        // (None, None) 同样必须落 None（对应 pairing 旧 `continue`）
+        let g2 = assemble_group(
+            "z0002",
+            None,
+            None,
+            false,
+            &Store::default(),
+            &Store::default(),
+        );
+        assert!(g2.is_none(), "pairing (None, None) 不得产出组");
+    }
+
+    /// viewer 支 flag 分岔（issue #138 硬约束）：viewer 模式不用 `flag_from_xmp`，
+    /// 旧文件只有 `Label` 时走 `legacy_flag_from_label` 映射（Green→pick）。
+    /// 锁定这条分岔不被配对支的映射替换掉。
+    #[test]
+    fn viewer_flag_uses_legacy_label_mapping() {
+        let dir = unique_dir("viewer_legacy_label");
+        fs::write(dir.join("H0001.jpg"), b"jpeg").unwrap();
+        write_legacy_sidecar(&dir, "H0001", "0", "Green");
+
+        let g = scan_one(&dir);
+        assert_eq!(g.flag, "pick", "viewer 支必须把 Label=Green 映射为 pick");
+        assert_eq!(g.label, "Green", "色标随扫描带出");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// 写一份只含评级与色标的最小侧边栏（模拟旧版本 / Lightroom 写出的文件）。
