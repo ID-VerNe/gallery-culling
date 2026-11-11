@@ -21,6 +21,8 @@ npm run e2e:preset    # 真窗口：LUMEN 预设 + 自动调色
 npm run e2e:detail    # 真窗口：RAW-only 1:1 细节（需要真实 ARW，见下）
 npm run e2e:ui        # 真窗口：状态栏常驻 / 按钮命中 / 左手别名（issue #53 → #62）
 npm run e2e:external  # 真窗口：外部打开回落链三条 toast 可见（issue #106 非提权半壁）
+npm run e2e:session   # 真窗口：退出 → 重启 → 同目录断点恢复（issue #108，两段进程）
+npm run e2e:thumb     # 真窗口：冷启动 / 切面板 / 重开的缩略图缓存（issue #107，两段进程）
 npm run e2e           # 全档串起来（unit + rust + render + ui），全绿才算过
 ```
 
@@ -54,9 +56,23 @@ node e2e/run-inapp.mjs --scenario=detail-1to1 --raw-dir='C:/.../gallery-realraw-
 2. **启动应用** —— 起 `tauri dev`，就绪信号是 `e2e/.tmp/e2e-app.log` 里出现场景日志（不是 CDP，见下节）；
 3. **等场景跑完** —— 应用内执行场景，日志同源落盘；
 4. **断言** —— 读日志断言 UI 表现，读文件系统断言落盘与清单；
-5. **关闭应用** —— 优雅关窗（触发会话落盘）后回收整棵 dev 进程树。
+5. **优雅关闭应用** —— 触发会话 flush 后回收整棵 dev 进程树。
 
 首次或改过 Rust 要重新编译，启动约 30–90s；之后整轮约 2–4 分钟。
+
+## 两段进程（重启套件：`e2e:session` / `e2e:thumb`）
+
+issue #108 / #107 的契约是「跨重启」的，所以编排器把一条场景拆成两段进程：
+
+1. phase 1 在应用内跑完前半段（点选第 N 张 / 建立缩略图基线），落标记 `=== e2e phase1 done (`；
+2. 编排器**优雅关窗**（触发 `onCloseRequested → flush → destroy`）→ `killDevTree`
+   整棵回收 → 同 `GALLERY_DATA_DIR` 重开（**数据目录不重置**，会话 / 缓存正是要证明它活着）；
+3. phase 2 的进程经 `VITE_E2E_PHASE=2` 知道自己是「重启后」，跑后半段硬断言。
+
+段间的硬断言由编排器直接做，不经浏览器：`session-restore` 用 python sqlite3
+读 `sessions.last_index`（与 issue #108 复现命令同一口径）；`thumb-cache` 对
+`<数据目录>/cache` 做文件名 + size + mtime 快照比对（mtime 变 = 重新生成过）。
+期望值（N / baseName）由 phase 1 日志实测解析后经 env 注入 phase 2，不写死。
 
 ## 为什么不走 CDP
 

@@ -37,11 +37,17 @@ if (import.meta.env.DEV) {
         wide?: string;
         out?: string;
         names?: string;
+        /** 重启套件：当前是第几段（'1' 首启 / '2' 重启后）。 */
+        phase?: string;
+        /** session-restore：phase 1 实测的 last_index（N-1），phase 2 硬断言用。 */
+        expectIndex?: string;
+        /** session-restore：phase 1 实测的当前照片 baseName。 */
+        expectBase?: string;
       };
       // 启动诊断：无论是否要跑场景，都上报一次，便于外部脚本确认链路通了。
       void fetch('/__e2e_log', {
         method: 'POST',
-        body: `[boot-v2] DEV=${import.meta.env.DEV} scenario=${cfg.scenario || '(unset)'} jpg=${cfg.jpg || '(unset)'}`,
+        body: `[boot-v2] DEV=${import.meta.env.DEV} scenario=${cfg.scenario || '(unset)'} jpg=${cfg.jpg || '(unset)'} phase=${cfg.phase || '1'}`,
       });
       if (!cfg.scenario) return;
       const mod = await import('./devtools/e2eRunner');
@@ -51,6 +57,9 @@ if (import.meta.env.DEV) {
         wide: cfg.wide || '',
         out: cfg.out || '',
         names: cfg.names || '',
+        phase: cfg.phase || '1',
+        expectIndex: cfg.expectIndex ? Number(cfg.expectIndex) : undefined,
+        expectBase: cfg.expectBase || '',
       });
     } catch {
       // dev-only 便利功能，不可用时静默跳过，不影响应用本身

@@ -26,6 +26,8 @@
     "e2e:ui": "node e2e/run-inapp.mjs --scenario=ui-contract",
     "e2e:external": "node e2e/run-inapp.mjs --scenario=external-fallback",
     "e2e:engine": "node e2e/run-inapp.mjs --scenario=engine-download",
+    "e2e:session": "node e2e/run-inapp.mjs --scenario=session-restore",
+    "e2e:thumb": "node e2e/run-inapp.mjs --scenario=thumb-cache",
     "e2e": "npm run e2e:unit && npm run e2e:rust && npm run e2e:render && npm run e2e:ui"
   },
   "dependencies": {
