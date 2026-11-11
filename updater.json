@@ -1,11 +1,11 @@
 {
-  "version": "v2.0.10",
-  "notes": "v2.0.10\n\n- 配置统一存放到用户主目录（%USERPROFILE%\\.galleryculling\\）：重装、升级或换安装目录后，设置、镜头快捷预设与上次会话都会自动保留；首次升级会复制旧配置，原文件不动。\n- 修复窄窗口下左下角状态栏文字互相压盖：身份、体积与拍摄参数不再叠成一团，空间不足时整组隐藏，不再横向滚动。\n- 修复色标选中白环与色点不同心：红/黄/绿/蓝/紫五个色点现在均匀居中，选中反馈更准确。",
-  "pub_date": "2026-11-09T03:52:41.816Z",
+  "version": "v2.0.11",
+  "notes": "v2.0.11\n\n- 修复管理员模式下「外部打开」与 Photoshop 权限不一致：提权运行时主路径改用 explorer 代理降权启动，与手动启动的 PS 处于同一权限级别，已打开的 PS 能正常收到导入；回落默认程序或 PS 启动失败时会明确提示，不再静默。\n- 修复上次会话位置丢失：启动阶段的会话写入不再把 last_index 覆盖成 0，下次启动回到上次查看的照片。\n- 修复宫格格头在窗口变窄时标签竖排折行：状态与控件保持单行不折行，3列/4列与搜索改为图标按钮（保留悬停说明与无障碍标签），全选/清除仍保留文字。\n- 修复顶栏选集名把 Windows 反斜杠路径整串显示：路径归一化后只显示文件名。\n- 修复缩略图在同一秒内被改写后仍显示旧图：缓存指纹由秒级改为纳秒级；缩略图缓存键升到 v3，旧缓存下次查看时自动重新生成，不丢任何用户数据。\n- 缩略图缓存统一放到用户主目录（%USERPROFILE%\\.galleryculling\\cache），冷启动与切换面板不再重复生成；首次升级会一次性迁移现有缓存，原文件保留。\n- 修复同一选片集并发写入时相互覆盖、后提交静默盖掉先提交（内部修复，正常使用不易触发）。\n- 内部重构：EXIF 读取顺序统一（扫描与选集口径一致，损坏 JPG 回落 RAW）、目录归一化收敛、缩略图设置默认值收敛为单一常量、后端命令门面拆分等，行为与本次修复一致。\n\n---\n\n下载附件 `gallery-culling_2.0.11_x64-setup.exe` 直接安装覆盖即可，无需卸载旧版。首次使用 LUMEN 相关功能时会自动下载引擎，请保持网络可用。",
+  "pub_date": "2026-11-11T14:27:07.561Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNGl3bWxzR0FzQXVBbHoweDdxNFZsL3FPTklOVkZSaXdxc25YZCtaSVFtOFAzRmNVbG40bHh5YitBRWJlNHBzR3BGWEpCOHJZSDcyVjgwRVhoNHFKVFFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MTk2MzYxCWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC4xMF94NjQtc2V0dXAuZXhlCXZlcnNpb246Mi4wLjEwClRmMXh0WkZxYjZDMjZmK1dhY0gwall3N3V3ZTEwSGoycnlOZ0VyWXJiZHAyeC8rMWdkMEtRWmRUSzZ0MHJ0d29RM0lxQm5PaFhTZkE3SnNmMDltTUFRPT0K",
-      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.10/gallery-culling_2.0.10_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNHN2TVVBZHpCM0diTnRPUUdqNFA1UC9pWlZMTE1vM3JOWEFiamwvT0EyU1VZQU1EdXRJaWk4R2pWdnI5SGROTTN6d2dMeXJGSFdVdVQyaElJYmw0Unc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDA3MjI3CWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC4xMV94NjQtc2V0dXAuZXhlCXZlcnNpb246Mi4wLjExCkFrNHpoUFBleUx1YUFBbHRjWFV6YTQ4ejZLWlhRTFFGeHRqcEVCV1VQdE8zK256VGV0VHNrUGdJbnVNTTlZelBYZURSZzl5alpDbldjQnNCbUdPOENnPT0K",
+      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.11/gallery-culling_2.0.11_x64-setup.exe"
     }
   }
 }
