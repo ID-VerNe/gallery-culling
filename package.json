@@ -24,6 +24,7 @@
     "e2e:preset": "node e2e/run-inapp.mjs --scenario=lumen-preset",
     "e2e:detail": "node e2e/run-inapp.mjs --scenario=detail-1to1",
     "e2e:ui": "node e2e/run-inapp.mjs --scenario=ui-contract",
+    "e2e:external": "node e2e/run-inapp.mjs --scenario=external-fallback",
     "e2e:engine": "node e2e/run-inapp.mjs --scenario=engine-download",
     "e2e:session": "node e2e/run-inapp.mjs --scenario=session-restore",
     "e2e:thumb": "node e2e/run-inapp.mjs --scenario=thumb-cache",
