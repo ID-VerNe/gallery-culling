@@ -70,7 +70,7 @@ issue #108 / #107 的契约是「跨重启」的，所以编排器把一条场�
 段间的硬断言由编排器直接做，不经浏览器：`session-restore` 用 python sqlite3
 读 `sessions.last_index`（与 issue #108 复现命令同一口径）；`thumb-cache` 对
 `<数据目录>/cache` 做文件名 + size + mtime 快照比对（mtime 变 = 重新生成过）。
-期望值（N / baseName）由 phase 1 日志实测解析后经 env 注入 phase 2，不写死。
+期望值（N / baseName / IMG_001 缓存文件名）由 phase 1 日志实测解析后经 env 注入 phase 2，不写死。
 
 ## 为什么不走 CDP
 
