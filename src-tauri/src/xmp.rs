@@ -23,6 +23,13 @@ pub struct XmpMetadata {
     pub temperature: Option<f32>,
     pub tint: Option<f32>,
     pub contrast: Option<f32>,
+    /// 是否经 ACR / Photoshop 精修过（issue #200）。
+    ///
+    /// 判据是 `crs:HasSettings="True"` —— Adobe 把 Camera Raw 设置写进 sidecar 时
+    /// 才会带上这个**属性**。不能退化成「含 `crs:`」：本应用自己的调色面板也写
+    /// `crs:Exposure2012` 等，但用的是元素形式、且不带 `HasSettings`（见
+    /// `our_own_tone_edit_is_not_acr_edited`）。
+    pub acr_edited: bool,
 }
 
 /// Get the expected .xmp sidecar path for a given image file
@@ -110,6 +117,16 @@ pub fn read_xmp_full(xmp_path: &Path) -> Option<XmpMetadata> {
     }
     let content = fs::read_to_string(xmp_path).ok()?;
 
+    // ACR 精修痕迹（issue #200）：只有 Adobe 写 Camera Raw 设置时才带 HasSettings 属性。
+    // 属性值大小写随版本可能是 `True` / `true`，两种都认。
+    //
+    // **刻意不认** `crs:HasSettings='True'`（单引号）与 `crs:HasSettings = "True"`
+    // （等号带空格）：Adobe XMP Toolkit 序列化属性恒用双引号、无空格（本机 4 份
+    // 真机 sidecar 逐一核对过）。真做等价化就要引入属性解析，等于为一个没出现过的
+    // 写法重写 XML 扫描；`.acr` 旁证是第二道网，漏判成本可控。
+    let acr_edited = content.contains("crs:HasSettings=\"True\"")
+        || content.contains("crs:HasSettings=\"true\"");
+
     // Parse xmp:Rating (0..5). Lightroom/LUMEN RAW use -1 for "reject";
     // the old bare digit scan turned -1 into 1 star (silent data corruption).
     let (rejected, rating) = parse_rating(&content);
@@ -145,7 +162,20 @@ pub fn read_xmp_full(xmp_path: &Path) -> Option<XmpMetadata> {
         temperature,
         tint,
         contrast,
+        acr_edited,
     })
+}
+
+/// 这张照片是否经 ACR / Photoshop 精修过（issue #200）。
+///
+/// 两个信号取或：sidecar 里的 `crs:HasSettings="True"`（Adobe 写设置时才带），
+/// 或照片旁的同名 `.acr`。前者是持久记录、后者更像可清的缓存，任一中都算修过。
+///
+/// 需要「已经读过 sidecar」的调用点（扫描、增量刷新）直接用 `XmpMetadata::acr_edited`
+/// 拼同样的或，别为此多读一次文件。
+pub fn is_acr_edited(image_path: &Path) -> bool {
+    read_xmp_full(&get_xmp_path(image_path)).is_some_and(|m| m.acr_edited)
+        || image_path.with_extension("acr").is_file()
 }
 
 /// 本方（Gallery Culling）拥有的命名空间。
@@ -727,6 +757,7 @@ mod tests {
 
         // 先写一张"调过色、有镜头信息"的侧边栏
         let seeded = XmpMetadata {
+            acr_edited: false,
             rating: 4,
             label: String::new(),
             rejected: false,
@@ -1816,5 +1847,127 @@ mod tests {
         assert!(!xmp.exists(), "拒写时不该留下侧边栏");
 
         let _ = fs::remove_file(&xmp);
+    }
+
+    // ---------------------------------------------------------------------
+    // issue #200：ACR / PS 精修痕迹的判据
+    //
+    // 判据必须**窄**：`crs:` 前缀在本应用自己写出的 sidecar 里也到处都是
+    // （调色面板写 `<crs:Exposure2012>`），拿它当判据会把全部调过色的照片都标成
+    // 「已修」。真正的信号是 Adobe 写 Camera Raw 设置时才附带的
+    // `crs:HasSettings="True"` **属性**。
+    // ---------------------------------------------------------------------
+    fn temp_img(tag: &str) -> (PathBuf, PathBuf) {
+        let img = std::env::temp_dir().join(format!("xmp_acr_{}_{}.jpg", tag, std::process::id()));
+        let xmp = get_xmp_path(&img);
+        let _ = fs::remove_file(&xmp);
+        let _ = fs::remove_file(img.with_extension("acr"));
+        (img, xmp)
+    }
+
+    /// Adobe 写下的 `crs:HasSettings="True"` 必须命中。
+    #[test]
+    fn adobe_has_settings_marks_retouched() {
+        let (img, xmp) = temp_img("adobe");
+        fs::write(
+            &xmp,
+            r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0-c000 1.000000, 0000/00/00-00:00:00        ">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+   crs:HasSettings="True"
+   xmp:Rating="3">
+   <crs:Exposure2012>+0.35</crs:Exposure2012>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#,
+        )
+        .unwrap();
+
+        let meta = read_xmp_full(&xmp).expect("应可读");
+        assert!(meta.acr_edited, "Adobe 写下的 HasSettings 必须命中");
+        assert!(is_acr_edited(&img));
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    /// 小写 `true` 也要认（不同版本的 Adobe 写法不一致）。
+    #[test]
+    fn lowercase_has_settings_marks_retouched() {
+        let (_, xmp) = temp_img("lower");
+        fs::write(&xmp, r#"<rdf:Description crs:HasSettings="true"/>"#).unwrap();
+        assert!(read_xmp_full(&xmp).expect("应可读").acr_edited);
+        let _ = fs::remove_file(&xmp);
+    }
+
+    /// **本应用自己写出的调色 sidecar 不得被判成已修** —— 这是判据的墓碑。
+    ///
+    /// 退化成 `content.contains("crs:")` 或 `contains("Exposure2012")` 时，
+    /// 只要在本应用里调过一次色就会被误标，用户再也分不清哪些真进过 PS。
+    #[test]
+    fn our_own_tone_edit_is_not_acr_edited() {
+        let (img, xmp) = temp_img("own");
+        let toned = XmpMetadata {
+            acr_edited: false,
+            rating: 4,
+            label: String::new(),
+            rejected: false,
+            lens_model: Some("RF 24-70mm F2.8".into()),
+            focal_length: Some("50mm".into()),
+            aperture: Some("f/2.8".into()),
+            exposure: Some(0.65),
+            highlights: Some(-20.0),
+            shadows: Some(15.0),
+            temperature: Some(8.0),
+            tint: Some(-3.0),
+            contrast: Some(12.0),
+        };
+        write_xmp_preserving(&img, &toned).expect("写入调色侧边栏应成功");
+
+        let content = fs::read_to_string(&xmp).unwrap();
+        assert!(
+            content.contains("crs:Exposure2012"),
+            "前提：确实写了 crs 元素"
+        );
+        assert!(
+            !content.contains("HasSettings"),
+            "前提：本应用不该写 HasSettings"
+        );
+
+        assert!(
+            !read_xmp_full(&xmp).expect("应可读").acr_edited,
+            "本应用自己的调色被判成了「已修」—— 判据太宽"
+        );
+        assert!(!is_acr_edited(&img));
+        let _ = fs::remove_file(&xmp);
+    }
+
+    /// 旁证：没有 sidecar，但照片旁出现同名 `.acr` 也算修过。
+    #[test]
+    fn acr_file_alone_marks_retouched() {
+        let (img, xmp) = temp_img("acrfile");
+        assert!(!is_acr_edited(&img), "什么都没有时不该判成已修");
+        fs::write(img.with_extension("acr"), b"ACR\0placeholder").unwrap();
+        assert!(is_acr_edited(&img), ".acr 旁证必须命中");
+        let _ = fs::remove_file(img.with_extension("acr"));
+        let _ = fs::remove_file(&xmp);
+    }
+
+    /// 同名 `.acr` 是**目录**时不算修过：`exists()` 会误判，`is_file()` 不会。
+    #[test]
+    fn acr_directory_is_not_retouched() {
+        let (img, xmp) = temp_img("acrdir");
+        fs::create_dir_all(img.with_extension("acr")).unwrap();
+        assert!(!is_acr_edited(&img), "同名目录不是 ACR 产物");
+        let _ = fs::remove_dir_all(img.with_extension("acr"));
+        let _ = fs::remove_file(&xmp);
+    }
+
+    /// 默认构造必须是「没修过」—— 误选 Default 会让全库都亮「已修」。
+    #[test]
+    fn default_metadata_is_not_retouched() {
+        assert!(!XmpMetadata::default().acr_edited);
     }
 }

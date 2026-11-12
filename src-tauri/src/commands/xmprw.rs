@@ -71,6 +71,8 @@ impl IntentSink for DiskSink {
                     rating: disk_rating,
                     flag: intent.flag.clone(),
                     label: intent.label.clone(),
+                    // 刚写完的是评级/旗标/色标，ACR 设置原样保留 → 记磁盘现状即可（issue #200）。
+                    retouched: xmp::is_acr_edited(path),
                 });
             }
         }

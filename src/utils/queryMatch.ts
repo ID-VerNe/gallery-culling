@@ -28,6 +28,7 @@ export type QueryField =
   | 'ext'
   | 'folder'
   | 'edited'
+  | 'retouched'
   | 'iso'
   | 'camera'
   | 'lens'
@@ -104,6 +105,7 @@ const FIELDS: Record<QueryField, FieldSpec> = {
   ext: { kind: 'text', example: 'ext:arw' },
   folder: { kind: 'text', example: 'folder:2024' },
   edited: { kind: 'bool', example: 'edited' },
+  retouched: { kind: 'bool', example: 'retouched（或 retouched:no）' },
   iso: { kind: 'number', example: 'iso>=3200' },
   camera: { kind: 'text', example: 'camera:sony' },
   lens: { kind: 'text', example: 'lens:85mm' },
@@ -111,6 +113,22 @@ const FIELDS: Record<QueryField, FieldSpec> = {
   shutter: { kind: 'number', example: 'shutter<=1/500' },
   focal: { kind: 'number', example: 'focal>=85' },
 };
+
+/**
+ * 布尔字段允许显式写的值：`retouched:no` 等价于 `-retouched`。
+ *
+ * 用 `Map` 而不是对象字面量：对象会继承原型链，`retouched:constructor` /
+ * `__proto__` / `toString` 都能查到真值，于是被静默当成 `yes` 生效 ——
+ * 拼错的词条不会报错、而是筛出一屏「都算已修」，比拒绝更难发现。
+ */
+const BOOL_VALUES = new Map<string, boolean>([
+  ['yes', true],
+  ['true', true],
+  ['1', true],
+  ['no', false],
+  ['false', false],
+  ['0', false],
+]);
 
 const FIELD_NAMES = Object.keys(FIELDS) as QueryField[];
 
@@ -133,6 +151,10 @@ const SHORTHANDS: Record<string, QueryField | 'flag-pick' | 'flag-reject' | 'fla
   rejected: 'flag-reject',
   unflagged: 'flag-none',
   edited: 'edited',
+  // `retouched` / `retouch` 是 issue #200 的裸词简写：`-retouched` 才是用户
+  // 每天真正要用的那个词（「把还没进 PS 的挑出来」）。
+  retouched: 'retouched',
+  retouch: 'retouched',
 };
 
 /** 字段名 + 比较符 + 值。`:` 与 `=` 都表示「等于」。 */
@@ -214,8 +236,9 @@ export function parseQuery(input: string): QueryParseResult {
       // 简写优先于裸词：`picked` 不该被当成文件名搜索。
       const short = SHORTHANDS[lower];
       if (short) {
-        if (short === 'edited') {
-          terms.push({ field: 'edited', op: '=', value: true, negated, raw });
+        if (short !== 'flag-pick' && short !== 'flag-reject' && short !== 'flag-none') {
+          // 布尔字段的裸词一律是「为真」，取反由 `-` 前缀统一处理。
+          terms.push({ field: short, op: '=', value: true, negated, raw });
         } else {
           terms.push({
             field: 'flag',
@@ -261,7 +284,25 @@ export function parseQuery(input: string): QueryParseResult {
     }
 
     if (spec.kind === 'bool') {
-      errors.push(`「${field}」不需要值，直接写 ${field}。`);
+      // `retouched:yes` / `retouched:no` 也要能用：issue #200 里就是这么写的，
+      // 用户照着试是最自然的路径。`no` 等价于给整条词条取反，
+      // 与 `-` 前缀叠加时按异或处理（`-retouched:no` = 修过）。
+      // 布尔字段没有大小关系，比较符一律按「等于」处理：`retouched>=yes` 与
+      // `retouched:yes` 等价。不为它单独报错，是因为语法错误的代价是整屏放行
+      // （见文件头原则 2），用户会以为筛选失效。
+      const v = rawValue.toLowerCase();
+      const asTrue = BOOL_VALUES.get(v);
+      if (asTrue === undefined) {
+        errors.push(`「${field}」只接受 yes / no（或直接写 ${field} / -${field}）。`);
+        continue;
+      }
+      terms.push({
+        field,
+        op: '=',
+        value: true,
+        negated: asTrue ? negated : !negated,
+        raw,
+      });
       continue;
     }
 
@@ -381,6 +422,10 @@ function evalTerm(g: PhotoGroupInfo, term: QueryTerm): boolean {
 
     case 'edited':
       return !!g.edited;
+
+    case 'retouched':
+      // 已进过 PS/ACR 精修（issue #200）。`-retouched` = 还没修过。
+      return !!g.retouched;
 
     case 'iso':
       return compareExif('iso', g.exif?.iso, term.op, term.value as number);

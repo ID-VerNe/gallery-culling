@@ -115,6 +115,53 @@ describe('parseQuery：字段与运算符', () => {
     expect(parseQuery('-edited').terms[0]).toMatchObject({ field: 'edited', negated: true });
   });
 
+  // issue #200：`retouched` 必须是真布尔字段，而不是被当成文件名裸词。
+  // 裸词会退化成「文件名里含 retouched」，筛选框里任何输入都不会报错，
+  // 但结果永远是空 —— 这种「静默失效」比报错更难发现。
+  it('retouched 是布尔字段且支持裸词与取反', () => {
+    expect(parseQuery('retouched').terms[0]).toMatchObject({ field: 'retouched', value: true });
+    expect(parseQuery('-retouched').terms[0]).toMatchObject({
+      field: 'retouched',
+      negated: true,
+    });
+    // 单数别名：手快少打一个 d 也要能用。
+    expect(parseQuery('retouch').terms[0]).toMatchObject({ field: 'retouched', value: true });
+    // 带值写要能用（issue #200 的正文就是这么写的），`no` 等价于取反。
+    expect(parseQuery('retouched:yes').terms[0]).toMatchObject({
+      field: 'retouched',
+      negated: false,
+    });
+    expect(parseQuery('retouched:no').terms[0]).toMatchObject({
+      field: 'retouched',
+      negated: true,
+    });
+    // 与 `-` 前缀叠加按异或：双重否定 = 肯定。
+    expect(parseQuery('-retouched:no').terms[0]).toMatchObject({
+      field: 'retouched',
+      negated: false,
+    });
+    // 其余真假写法也认，避免用户凭直觉写 `true` 时踩空。
+    for (const t of ['true', '1']) {
+      expect(parseQuery(`retouched:${t}`).terms[0], t).toMatchObject({ negated: false });
+    }
+    for (const t of ['false', '0']) {
+      expect(parseQuery(`retouched:${t}`).terms[0], t).toMatchObject({ negated: true });
+    }
+    // 比较符对布尔无大小意义，一律按「等于」：与 `:` 等价而不是报错
+    // （报错会让整屏放行，用户以为筛选失效）。
+    expect(parseQuery('retouched>=yes').terms[0]).toMatchObject({
+      field: 'retouched',
+      negated: false,
+    });
+    // 其他值必须报错，不能静默当成 yes。
+    expect(parseQuery('retouched:maybe').errors.length).toBeGreaterThan(0);
+    // 原型链上的名字也不行：对象字面量当查表时 `constructor` / `__proto__` 能查到
+    // 真值，会被静默当成 yes —— 拼错一个词就筛出一屏「都算已修」。
+    for (const bad of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+      expect(parseQuery(`retouched:${bad}`).errors.length, bad).toBeGreaterThan(0);
+    }
+  });
+
   it('EXIF 数值宽容解析：f/2.8、1/500、85mm', () => {
     expect(parseQuery('aperture:f/2.8').terms[0]).toMatchObject({ value: 2.8 });
     expect(parseQuery('shutter:1/500').terms[0]).toMatchObject({ value: 0.002 });
@@ -220,6 +267,13 @@ describe('matchesQuery：字段求值', () => {
   it('edited 看精修成果是否存在', () => {
     expect(hit('edited')).toBe(true);
     expect(miss('edited', group())).toBe(true);
+  });
+
+  it('retouched 看是否进过 PS / ACR', () => {
+    expect(miss('retouched', RICH)).toBe(true);
+    expect(hit('-retouched', RICH)).toBe(true);
+    expect(miss('retouched', group({ retouched: true }))).toBe(false);
+    expect(hit('-retouched', group({ retouched: true }))).toBe(false);
   });
 
   it('iso / aperture / shutter / focal 数值比较', () => {

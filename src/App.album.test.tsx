@@ -40,6 +40,7 @@ const albumResult: AlbumOpenResult = {
       jpgSize: 1024,
       jpgMtime: 99,
       hasXmp: true,
+      retouched: false,
       tone: null,
       rating: 3,
       flag: 'pick',

@@ -379,6 +379,46 @@ describe('useXmpRefresh —— 结果落地', () => {
     expect(toastCalls[0].message).toContain('已从 XMP 更新 1 张');
   });
 
+  // issue #200：三项标记（星级/旗标/色标）都没变、只有「已精修」变了的
+  // 照片，patch 里也必须带上 retouched —— 否则徽章要等下次整盘重扫才亮。
+  // 注意别只靠上一条的 `toEqual` 兜底：它忽略 undefined 键，
+  // 漏传时 `{...}` 与 `{... retouched: undefined}` 是相等的，永远绿。
+  it('只有 retouched 变化：回填里必须带上它', async () => {
+    mockInvokeCommand('refresh_from_xmp_cmd', {
+      ...emptyReport(),
+      adopted: [
+        {
+          path: 'D:/shoot/RAW/A.ARW',
+          state: state(3, 'none', ''),
+          retouched: true,
+          sidecarRemoved: false,
+        },
+      ],
+    });
+    const { result, patched } = setup({ groups: [group('A', { rating: 3 })] });
+    await manualRefresh(result);
+
+    expect(patched[0].patch).toMatchObject({ rating: 3, retouched: true });
+  });
+
+  it('取消精修（retouched 由 true 变 false）：回填也必须是 false', async () => {
+    mockInvokeCommand('refresh_from_xmp_cmd', {
+      ...emptyReport(),
+      adopted: [
+        {
+          path: 'D:/shoot/RAW/A.ARW',
+          state: state(3, 'none', ''),
+          retouched: false,
+          sidecarRemoved: false,
+        },
+      ],
+    });
+    const { result, patched } = setup({ groups: [group('A', { rating: 3, retouched: true })] });
+    await manualRefresh(result);
+
+    expect(patched[0].patch).toMatchObject({ retouched: false });
+  });
+
   it('侧边栏被外部删除：值被清空，并单独提示一句', async () => {
     mockInvokeCommand('refresh_from_xmp_cmd', {
       ...emptyReport(),

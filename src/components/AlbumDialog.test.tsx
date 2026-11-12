@@ -26,6 +26,7 @@ function report(missing: number): AlbumOpenResult {
     jpgSize: 0,
     jpgMtime: 0,
     hasXmp: false,
+    retouched: false,
     tone: null,
     rating: i === 0 ? 3 : 0,
     flag: i === 0 ? 'pick' : 'none',

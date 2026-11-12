@@ -211,6 +211,47 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   const queryTermCount = queryParse?.terms.length ?? 0;
   const queryPending = queryParse?.pending.length ?? 0;
 
+  // issue #200：精修筛选的快捷入口。
+  //
+  // 用查询串实现（而不是新增一个独立的 state）是刻意的：筛选条件最终必须和
+  // 查询框里的文字一致，否则会出现「按钮说只看未修、输入框里写着 retouched」
+  // 这种自相矛盾的状态，而且导出时按 `current_query` 复制条件也会漏掉它。
+  // 因此这里只是「往查询串里加/删一个词」的语法糖。
+  // 归一成「正向/取反」两种，`retouch` 单数别名与手打的 `-retouch` 也算同一档 ——
+  // 否则用户手写 `retouch` 时按钮不高亮，看起来像没生效。
+  const retouchFilterOf = (token: string): 'yes' | 'no' | null => {
+    let t = token.toLowerCase();
+    let negated = false;
+    if (t.startsWith('-')) {
+      negated = true;
+      t = t.slice(1);
+    }
+    // 也要认 `retouched:yes` / `retouched:no` / `-retouched:no` —— 解析器接受这些
+    // 写法，按钮若不认，用户手写一遍就会看到「结果变了但按钮没亮」。
+    const m = /^(retouch|retouched)(?::(yes|no|true|false|1|0))?$/.exec(t);
+    if (!m) return null;
+    const positive = !m[2] || m[2] === 'yes' || m[2] === 'true' || m[2] === '1';
+    if (!positive) negated = !negated;
+    return negated ? 'no' : 'yes';
+  };
+  const activeRetouchFilter =
+    searchQuery
+      .trim()
+      .split(/\s+/)
+      .map(retouchFilterOf)
+      .find((f) => f !== null) ?? null;
+  const toggleRetouchFilter = (want: 'yes' | 'no') => {
+    const kept = searchQuery
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .filter((t) => retouchFilterOf(t) === null);
+    if (activeRetouchFilter !== want) kept.push(want === 'yes' ? 'retouched' : '-retouched');
+    onSearchQueryChange?.(kept.join(' '));
+    // 筛选生效但查询框关着 → 用户看不到「为什么少了这么多张」，顺手展开。
+    onSearchOpenChange?.(true);
+  };
+
   // B7：虚拟化会把滚出窗口的行整行卸载，`aria-activedescendant` 随即指向不存在
   // 的节点、读屏静默。这里在选中行未被渲染时补一个视觉隐藏的 `role="option"`
   // 幽灵节点，保证引用始终可解析（比改成 roving tabindex 改动面小得多）。
@@ -273,6 +314,39 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
               >
                 <X className="w-3 h-3" aria-hidden="true" />
                 <span className="whitespace-nowrap">清除</span>
+              </button>
+            </div>
+          )}
+
+          {/* issue #200：精修状态快捷筛选。用户的原话是「想一眼知道哪张修过、
+              哪张没修」，所以入口必须常驻在格头，而不是藏在查询语法里。 */}
+          {onSearchQueryChange && !isEmpty && (
+            <div className="flex items-center bg-background-base p-0.5 rounded-md border border-border-default shrink-0">
+              <button
+                onClick={() => toggleRetouchFilter('no')}
+                className={`focus-ring flex items-center gap-1 px-1.5 min-h-7 rounded text-[10px] transition-colors shrink-0 whitespace-nowrap ${
+                  activeRetouchFilter === 'no'
+                    ? 'bg-amber-400 text-black font-medium'
+                    : 'text-white/60 hover:text-white hover:bg-white/10'
+                }`}
+                title="只看还没进 Photoshop / ACR 精修的照片（查询语法：-retouched）"
+                aria-label="只看未精修的照片"
+                aria-pressed={activeRetouchFilter === 'no'}
+              >
+                未修
+              </button>
+              <button
+                onClick={() => toggleRetouchFilter('yes')}
+                className={`focus-ring flex items-center gap-1 px-1.5 min-h-7 rounded text-[10px] transition-colors shrink-0 whitespace-nowrap ${
+                  activeRetouchFilter === 'yes'
+                    ? 'bg-amber-400 text-black font-medium'
+                    : 'text-white/60 hover:text-white hover:bg-white/10'
+                }`}
+                title="只看已进 Photoshop / ACR 精修的照片（查询语法：retouched）"
+                aria-label="只看已精修的照片"
+                aria-pressed={activeRetouchFilter === 'yes'}
+              >
+                已修
               </button>
             </div>
           )}
@@ -399,7 +473,7 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
       {!isEmpty && (
         <div
           role="note"
-          aria-label="角标图例：R 表示 RAW 原片，X 表示已有 XMP 侧边栏，T 表示已调色，E 表示有精修成果"
+          aria-label="角标图例：R 表示 RAW 原片，X 表示已有 XMP 侧边栏，T 表示已调色，E 表示有精修成果，黄底「已修」表示已进 Photoshop / Camera Raw 精修"
           className="px-2.5 py-1 border-b border-border-default flex items-center gap-2 text-[10px] text-white/60 shrink-0 flex-wrap"
         >
           <span className="flex items-center gap-0.5">
@@ -413,6 +487,14 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
           </span>
           <span className="flex items-center gap-0.5">
             <span className="font-medium text-purple-400">E</span>精修
+          </span>
+          {/* 与单元格里的实心琥珀块同款：图例存在的意义就是「照着找」，
+              样式不一致反而会让人对不上号。 */}
+          <span className="flex items-center gap-1">
+            <span className="bg-amber-400 text-black rounded px-1 py-[1px] text-[9px] font-semibold leading-none">
+              已修
+            </span>
+            进过 PS / ACR
           </span>
         </div>
       )}

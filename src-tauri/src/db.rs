@@ -90,6 +90,9 @@ pub struct XmpCursor {
     pub rating: u8,
     pub flag: String,
     pub label: String,
+    /// 上次看到的「是否经 ACR/PS 精修」（issue #200）。只用于判断要不要推一条更新，
+    /// **不参与冲突判定** —— 它不是用户的评级意图。
+    pub retouched: bool,
 }
 
 /// 一条尚未落盘的写入意图（FR-03）。
@@ -191,11 +194,15 @@ impl Database {
                 rating       INTEGER NOT NULL,
                 flag         TEXT NOT NULL,
                 label        TEXT NOT NULL DEFAULT '',
+                retouched    INTEGER NOT NULL DEFAULT 0,
                 seen_at      INTEGER NOT NULL
             )",
             [],
         )
         .map_err(|e| format!("创建 xmp_cursor 表失败: {}", e))?;
+
+        // 老库补列（issue #200）：`CREATE TABLE IF NOT EXISTS` 对已存在的表是空操作。
+        ensure_column(&conn, "xmp_cursor", "retouched", "INTEGER NOT NULL DEFAULT 0")?;
 
         Ok(Self {
             conn: std::sync::Arc::new(Mutex::new(conn)),
@@ -429,16 +436,17 @@ impl Database {
     pub fn upsert_xmp_cursor(&self, cursor: &XmpCursor) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT INTO xmp_cursor (sidecar_path, mtime_ms, rating, flag, label, seen_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO xmp_cursor (sidecar_path, mtime_ms, rating, flag, label, retouched, seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(sidecar_path) DO UPDATE SET
-                mtime_ms = ?2, rating = ?3, flag = ?4, label = ?5, seen_at = ?6",
+                mtime_ms = ?2, rating = ?3, flag = ?4, label = ?5, retouched = ?6, seen_at = ?7",
             params![
                 cursor.sidecar_path,
                 cursor.mtime_ms,
                 cursor.rating as i64,
                 cursor.flag,
                 cursor.label,
+                cursor.retouched as i64,
                 now_secs()
             ],
         )
@@ -461,16 +469,17 @@ impl Database {
         let now = now_secs();
         for cursor in cursors {
             tx.execute(
-                "INSERT INTO xmp_cursor (sidecar_path, mtime_ms, rating, flag, label, seen_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "INSERT INTO xmp_cursor (sidecar_path, mtime_ms, rating, flag, label, retouched, seen_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                  ON CONFLICT(sidecar_path) DO UPDATE SET
-                    mtime_ms = ?2, rating = ?3, flag = ?4, label = ?5, seen_at = ?6",
+                    mtime_ms = ?2, rating = ?3, flag = ?4, label = ?5, retouched = ?6, seen_at = ?7",
                 params![
                     cursor.sidecar_path,
                     cursor.mtime_ms,
                     cursor.rating as i64,
                     cursor.flag,
                     cursor.label,
+                    cursor.retouched as i64,
                     now
                 ],
             )
@@ -486,7 +495,7 @@ impl Database {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn
             .prepare(
-                "SELECT sidecar_path, mtime_ms, rating, flag, label
+                "SELECT sidecar_path, mtime_ms, rating, flag, label, retouched
                  FROM xmp_cursor WHERE sidecar_path = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -498,6 +507,7 @@ impl Database {
                     rating: row.get::<_, i64>(2)?.max(0) as u8,
                     flag: row.get::<_, String>(3)?,
                     label: row.get::<_, String>(4)?,
+                    retouched: row.get::<_, i64>(5).unwrap_or(0) != 0,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -1094,6 +1104,69 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// issue #200：老库的 `xmp_cursor` 没有 `retouched` 列，打开时必须自动补上。
+    ///
+    /// 这条是给**升级用户**兜底的：`lookup_xmp_cursor` 的 SELECT 里带了这一列，
+    /// 少了 `ensure_column` 老库会直接报错（读游标失败 → 每次刷新整盘报 failed），
+    /// 而不是「标记不亮」这种温和症状。造一张旧表结构再打开，就是为了让缺列
+    /// 那个版本的代码在这里红。
+    #[test]
+    fn old_xmp_cursor_table_gets_retouched_column() {
+        let path = std::env::temp_dir().join(format!("gc_db_cursor_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            // 造一个「已精修」落地前的库：表结构与那个版本一致（无 retouched）
+            let conn = Connection::open(&path).expect("建旧库");
+            conn.execute(
+                "CREATE TABLE xmp_cursor (
+                    sidecar_path TEXT PRIMARY KEY,
+                    mtime_ms     INTEGER NOT NULL,
+                    rating       INTEGER NOT NULL,
+                    flag         TEXT NOT NULL,
+                    label        TEXT NOT NULL DEFAULT '',
+                    seen_at      INTEGER NOT NULL
+                )",
+                [],
+            )
+            .expect("旧表");
+            conn.execute(
+                "INSERT INTO xmp_cursor VALUES ('C:/p/old.xmp', 1000, 4, 'pick', 'Red', 500)",
+                [],
+            )
+            .expect("旧行");
+        }
+
+        let db = Database::open(&path).expect("打开旧库应自动补列");
+        let row = db
+            .lookup_xmp_cursor("C:/p/old.xmp")
+            .expect("补列后旧行仍可读")
+            .expect("旧行不该丢");
+        assert_eq!(row.rating, 4, "补列不得丢行");
+        assert_eq!(row.label, "Red");
+        assert!(!row.retouched, "旧行的已精修按 false 处理");
+
+        // 补列之后能正常写/读新值
+        db.upsert_xmp_cursor(&XmpCursor {
+            sidecar_path: "C:/p/old.xmp".to_string(),
+            mtime_ms: 2000,
+            rating: 4,
+            flag: "pick".to_string(),
+            label: "Red".to_string(),
+            retouched: true,
+        })
+        .expect("写新值");
+        assert!(
+            db.lookup_xmp_cursor("C:/p/old.xmp")
+                .unwrap()
+                .unwrap()
+                .retouched,
+            "补列后写入的 true 必须读得回来"
+        );
+
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn pending_roundtrip_and_delete() {
         let (db, path) = temp_db("pending_roundtrip");
@@ -1263,6 +1336,7 @@ mod tests {
             rating,
             flag: flag.to_string(),
             label: label.to_string(),
+            retouched: false,
         }
     }
 

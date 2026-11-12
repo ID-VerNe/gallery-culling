@@ -146,6 +146,8 @@ fn apply_disk_state(entries: &mut [album::ResolvedDoc]) {
         // 侧边栏**存在**与**读得出**是两件事：`read_xmp_full` 对空文件/坏 XML
         // 也返回 None，但文件确实在，导出时的文件计数与宫格角标都按「在不在」算。
         e.has_xmp = xmp_path.is_file();
+        // issue #200：`.acr` 旁证与 sidecar 内容无关，先单独取，两条分支都要用。
+        let has_acr_file = p.with_extension("acr").is_file();
 
         match crate::xmp::read_xmp_full(&xmp_path) {
             Some(m) => {
@@ -156,6 +158,7 @@ fn apply_disk_state(entries: &mut [album::ResolvedDoc]) {
                     entry,
                 );
                 e.label = m.label.clone();
+                e.retouched = m.acr_edited || has_acr_file;
                 // 调色基线必须一起带回来：面板显示全 0 时用户点保存就会把
                 // 真实调色覆盖成 0。与扫描路径共用同一份提取逻辑。
                 e.tone = crate::scanner::extract_tone_from_xmp(&m);
@@ -165,6 +168,8 @@ fn apply_disk_state(entries: &mut [album::ResolvedDoc]) {
                 e.flag = crate::cullstore::resolve_flag(false, "none", entry);
                 e.label = String::new();
                 e.tone = None;
+                // 侧边栏读不出来不等于没修过：`.acr` 还在就能证明进过 ACR。
+                e.retouched = has_acr_file;
             }
         }
     }
@@ -421,6 +426,55 @@ mod tests {
         let opened = open_album_impl(&album_path.to_string_lossy()).unwrap();
         assert!(opened.entries[0].has_xmp, "有侧边栏就该标出来（宫格角标与导出计数都靠它）");
         assert!(!opened.entries[1].has_xmp);
+    }
+
+    /// issue #200：选片集打开时也必须带出「已精修」。
+    ///
+    /// 这条守的是**第二条入口**：扫描路径（scanner.rs）已经有自己的接线测试，
+    /// 但选片集走 `apply_disk_state`，两条路各写一遍判据。少了这条，
+    /// 同一个目录用「扫描」和用「打开选片集」会出现两套标记。
+    #[test]
+    fn open_reports_retouched_from_disk() {
+        let dir = scratch("retouch");
+        let album_path = dir.join("a.galleryalbum");
+        // 三条互相独立的情形：Adobe 写了设置 / 只有 .acr / 本应用只调了色
+        let has_settings = dir.join("settings.ARW");
+        let acr_only = dir.join("acronly.ARW");
+        let our_tone = dir.join("ourtone.ARW");
+        for p in [&has_settings, &acr_only, &our_tone] {
+            std::fs::write(p, b"x").unwrap();
+        }
+        std::fs::write(
+            crate::xmp::get_xmp_path(&has_settings),
+            "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
+             <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n\
+             \x20 <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n\
+             \x20  <rdf:Description rdf:about=\"\"\n\
+             \x20    xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\"\n\
+             \x20    crs:HasSettings=\"True\" />\n\
+             \x20 </rdf:RDF>\n\
+             </x:xmpmeta>\n",
+        )
+        .unwrap();
+        std::fs::write(acr_only.with_extension("acr"), b"ACR\0placeholder").unwrap();
+        crate::xmp::update_xmp_tone(&our_tone, Some(0.5), None, None, None, None, None).unwrap();
+
+        save_album_impl(
+            &album_path.to_string_lossy(),
+            &[
+                item(&has_settings, 0, "none", ""),
+                item(&acr_only, 0, "none", ""),
+                item(&our_tone, 0, "none", ""),
+            ],
+        )
+        .unwrap();
+        let opened = open_album_impl(&album_path.to_string_lossy()).unwrap();
+        let flags: Vec<bool> = opened.entries.iter().map(|e| e.retouched).collect();
+        assert_eq!(
+            flags,
+            vec![true, true, false],
+            "选片集入口的「已修」判据必须与扫描入口同口径（第三条是本应用自己的调色，不算）"
+        );
     }
 
     #[test]

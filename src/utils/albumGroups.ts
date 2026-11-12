@@ -91,6 +91,9 @@ export function toAlbumGroups(result: AlbumOpenResult): AlbumLoad {
       flag: toCullFlag(d.flag),
       label: d.label ?? '',
       hasXmp: d.hasXmp,
+      // issue #200：选片集打开后也要能看见「已修」，否则同一个目录用不同方式
+      // 打开会出现两套标记。
+      retouched: d.retouched ?? false,
       // 后端已按「配对 JPG 优先、主路径兜底」读过；这里只透传。
       // 只有两条路径都读不出时才是 undefined（RAW_ONLY 的异常态）。
       exif: d.exif ?? undefined,

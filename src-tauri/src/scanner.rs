@@ -533,6 +533,18 @@ fn assemble_group(
     }
 
     let tone = xmp_meta.as_ref().and_then(extract_tone_from_xmp);
+    // 「已精修」判据（issue #200）：sidecar 里的 ACR 痕迹 **或** 同名 `.acr` 文件。
+    // 两者取或 —— `.acr` 更像可清的缓存，`HasSettings` 是 Adobe 持久写下的设置记录，
+    // 任一命中都算修过；两者在本机 161 组真实素材上逐一对应（4 / 161）。
+    // `.acr` 可能落在 RAW 旁边，也可能落在配对 JPG 旁边（PS 的「存储为」跟着
+    // 主文件走；RAW/JPG 分目录摆放时两边都可能出现），所以两处都要看 ——
+    // 旧写法 `raw.or(jpg)` 在 RAW 在场时短路，JPG 侧的证据就永远读不到。
+    let has_acr = raw_opt
+        .as_ref()
+        .into_iter()
+        .chain(jpg_opt.as_ref())
+        .any(|f| Path::new(&f.path).with_extension("acr").is_file());
+    let retouched = xmp_meta.as_ref().is_some_and(|m| m.acr_edited) || has_acr;
     let edited = jpg_opt
         .as_ref()
         .and_then(|j| Path::new(&j.path).parent())
@@ -553,6 +565,7 @@ fn assemble_group(
         // 不会出现「星级读 RAW、色标读 JPG」这种自相矛盾的组合。
         label: xmp_meta.as_ref().map(|m| m.label.clone()).unwrap_or_default(),
         has_xmp,
+        retouched,
         exif,
         thumbnail_path: None,
     })
@@ -1094,6 +1107,136 @@ mod tests {
             rating, label
         );
         fs::write(dir.join(format!("{}.xmp", stem)), body).unwrap();
+    }
+
+    // ------------------------------------------------------------------
+    // issue #200：扫描层必须真的把「已精修」带到 PhotoGroupInfo 上
+    //
+    // 这三条是在补一道**接线**测试：xmp.rs 单测能证明「解析对」，但不能证明
+    // 「扫描真的调了它并写进分组」。把 build_group 里的 retouched 改成常量
+    // false（或常量 true）时，只有这里会红。
+    // ------------------------------------------------------------------
+
+    /// Adobe 写的 `crs:HasSettings="True"` → 扫描结果标已修。
+    #[test]
+    fn scan_marks_retouched_from_has_settings() {
+        let dir = unique_dir("retouch_has_settings");
+        fs::write(dir.join("R0001.ARW"), b"raw").unwrap();
+        fs::write(
+            dir.join("R0001.xmp"),
+            "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
+             <x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"Adobe XMP Core 7.0\">\n\
+             \x20 <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n\
+             \x20  <rdf:Description rdf:about=\"\"\n\
+             \x20    xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\"\n\
+             \x20    crs:HasSettings=\"True\" />\n\
+             \x20 </rdf:RDF>\n\
+             </x:xmpmeta>\n",
+        )
+        .unwrap();
+
+        let g = scan_one(&dir);
+        assert!(g.has_xmp, "前提：侧边栏存在");
+        assert!(g.retouched, "HasSettings 必须让分组标成已修");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 只有同名 `.acr`、连侧边栏都没有 → 同样算已修。
+    ///
+    /// 顺带把反向也钉住：`.acr` 出现之前同一次扫描必须读到 **false**，
+    /// 否则「恒 true」这种改坏方式会漏网。
+    #[test]
+    fn scan_marks_retouched_from_acr_file() {
+        let dir = unique_dir("retouch_acr_file");
+        fs::write(dir.join("R0002.ARW"), b"raw").unwrap();
+
+        let before = scan_one(&dir);
+        assert!(!before.has_xmp, "前提：没有任何侧边栏");
+        assert!(!before.retouched, "什么都没有时不得标成已修");
+
+        fs::write(dir.join("R0002.acr"), b"ACR\0placeholder").unwrap();
+
+        let after = scan_one(&dir);
+        assert!(after.retouched, ".acr 旁证必须让分组标成已修");
+        // `has_xmp` 的既有语义是「.xmp **或** .acr 侧边栏存在」（见
+        // `xmp::check_sidecar_exists`），所以这一项也会跟着变真 —— 两条判据
+        // 关注的不是同一件事，别指望它能区分。
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// RAW 与配对 JPG 都在、`.acr` 只在 JPG 旁边时，也必须算已修。
+    ///
+    /// 旧写法 `raw.or(jpg)` 在 RAW 在场时短路，JPG 侧的证据永远读不到 ——
+    /// 分目录摆放（RAW/ 与 JPG/）的用户会整批丢标记。
+    #[test]
+    fn scan_finds_acr_on_paired_jpg() {
+        let dir = unique_dir("retouch_acr_on_jpg");
+        let raw_dir = dir.join("RAW");
+        let jpg_dir = dir.join("JPG");
+        fs::create_dir_all(&raw_dir).unwrap();
+        fs::create_dir_all(&jpg_dir).unwrap();
+        fs::write(raw_dir.join("R0004.ARW"), b"raw").unwrap();
+        fs::write(jpg_dir.join("R0004.JPG"), b"jpeg").unwrap();
+        // .acr 只落在 JPG 旁边
+        fs::write(jpg_dir.join("R0004.acr"), b"ACR\0placeholder").unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let res = scan_folders(
+            jpg_dir.to_str().unwrap(),
+            Some(raw_dir.to_str().unwrap()),
+            "filename",
+            &cancel,
+            |_, _, _| {},
+        )
+        .expect("扫描应成功");
+        assert_eq!(res.groups.len(), 1);
+        assert!(
+            res.groups[0].retouched,
+            "配对 JPG 旁的 .acr 漏读了（`raw.or(jpg)` 短路？）"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 本应用自己写出的调色侧边栏（元素形式 `crs:Exposure2012`）**不得**被标成已修。
+    ///
+    /// 扫描层这一条尤其重要：判据若退化成「含 crs:」，用户在应用里调过色的
+    /// 照片会全部亮「已修」，而他们从没进过 PS —— 这个错误会直接毁掉标记的可信度。
+    #[test]
+    fn scan_does_not_mark_our_own_tone_edit_as_retouched() {
+        let dir = unique_dir("retouch_own_tone");
+        fs::write(dir.join("R0003.ARW"), b"raw").unwrap();
+        let photo = dir.join("R0003.ARW");
+        crate::xmp::write_xmp_preserving(
+            &photo,
+            &crate::xmp::XmpMetadata {
+                acr_edited: false,
+                rating: 3,
+                label: String::new(),
+                rejected: false,
+                lens_model: Some("RF 24-70mm F2.8".into()),
+                focal_length: Some("50mm".into()),
+                aperture: Some("f/2.8".into()),
+                exposure: Some(0.65),
+                highlights: Some(-20.0),
+                shadows: Some(15.0),
+                temperature: Some(8.0),
+                tint: Some(-3.0),
+                contrast: Some(12.0),
+            },
+        )
+        .expect("写入调色侧边栏应成功");
+
+        let g = scan_one(&dir);
+        assert!(g.has_xmp, "前提：调色确实写了侧边栏");
+        assert!(
+            !g.retouched,
+            "本应用自己的调色被判成「已修」—— 判据太宽，标记失去意义"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     fn scan_one(dir: &Path) -> PhotoGroupInfo {

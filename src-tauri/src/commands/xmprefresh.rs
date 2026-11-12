@@ -141,6 +141,8 @@ pub fn resolve_conflicts(
                         Ok(()) => report.applied.push(RefreshItem {
                             path: choice.path.clone(),
                             state,
+                            // 裁决只改评级/旗标/色标，ACR 设置原样保留（issue #200）。
+                            retouched: xmp::is_acr_edited(Path::new(&choice.path)),
                             sidecar_removed: false,
                         }),
                         // 写盘失败：DiskSink 不删意图，用户下次刷新还能再裁决一次。
@@ -175,6 +177,7 @@ pub fn resolve_conflicts(
                                     rating: state.rating,
                                     flag: state.flag.clone(),
                                     label: state.label.clone(),
+                                    retouched: xmp::is_acr_edited(Path::new(&choice.path)),
                                 });
                             }
                             // 文件已不在：清掉游标，下次按「首次见到」重建基线。
@@ -185,6 +188,7 @@ pub fn resolve_conflicts(
                         report.applied.push(RefreshItem {
                             path: choice.path.clone(),
                             state,
+                            retouched: xmp::is_acr_edited(Path::new(&choice.path)),
                             sidecar_removed: false,
                         });
                     }
@@ -468,6 +472,7 @@ mod tests {
             rating: 4,
             flag: "pick".to_string(),
             label: String::new(),
+            retouched: false,
         })
         .expect("预置游标");
 
@@ -497,6 +502,141 @@ mod tests {
         assert!(report.applied.is_empty());
         assert!(report.failed.is_empty());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 侧边栏字节不是合法 UTF-8（编码乱的 / 写坏的）时必须报 failed，
+    /// 而不是被当成「外部清空」把星级抹成 0。
+    ///
+    /// issue #200 把 `FsProbe::read_xmp` 的 `.acr` 探测挪走后，这里的
+    /// None 语义就完全取决于 `read_xmp_full` 了 —— 值得用真实坏文件钉一次。
+    #[test]
+    fn unreadable_sidecar_bytes_report_failed_not_empty_state() {
+        let dir = temp_dir("badbytes");
+        let photo = dir.join("a.ARW");
+        let photo_str = photo.to_string_lossy().to_string();
+        std::fs::write(&photo, b"raw").unwrap();
+        let db = Database::open(&dir.join("t.db")).expect("临时库");
+
+        // 先建立一条「3 星」的基线
+        xmp::write_xmp(&photo, 3, "none", Some("")).expect("预置侧边栏");
+        crate::xmprefresh::refresh(
+            &db,
+            &FsProbe,
+            vec![RefreshTarget {
+                path: photo_str.clone(),
+                jpg_path: None,
+            }],
+        );
+
+        // 再把它写坏（非法 UTF-8，mtime 同时前进）
+        std::thread::sleep(Duration::from_millis(20));
+        let sidecar = xmp::get_xmp_path(&photo);
+        std::fs::write(&sidecar, [0xff, 0xfe, 0x00, 0x41]).expect("写坏字节");
+
+        let report = crate::xmprefresh::refresh(
+            &db,
+            &FsProbe,
+            vec![RefreshTarget {
+                path: photo_str.clone(),
+                jpg_path: None,
+            }],
+        );
+
+        assert_eq!(report.failed.len(), 1, "读不出来必须报 failed");
+        assert!(report.adopted.is_empty(), "读失败不得当成「外部清空」");
+        let cursor = db
+            .lookup_xmp_cursor(&sidecar.to_string_lossy())
+            .unwrap()
+            .expect("游标仍在");
+        assert_eq!(cursor.rating, 3, "读失败不得改动游标里的星级");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// issue #200：裁决之后回传的 `RefreshItem.retouched` 必须是真的。
+    ///
+    /// 三处 `xmp::is_acr_edited(...)` 全是「读完就填」，很容易被后来者简化成
+    /// 硬编码 `false`（毕竟「裁决不改 ACR」这句话容易被读成「裁决后不需要判」）。
+    /// 一旦那样，用户裁决完冲突，界面上的「已修」角标会当场消失，直到下次
+    /// 整盘重扫才回来。这条用例把两条裁决路径都钉住。
+    #[test]
+    fn resolve_reports_retouched_after_both_actions() {
+        const HAS_SETTINGS: &str = "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
+             <x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"Adobe XMP Core 7.0\">\n\
+             \x20 <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n\
+             \x20  <rdf:Description rdf:about=\"\"\n\
+             \x20    xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\"\n\
+             \x20    crs:HasSettings=\"True\" />\n\
+             \x20 </rdf:RDF>\n\
+             </x:xmpmeta>\n";
+
+        let dir = temp_dir("retouch_resolve");
+        let db = Database::open(&dir.join("t.db")).expect("临时库");
+        let queue = queue_for(&db);
+
+        // 两张都在 ACR 里修过，各自留下一个「本地未落盘意图」制造冲突
+        let mut paths = Vec::new();
+        for name in ["keep.ARW", "take.ARW"] {
+            let photo = dir.join(name);
+            std::fs::write(&photo, b"raw").expect("占位");
+            std::fs::write(xmp::get_xmp_path(&photo), HAS_SETTINGS).expect("Adobe 侧边栏");
+            let p = photo.to_string_lossy().to_string();
+            db.enqueue_pending(&p, 4, "pick", "", 100).expect("记意图");
+            paths.push(p);
+        }
+
+        let report = resolve_conflicts(
+            &db,
+            &FsProbe,
+            &queue,
+            vec![
+                ConflictChoice {
+                    path: paths[0].clone(),
+                    action: ConflictAction::KeepLocal,
+                    external: None,
+                },
+                ConflictChoice {
+                    path: paths[1].clone(),
+                    action: ConflictAction::UseExternal,
+                    external: Some(crate::xmprefresh::CullState::new(2, "none", "")),
+                },
+            ],
+        );
+
+        assert!(
+            report.failed.is_empty(),
+            "裁决不该失败: {:?}",
+            report.failed
+        );
+        assert_eq!(report.applied.len(), 2, "两条裁决都要回传");
+        for item in &report.applied {
+            assert!(
+                item.retouched,
+                "裁决之后「已修」不能丢（{}）—— 判据被写死成 false 了？",
+                item.path
+            );
+        }
+
+        // keep-local 会真的写一遍 XMP：写盘不得抹掉 Adobe 的 ACR 痕迹
+        let kept = paths[0].clone();
+        let content = std::fs::read_to_string(xmp::get_xmp_path(Path::new(&kept))).unwrap();
+        assert!(
+            content.contains("HasSettings"),
+            "写盘把 Adobe 的 ACR 痕迹删掉了: {}",
+            content
+        );
+        assert!(xmp::is_acr_edited(Path::new(&kept)), "写盘后仍应算已修");
+
+        // use-external 推进的游标里也要带上
+        let sidecar = xmp::get_xmp_path(Path::new(&paths[1]))
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            db.lookup_xmp_cursor(&sidecar).unwrap().unwrap().retouched,
+            "游标里的 retouched 也要跟上，否则下次刷新会重复报一条"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 真实文件闭环：建立基线 → 外部改动 → 增量读 → 冲突 → 裁决。

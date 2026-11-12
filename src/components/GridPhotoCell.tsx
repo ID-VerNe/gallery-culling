@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Star, Check, X, Pin, Target } from 'lucide-react';
+import { Star, Check, X, Pin, Target, Wand2 } from 'lucide-react';
 import { PhotoGroupInfo } from '../types';
 import { LABEL_DOT_CLASS, LABEL_NAMES, isColorLabel } from '../utils/labels';
 import { GRID_THUMB_WIDTH, type ThumbnailLoader } from './thumbnailLoader';
@@ -96,6 +96,7 @@ export const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
     isColorLabel(group.label) ? `色标${LABEL_NAMES[group.label]}` : null,
     group.raw ? '含 RAW' : null,
     group.hasXmp ? '含 XMP' : null,
+    group.retouched ? '已 PS 精修' : null,
     group.tone ? '已调色' : null,
     group.edited ? '含精修成果' : null,
     isPinned ? '已设为对比基准' : null,
@@ -130,7 +131,11 @@ export const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
           ? 'border-white/60 ring-1 ring-inset ring-white/60'
           : isCandidate
           ? 'border-sky-400/60 ring-1 ring-inset ring-sky-400/40'
-          : `hover:border-white/30 ${flagBorder}`
+          : // 已精修（#200）用琥珀色内描边叠在旗标边框上：旗标是「留/淘」，
+            // 精修是「是否进过 PS」，两件事必须能同时看见，不能互相顶掉。
+            `hover:border-white/30 ${flagBorder}${
+              group.retouched ? ' ring-1 ring-inset ring-amber-400/60' : ''
+            }`
       }`}
       style={{ height: `${cellHeight}px` }}
     >
@@ -215,6 +220,21 @@ export const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
             />
           )}
         </div>
+
+        {/* 已 PS 精修（issue #200）：实心琥珀色小牌子，刻意比 X/T/E 单字母更醒目。
+            用户的原话是「要一个很醒目的标记」—— 单字母角标在一屏 200 张里看不见，
+            所以这里给的是带文字的实心块，位置在旗标下方，不与右上序号抢位。 */}
+        {group.retouched && (
+          <div
+            className="absolute top-6 left-1 bg-amber-400 text-black rounded px-1 py-[1px] flex items-center gap-0.5 text-[9px] font-semibold leading-none shadow-sm"
+            role="img"
+            aria-label="已进 Photoshop / Camera Raw 精修"
+            title="已进 Photoshop / Camera Raw 精修"
+          >
+            <Wand2 className="w-2.5 h-2.5" aria-hidden="true" />
+            <span>已修</span>
+          </div>
+        )}
 
         {/* Bottom-Right Rating */}
         {group.rating > 0 && (

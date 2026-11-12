@@ -1,6 +1,6 @@
 import React from 'react';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Sparkles, Wand2 } from 'lucide-react';
 import { PhotoGroupInfo, ToneAdjustments, LumenStatus } from '../types';
 import { getToneFilterString } from '../utils/autoTone';
 import { isFitScale } from '../utils/viewportZoom';
@@ -402,16 +402,31 @@ export const PreviewViewport: React.FC<PreviewViewportProps> = ({
         />
       )}
 
-      {/* 含成品提示：该分组存在 edited（Luminar 成果）。
-          主图口径仍是工作版（jpg/raw + LUMEN 调色）——这里只提示、不改显示内容，
-          避免 edited 在单图视图里无声消失。 */}
-      {group.edited && (
-        <div
-          className="absolute top-3 left-3 bg-purple-500/15 border border-purple-500/30 text-purple-300 backdrop-blur-md px-2 py-1 rounded-md text-[11px] font-medium flex items-center gap-1 pointer-events-none"
-          title="包含精修成果 (Luminar AI)"
-        >
-          <Sparkles className="w-3 h-3" aria-hidden="true" />
-          <span>含成品</span>
+      {/* 左上角状态角标：已精修（issue #200）与「含成品」并排成竖列。
+          两者都是「这张图被外部工具动过」的事实，同时成立时必须都看得见，
+          所以共用一个定位容器，而不是各自 absolute 抢同一个坐标。 */}
+      {(group.retouched || group.edited) && (
+        <div className="absolute top-3 left-3 flex flex-col items-start gap-1 pointer-events-none">
+          {group.retouched && (
+            <div
+              className="bg-amber-400 text-black px-2 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1 shadow-sm"
+              role="img"
+              aria-label="已进 Photoshop / Camera Raw 精修"
+              title="已进 Photoshop / Camera Raw 精修"
+            >
+              <Wand2 className="w-3 h-3" aria-hidden="true" />
+              <span>已修</span>
+            </div>
+          )}
+          {group.edited && (
+            <div
+              className="bg-purple-500/15 border border-purple-500/30 text-purple-300 backdrop-blur-md px-2 py-1 rounded-md text-[11px] font-medium flex items-center gap-1"
+              title="包含精修成果 (Luminar AI)"
+            >
+              <Sparkles className="w-3 h-3" aria-hidden="true" />
+              <span>含成品</span>
+            </div>
+          )}
         </div>
       )}
 
