@@ -1,10 +1,10 @@
 {
   "version": "v2.0.13",
   "notes": "v2.0.13\n\n- 修复上一版「外部打开」（快捷键 W）弹出一个「文档」窗口、Photoshop 却不启动的问题。现在按 W 会直接把照片交给 Photoshop；未配置 PS 路径时按预期回落到系统默认程序。\n- 内部：删掉了上一版里那条无效的「经 explorer 代为启动 Photoshop」的路径，以及它依赖的整套 Windows 权限判定代码。点 W 只做一件事——直连 Photoshop，不再有中间层。\n\n---\n\n下载附件 `gallery-culling_2.0.13_x64-setup.exe` 直接安装覆盖即可，无需卸载旧版。首次使用 LUMEN 相关功能时会自动下载引擎，请保持网络可用。",
-  "pub_date": "2026-11-12T03:34:01.155Z",
+  "pub_date": "2026-11-12T03:44:33.371Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNGkrQkVYSUNPYWhvVWZabzY0amdMOWJuZ011dy81dGRiL09ObFFidERJVG1sbktyMXhBQnVBZm1zVW9zQnJiMGcwYnBUOVlrREp4SDVEN284Z1FzWndrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDU0NDQwCWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC4xM194NjQtc2V0dXAuZXhlCXZlcnNpb246Mi4wLjEzCmdMcWdpQnAwd1FkR1R3ODFuZ0EvaEptUlJCaytwdStiUnliaWFpSXJjVXVlZEV4N1RwcDUzNWxYNzRUU0FOQ1haMHJuY3ZpdGFkVW1ZNHV3SHNrYkNRPT0K",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNHN4TVJpVjM3eXRyMmtEQ04xVDB1aENqT0lJdlFFek9Rd3cyeDhyMkRJVS9xcUpJOE80ZHRVN0FhRFBna3FLaFFJNXVvbFNKR1hBMkRWN1cwT2JCQkFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDU1MDczCWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC4xM194NjQtc2V0dXAuZXhlCXZlcnNpb246Mi4wLjEzCldraHRzU3pyNnVJMFV0TitPbkxwUEQvNk1waHhCdS9MZmg4VEFSTkNpaXllc09OZlM1bzJtWmk3K1A5MGJTU0FEaCt6Zmo3YnVTTXU3WWl2UWxVMER3PT0K",
       "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.13/gallery-culling_2.0.13_x64-setup.exe"
     }
   }
