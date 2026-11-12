@@ -153,12 +153,16 @@ pub struct RefreshItem {
 
 /// 需要用户裁决的一张照片。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RefreshConflict {
     pub path: String,
     /// 本地未落盘的意图
     pub local: CullState,
     /// 磁盘上的当前值
     pub external: CullState,
+    /// 配对 JPG（issue #203）：裁决后回传 `RefreshItem.retouched` 时要靠它看
+    /// JPG 侧的 `.acr` —— 否则徽章会被一句「只看主路径」的判据压成未修。
+    pub jpg_path: Option<String>,
 }
 
 /// 一次刷新的汇总。
@@ -329,6 +333,7 @@ pub fn refresh(
                     path: target.path.clone(),
                     local: local.expect("冲突必然有本地意图"),
                     external: disk,
+                    jpg_path: target.jpg_path.clone(),
                 });
             }
             Decision::AlreadySynced => {
@@ -871,6 +876,46 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
     }
 
+    /// issue #203：冲突必须把配对 JPG 一起带给前端。
+    ///
+    /// 裁决回传的 `RefreshItem.retouched` 要靠它看 JPG 侧的 `.acr`；少这一跳，
+    /// 徽章会在裁决瞬间被压成未修，并且因为游标同时被写成 false + 当前 mtime，
+    /// 下次刷新 mtime 未变直接跳过 —— 一直错到文件再被外部改一次。
+    #[test]
+    fn conflict_carries_paired_jpg_for_resolution() {
+        let (db, db_path) = temp_db("conflict_pair");
+        let probe = FakeProbe::new();
+        probe.file("C:/raw/a.ARW", 2000, 5, false, "");
+        db.upsert_xmp_cursor(&cursor("C:/raw/a.xmp", 1000, 3, "none", ""))
+            .unwrap();
+        db.enqueue_pending("C:/raw/a.ARW", 4, "pick", "", 1500)
+            .unwrap();
+
+        let report = refresh(
+            &db,
+            &probe,
+            vec![RefreshTarget {
+                path: "C:/raw/a.ARW".to_string(),
+                jpg_path: Some("C:/jpg/a.JPG".to_string()),
+            }],
+        );
+
+        assert_eq!(report.conflicts.len(), 1);
+        assert_eq!(
+            report.conflicts[0].jpg_path.as_deref(),
+            Some("C:/jpg/a.JPG"),
+            "冲突必须带上配对 JPG，否则裁决时又只看主路径"
+        );
+        // 键名是前端读的 `jpgPath`（issue #202 的教训：这类字段最容易漏 rename）
+        let v = serde_json::to_value(&report.conflicts[0]).unwrap();
+        assert_eq!(v["jpgPath"], serde_json::json!("C:/jpg/a.JPG"));
+        assert!(
+            v.get("jpg_path").is_none(),
+            "snake_case 键不该出现在线上载荷里: {v}"
+        );
+        let _ = std::fs::remove_file(&db_path);
+    }
+
     /// 意图与磁盘一致 = 上次其实写成功了，只是记录没删干净 → 清掉残留。
     #[test]
     fn pending_matching_disk_is_cleared() {
@@ -1354,6 +1399,9 @@ mod tests {
                 path: "C:/p/b.ARW".to_string(),
                 local: CullState::new(4, "pick", ""),
                 external: CullState::new(5, "none", ""),
+                // #204 的用例在 #205 加上 `jpg_path` 之前写的；合并两单后补齐，
+                // 顺带断言它在序列化后是 null（无配对 JPG 时的真实形状）。
+                jpg_path: None,
             }],
             failed: Vec::new(),
         };
@@ -1375,6 +1423,10 @@ mod tests {
         let c = &v["conflicts"][0];
         assert_eq!(c["local"]["flag"], serde_json::json!("pick"));
         assert_eq!(c["external"]["rating"], serde_json::json!(5));
+        assert!(
+            c.get("jpgPath").is_some() && c["jpgPath"].is_null(),
+            "无配对 JPG 时 jpgPath 应是 null，不该缺键或写成 snake_case: {v}"
+        );
     }
 
     /// 反向：前端传上来的 `RefreshTarget` 也是同一条契约。

@@ -92,13 +92,31 @@ describe('XmpConflictDialog —— 逐张选择', () => {
 
     await user.click(screen.getByRole('button', { name: /应用/ }));
     expect(onApply).toHaveBeenCalledWith([
-      { path: 'D:/shoot/RAW/A.ARW', action: 'keep-local' },
+      { path: 'D:/shoot/RAW/A.ARW', action: 'keep-local', jpgPath: null },
       {
         path: 'D:/shoot/RAW/B.ARW',
         action: 'use-external',
         external: { rating: 2, flag: 'reject', label: 'Red' },
+        jpgPath: null,
       },
     ]);
+  });
+
+  it('把配对 JPG 原样带回去 —— 后端裁决时靠它看 JPG 侧的 .acr', async () => {
+    const user = userEvent.setup();
+    const withPair: XmpRefreshConflict[] = [
+      {
+        path: 'D:/shoot/RAW/A.ARW',
+        local: state(5, 'pick'),
+        external: state(1),
+        jpgPath: 'D:/shoot/JPG/A.JPG',
+      },
+    ];
+    const { onApply } = setup({ conflicts: withPair });
+
+    // 默认「保留本地」也要带（issue #203：两条分支都会回传 retouched）
+    await user.click(screen.getByRole('button', { name: /应用/ }));
+    expect(onApply.mock.calls[0][0][0].jpgPath).toBe('D:/shoot/JPG/A.JPG');
   });
 
   it('再点一次同一个选项不取消（裁决必须有一个确定结果）', async () => {
@@ -204,6 +222,7 @@ describe('XmpConflictDialog —— 列表变化', () => {
     expect(onApply.mock.calls[0][0][0]).toEqual({
       path: 'D:/shoot/RAW/A.ARW',
       action: 'keep-local',
+      jpgPath: null,
     });
   });
 
@@ -263,7 +282,7 @@ describe('XmpConflictDialog —— 列表变化', () => {
 
     await user.click(screen.getByRole('button', { name: '应用 1 张' }));
     expect(onApply).toHaveBeenCalledWith([
-      { path: 'D:/shoot/RAW/B.ARW', action: 'keep-local' },
+      { path: 'D:/shoot/RAW/B.ARW', action: 'keep-local', jpgPath: null },
     ]);
   });
 });

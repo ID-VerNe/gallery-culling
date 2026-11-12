@@ -539,11 +539,17 @@ fn assemble_group(
     // `.acr` 可能落在 RAW 旁边，也可能落在配对 JPG 旁边（PS 的「存储为」跟着
     // 主文件走；RAW/JPG 分目录摆放时两边都可能出现），所以两处都要看 ——
     // 旧写法 `raw.or(jpg)` 在 RAW 在场时短路，JPG 侧的证据就永远读不到。
-    let has_acr = raw_opt
+    // 规则收敛到 `xmp::acr_exists_with_pair`（issue #203）：选片集与裁决也用它，
+    // 三处判据只剩一份实现，不会再各自漂移。
+    let primary_path = raw_opt
         .as_ref()
-        .into_iter()
-        .chain(jpg_opt.as_ref())
-        .any(|f| Path::new(&f.path).with_extension("acr").is_file());
+        .or(jpg_opt.as_ref())
+        .map(|f| Path::new(&f.path));
+    let paired_path = raw_opt
+        .as_ref()
+        .and(jpg_opt.as_ref())
+        .map(|j| Path::new(&j.path));
+    let has_acr = primary_path.is_some_and(|p| crate::xmp::acr_exists_with_pair(p, paired_path));
     let retouched = xmp_meta.as_ref().is_some_and(|m| m.acr_edited) || has_acr;
     let edited = jpg_opt
         .as_ref()

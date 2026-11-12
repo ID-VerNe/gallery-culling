@@ -96,9 +96,10 @@ export const XmpConflictDialog: React.FC<XmpConflictDialogProps> = ({
     () =>
       conflicts.map((c) => {
         const action = selection[rowKey(c)] ?? DEFAULT_ACTION;
+        // `jpgPath` 两条分支都要带：裁决后后端要靠它看 JPG 侧的 `.acr`（issue #203）。
         return action === 'use-external'
-          ? { path: c.path, action, external: c.external }
-          : { path: c.path, action };
+          ? { path: c.path, action, external: c.external, jpgPath: c.jpgPath ?? null }
+          : { path: c.path, action, jpgPath: c.jpgPath ?? null };
       }),
     [conflicts, selection],
   );
