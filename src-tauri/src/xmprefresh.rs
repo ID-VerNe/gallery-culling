@@ -1399,6 +1399,9 @@ mod tests {
                 path: "C:/p/b.ARW".to_string(),
                 local: CullState::new(4, "pick", ""),
                 external: CullState::new(5, "none", ""),
+                // #204 的用例在 #205 加上 `jpg_path` 之前写的；合并两单后补齐，
+                // 顺带断言它在序列化后是 null（无配对 JPG 时的真实形状）。
+                jpg_path: None,
             }],
             failed: Vec::new(),
         };
@@ -1420,6 +1423,10 @@ mod tests {
         let c = &v["conflicts"][0];
         assert_eq!(c["local"]["flag"], serde_json::json!("pick"));
         assert_eq!(c["external"]["rating"], serde_json::json!(5));
+        assert!(
+            c.get("jpgPath").is_some() && c["jpgPath"].is_null(),
+            "无配对 JPG 时 jpgPath 应是 null，不该缺键或写成 snake_case: {v}"
+        );
     }
 
     /// 反向：前端传上来的 `RefreshTarget` 也是同一条契约。
