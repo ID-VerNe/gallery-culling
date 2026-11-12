@@ -256,6 +256,37 @@ mod tests {
         }
     }
 
+    /// issue #203：裁决入参的键是 camelCase，且 `jpgPath` 缺失时退化。
+    ///
+    /// `#[serde(default)]` 把「漏 rename_all」变成**静默** `None`：行为退回
+    /// 「只看主路径」，而全量用例照样绿 —— 上游 `RefreshConflict` 的序列化方向
+    /// 钉不住这一环。所以这里专门测反序列化（#202 的教训）。
+    #[test]
+    fn conflict_choice_deserializes_camel_case_jpg_path() {
+        let c: ConflictChoice = serde_json::from_value(serde_json::json!({
+            "path": "C:/raw/a.ARW",
+            "action": "use-external",
+            "external": { "rating": 2, "flag": "none", "label": "" },
+            "jpgPath": "C:/jpg/a.JPG",
+        }))
+        .expect("前端形状必须能反序列化");
+        assert_eq!(
+            c.jpg_path.as_deref(),
+            Some("C:/jpg/a.JPG"),
+            "jpgPath 被静默丢掉了（缺 rename_all？）"
+        );
+        assert_eq!(c.action, ConflictAction::UseExternal);
+        assert_eq!(c.external, Some(CullState::new(2, "none", "")));
+
+        // 老前端不带这个键时仍是 None（`#[serde(default)]` 的语义不能被改坏）
+        let bare: ConflictChoice = serde_json::from_value(serde_json::json!({
+            "path": "C:/raw/b.ARW",
+            "action": "keep-local",
+        }))
+        .unwrap();
+        assert!(bare.jpg_path.is_none());
+    }
+
     /// 保留本地：真的写进 XMP、清掉意图、推进游标。
     #[test]
     fn keep_local_writes_xmp_and_clears_pending() {
