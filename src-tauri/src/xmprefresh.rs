@@ -61,7 +61,13 @@ impl CullState {
 }
 
 /// 一次刷新的目标：一个分组的主路径 + JPG 路径（旗标存储的兜底）。
+///
+/// **入参是 camelCase**（issue #202）：前端 `api.refreshFromXmp` 传的是
+/// `{ path, jpgPath }`。没有 `rename_all` 时 serde 认不出 `jpgPath`，而
+/// `#[serde(default)]` 又让它静默变成 `None` —— 不报错、不警告，只是
+/// 「JPG 侧兜底」与「`.acr` 落在配对 JPG 旁」这两条分支永远不生效。
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RefreshTarget {
     /// 主路径，RAW 优先 —— 必须与前端 `groupPath()` 和写盘路径一致。
     pub path: String,
@@ -129,7 +135,12 @@ impl SidecarProbe for FsProbe {
 }
 
 /// 一张照片的采用结果。
+///
+/// **出参是 camelCase**（issue #202）：前端 `XmpRefreshItem` 读的是
+/// `sidecarRemoved`。此前没有 `rename_all`，键名原样按 `sidecar_removed` 出去，
+/// 前端拿到 `undefined` —— 那句「N 张的侧边栏已被外部删除」从来没出现过。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RefreshItem {
     /// 照片路径（与 `RefreshTarget::path` 一致，前端据此匹配分组）。
     pub path: String,
@@ -1357,6 +1368,83 @@ mod tests {
         assert_eq!(after.mtime_ms, 1000, "冲突不推进游标");
         assert!(!after.retouched, "冲突时也不该把已精修写进游标");
         let _ = std::fs::remove_file(&db_path);
+    }
+
+    // ---------------------------------------------------------------
+    // issue #202：IPC 契约必须用**真序列化**锁住，不能两边各造一份「真值」
+    //
+    // 这条 bug 能活下来就是因为：前端夹具直接写 camelCase 字面量喂给 mock 的
+    // IPC，后端用例只断言 Rust 字段。两侧各自为真，中间的 serde 环节零覆盖。
+    // 所以下面两条都走 serde_json 真编解码，断言的是**线上会传的键名**。
+    // ---------------------------------------------------------------
+
+    /// `RefreshItem` 序列化出去的键必须是前端读的那些（camelCase）。
+    ///
+    /// 此前没有 `rename_all`，`sidecar_removed` 原样出去，前端
+    /// `adopted.filter((a) => a.sidecarRemoved)` 恒为 undefined ——
+    /// 「（其中 N 张的侧边栏已被外部删除）」那句提示从来没出现过。
+    #[test]
+    fn refresh_report_serializes_camel_case_keys() {
+        let report = RefreshReport {
+            checked: 1,
+            unchanged: 0,
+            baselined: 0,
+            adopted: vec![RefreshItem {
+                path: "C:/p/a.ARW".to_string(),
+                state: CullState::new(3, "pick", "Red"),
+                retouched: true,
+                sidecar_removed: true,
+            }],
+            conflicts: vec![RefreshConflict {
+                path: "C:/p/b.ARW".to_string(),
+                local: CullState::new(4, "pick", ""),
+                external: CullState::new(5, "none", ""),
+            }],
+            failed: Vec::new(),
+        };
+
+        let v = serde_json::to_value(&report).expect("必须可序列化");
+        let item = &v["adopted"][0];
+        assert_eq!(
+            item["sidecarRemoved"],
+            serde_json::json!(true),
+            "前端读的是 camelCase 键；实际载荷: {v}"
+        );
+        assert!(
+            item.get("sidecar_removed").is_none(),
+            "snake_case 键不该出现在线上载荷里: {v}"
+        );
+        assert_eq!(item["retouched"], serde_json::json!(true));
+        assert_eq!(item["state"]["rating"], serde_json::json!(3));
+        // 嵌套的冲突对象同样按 camelCase 出去（字段都是单词，键名一个不少）
+        let c = &v["conflicts"][0];
+        assert_eq!(c["local"]["flag"], serde_json::json!("pick"));
+        assert_eq!(c["external"]["rating"], serde_json::json!(5));
+    }
+
+    /// 反向：前端传上来的 `RefreshTarget` 也是同一条契约。
+    ///
+    /// 前端 `api.refreshFromXmp` 传的是 `{ path, jpgPath }`。`jpg_path` 没写
+    /// rename_all 又带 `#[serde(default)]` → `jpgPath` 被当成未知字段丢掉、
+    /// `jpg_path` 静默变 None。于是 JPG 侧的旗标兜底与 `pair_sidecar(...)`
+    /// 判据在**真实运行里从未生效**，而单测直接构造结构体，完全看不见。
+    #[test]
+    fn refresh_target_deserializes_camel_case_jpg_path() {
+        let t: RefreshTarget = serde_json::from_value(serde_json::json!({
+            "path": "C:/raw/a.ARW",
+            "jpgPath": "C:/jpg/a.JPG",
+        }))
+        .expect("前端形状必须能反序列化");
+        assert_eq!(
+            t.jpg_path.as_deref(),
+            Some("C:/jpg/a.JPG"),
+            "jpgPath 被静默丢掉了（缺 rename_all？）"
+        );
+
+        // 不带该键时仍是 None（`#[serde(default)]` 的语义不能被改坏）
+        let none: RefreshTarget =
+            serde_json::from_value(serde_json::json!({ "path": "C:/raw/b.ARW" })).unwrap();
+        assert!(none.jpg_path.is_none());
     }
 
     /// 扫描基线要把「已精修」一起带进游标，否则首刷会把已修过的图当成变化。
