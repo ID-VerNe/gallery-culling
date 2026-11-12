@@ -1,11 +1,11 @@
 {
-  "version": "v2.0.11",
-  "notes": "v2.0.11\n\n- 修复管理员模式下「外部打开」与 Photoshop 权限不一致：提权运行时主路径改用 explorer 代理降权启动，与手动启动的 PS 处于同一权限级别，已打开的 PS 能正常收到导入；回落默认程序或 PS 启动失败时会明确提示，不再静默。\n- 修复上次会话位置丢失：启动阶段的会话写入不再把 last_index 覆盖成 0，下次启动回到上次查看的照片。\n- 修复宫格格头在窗口变窄时标签竖排折行：状态与控件保持单行不折行，3列/4列与搜索改为图标按钮（保留悬停说明与无障碍标签），全选/清除仍保留文字。\n- 修复顶栏选集名把 Windows 反斜杠路径整串显示：路径归一化后只显示文件名。\n- 修复缩略图在同一秒内被改写后仍显示旧图：缓存指纹由秒级改为纳秒级；缩略图缓存键升到 v3，旧缓存下次查看时自动重新生成，不丢任何用户数据。\n- 缩略图缓存统一放到用户主目录（%USERPROFILE%\\.galleryculling\\cache），冷启动与切换面板不再重复生成；首次升级会一次性迁移现有缓存，原文件保留。\n- 修复同一选片集并发写入时相互覆盖、后提交静默盖掉先提交（内部修复，正常使用不易触发）。\n- 内部重构：EXIF 读取顺序统一（扫描与选集口径一致，损坏 JPG 回落 RAW）、目录归一化收敛、缩略图设置默认值收敛为单一常量、后端命令门面拆分等，行为与本次修复一致。\n\n---\n\n下载附件 `gallery-culling_2.0.11_x64-setup.exe` 直接安装覆盖即可，无需卸载旧版。首次使用 LUMEN 相关功能时会自动下载引擎，请保持网络可用。",
-  "pub_date": "2026-11-11T14:27:07.561Z",
+  "version": "v2.0.12",
+  "notes": "v2.0.12\n\n- 修复点「外部打开」（快捷键 W）整个程序直接闪退：权限判定的 Windows API 声明写错了一个参数，进程级崩溃且无任何提示。现在「外部打开」正常工作，Photoshop 未配置时按预期回落到系统默认程序。顺带修正了「管理员身份运行时给 Photoshop 降权」这条逻辑——它此前从未真正生效。\n- 宫格缩略图改为读相机内嵌的小图，不再等 LUMEN 解码：200px 缩略图从原来约 1.2 秒/张（12 格首屏等十几秒、一张一张蹦）变成毫秒级，滚动、切面板、点开大图都不再卡。\n- 修复 JPEG 的内嵌缩略图取不到、只能退化成整图解码（约 2.7 秒/张）的问题：偏移量该按 TIFF 头算而不是按文件头算。现在 JPG 与 RAW 都走内嵌图。\n- 设置页下线「宫格缩略图也用 LUMEN RAW 渲染」开关：宫格只用来看个大概，不值得做真实解码。原有设置项会安静失效，不影响其它配置。\n\n---\n\n下载附件 `gallery-culling_2.0.12_x64-setup.exe` 直接安装覆盖即可，无需卸载旧版。首次使用 LUMEN 相关功能时会自动下载引擎，请保持网络可用。",
+  "pub_date": "2026-11-12T02:53:26.530Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNHN2TVVBZHpCM0diTnRPUUdqNFA1UC9pWlZMTE1vM3JOWEFiamwvT0EyU1VZQU1EdXRJaWk4R2pWdnI5SGROTTN6d2dMeXJGSFdVdVQyaElJYmw0Unc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDA3MjI3CWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC4xMV94NjQtc2V0dXAuZXhlCXZlcnNpb246Mi4wLjExCkFrNHpoUFBleUx1YUFBbHRjWFV6YTQ4ejZLWlhRTFFGeHRqcEVCV1VQdE8zK256VGV0VHNrUGdJbnVNTTlZelBYZURSZzl5alpDbldjQnNCbUdPOENnPT0K",
-      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.11/gallery-culling_2.0.11_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNGhCU0Y5bDZXejNSQTlJbXNNT2FYcktRZHRHbmlwbXpmeFY4dnhtcFMwb1FkdFdQVWtUREV1UjZoS2xxeFRxTEVES0czOTNJbVlBR1pMU1RvaFFqRFFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDUyMDA1CWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC4xMl94NjQtc2V0dXAuZXhlCXZlcnNpb246Mi4wLjEyCjBzT25oZTBtL0ZxYUwzMFdMR0RsOGVySXVsanJtTEJWbTRwMzBOUkRRVHN2YWJaZ0k1NlJwMlVtODVZTkozbUdhUjBmT21rYlRQc05RSkw0MWJuNkJnPT0K",
+      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.12/gallery-culling_2.0.12_x64-setup.exe"
     }
   }
 }
