@@ -141,6 +141,8 @@ pub fn resolve_conflicts(
                         Ok(()) => report.applied.push(RefreshItem {
                             path: choice.path.clone(),
                             state,
+                            // 裁决只改评级/旗标/色标，ACR 设置原样保留（issue #200）。
+                            retouched: xmp::is_acr_edited(Path::new(&choice.path)),
                             sidecar_removed: false,
                         }),
                         // 写盘失败：DiskSink 不删意图，用户下次刷新还能再裁决一次。
@@ -175,6 +177,7 @@ pub fn resolve_conflicts(
                                     rating: state.rating,
                                     flag: state.flag.clone(),
                                     label: state.label.clone(),
+                                    retouched: xmp::is_acr_edited(Path::new(&choice.path)),
                                 });
                             }
                             // 文件已不在：清掉游标，下次按「首次见到」重建基线。
@@ -185,6 +188,7 @@ pub fn resolve_conflicts(
                         report.applied.push(RefreshItem {
                             path: choice.path.clone(),
                             state,
+                            retouched: xmp::is_acr_edited(Path::new(&choice.path)),
                             sidecar_removed: false,
                         });
                     }
@@ -468,6 +472,7 @@ mod tests {
             rating: 4,
             flag: "pick".to_string(),
             label: String::new(),
+            retouched: false,
         })
         .expect("预置游标");
 

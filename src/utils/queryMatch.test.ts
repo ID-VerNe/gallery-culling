@@ -115,6 +115,21 @@ describe('parseQuery：字段与运算符', () => {
     expect(parseQuery('-edited').terms[0]).toMatchObject({ field: 'edited', negated: true });
   });
 
+  // issue #200：`retouched` 必须是真布尔字段，而不是被当成文件名裸词。
+  // 裸词会退化成「文件名里含 retouched」，筛选框里任何输入都不会报错，
+  // 但结果永远是空 —— 这种「静默失效」比报错更难发现。
+  it('retouched 是布尔字段且支持裸词与取反', () => {
+    expect(parseQuery('retouched').terms[0]).toMatchObject({ field: 'retouched', value: true });
+    expect(parseQuery('-retouched').terms[0]).toMatchObject({
+      field: 'retouched',
+      negated: true,
+    });
+    // 单数别名：手快少打一个 d 也要能用。
+    expect(parseQuery('retouch').terms[0]).toMatchObject({ field: 'retouched', value: true });
+    // 带值写是误用，必须报错而不是静默吞掉。
+    expect(parseQuery('retouched:yes').errors.length).toBeGreaterThan(0);
+  });
+
   it('EXIF 数值宽容解析：f/2.8、1/500、85mm', () => {
     expect(parseQuery('aperture:f/2.8').terms[0]).toMatchObject({ value: 2.8 });
     expect(parseQuery('shutter:1/500').terms[0]).toMatchObject({ value: 0.002 });
@@ -220,6 +235,13 @@ describe('matchesQuery：字段求值', () => {
   it('edited 看精修成果是否存在', () => {
     expect(hit('edited')).toBe(true);
     expect(miss('edited', group())).toBe(true);
+  });
+
+  it('retouched 看是否进过 PS / ACR', () => {
+    expect(miss('retouched', RICH)).toBe(true);
+    expect(hit('-retouched', RICH)).toBe(true);
+    expect(miss('retouched', group({ retouched: true }))).toBe(false);
+    expect(hit('-retouched', group({ retouched: true }))).toBe(false);
   });
 
   it('iso / aperture / shutter / focal 数值比较', () => {

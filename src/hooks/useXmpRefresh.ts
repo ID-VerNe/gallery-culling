@@ -128,6 +128,9 @@ export function useXmpRefresh({
         rating: item.state.rating,
         flag: toCullFlag(item.state.flag),
         label: item.state.label,
+        // issue #200：只调色、没动星级的照片三项全等，只有这一项会变 ——
+        // 漏了它，「已修」徽章要等到下次整盘重扫才亮。
+        retouched: item.retouched,
       });
       // 界面已与磁盘一致，未同步角标必须撤掉。
       syncedRef.current(id);

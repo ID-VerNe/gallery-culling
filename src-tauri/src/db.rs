@@ -90,6 +90,9 @@ pub struct XmpCursor {
     pub rating: u8,
     pub flag: String,
     pub label: String,
+    /// 上次看到的「是否经 ACR/PS 精修」（issue #200）。只用于判断要不要推一条更新，
+    /// **不参与冲突判定** —— 它不是用户的评级意图。
+    pub retouched: bool,
 }
 
 /// 一条尚未落盘的写入意图（FR-03）。
@@ -191,11 +194,15 @@ impl Database {
                 rating       INTEGER NOT NULL,
                 flag         TEXT NOT NULL,
                 label        TEXT NOT NULL DEFAULT '',
+                retouched    INTEGER NOT NULL DEFAULT 0,
                 seen_at      INTEGER NOT NULL
             )",
             [],
         )
         .map_err(|e| format!("创建 xmp_cursor 表失败: {}", e))?;
+
+        // 老库补列（issue #200）：`CREATE TABLE IF NOT EXISTS` 对已存在的表是空操作。
+        ensure_column(&conn, "xmp_cursor", "retouched", "INTEGER NOT NULL DEFAULT 0")?;
 
         Ok(Self {
             conn: std::sync::Arc::new(Mutex::new(conn)),
@@ -429,16 +436,17 @@ impl Database {
     pub fn upsert_xmp_cursor(&self, cursor: &XmpCursor) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT INTO xmp_cursor (sidecar_path, mtime_ms, rating, flag, label, seen_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO xmp_cursor (sidecar_path, mtime_ms, rating, flag, label, retouched, seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(sidecar_path) DO UPDATE SET
-                mtime_ms = ?2, rating = ?3, flag = ?4, label = ?5, seen_at = ?6",
+                mtime_ms = ?2, rating = ?3, flag = ?4, label = ?5, retouched = ?6, seen_at = ?7",
             params![
                 cursor.sidecar_path,
                 cursor.mtime_ms,
                 cursor.rating as i64,
                 cursor.flag,
                 cursor.label,
+                cursor.retouched as i64,
                 now_secs()
             ],
         )
@@ -461,16 +469,17 @@ impl Database {
         let now = now_secs();
         for cursor in cursors {
             tx.execute(
-                "INSERT INTO xmp_cursor (sidecar_path, mtime_ms, rating, flag, label, seen_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "INSERT INTO xmp_cursor (sidecar_path, mtime_ms, rating, flag, label, retouched, seen_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                  ON CONFLICT(sidecar_path) DO UPDATE SET
-                    mtime_ms = ?2, rating = ?3, flag = ?4, label = ?5, seen_at = ?6",
+                    mtime_ms = ?2, rating = ?3, flag = ?4, label = ?5, retouched = ?6, seen_at = ?7",
                 params![
                     cursor.sidecar_path,
                     cursor.mtime_ms,
                     cursor.rating as i64,
                     cursor.flag,
                     cursor.label,
+                    cursor.retouched as i64,
                     now
                 ],
             )
@@ -486,7 +495,7 @@ impl Database {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn
             .prepare(
-                "SELECT sidecar_path, mtime_ms, rating, flag, label
+                "SELECT sidecar_path, mtime_ms, rating, flag, label, retouched
                  FROM xmp_cursor WHERE sidecar_path = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -498,6 +507,7 @@ impl Database {
                     rating: row.get::<_, i64>(2)?.max(0) as u8,
                     flag: row.get::<_, String>(3)?,
                     label: row.get::<_, String>(4)?,
+                    retouched: row.get::<_, i64>(5).unwrap_or(0) != 0,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -1263,6 +1273,7 @@ mod tests {
             rating,
             flag: flag.to_string(),
             label: label.to_string(),
+            retouched: false,
         }
     }
 

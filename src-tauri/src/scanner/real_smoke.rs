@@ -197,3 +197,101 @@ fn real_album_smoke() {
         }
     }
 }
+
+/// 真机冒烟：**已精修标记**（issue #200）在真实 ACR 产物上对不对。
+///
+/// 合成测试能证明 `HasSettings` 解析对，但证明不了「扫描链路真的把它带到了分组上」，
+/// 也证明不了「真实 Adobe 写出的 sidecar 长什么样」。用户给的真机样本
+/// `…\2026年10月31日-知更鸟+甘雨\知更鸟`（4 张进过 ACR）正是这条的判据。
+///
+/// 断言方式是**独立重算**：绕开扫描器，直接按文件系统数出「应该算已修」的
+/// basename 集合，再与扫描结果比对。这样测的是链路，不是把判据抄一遍来自证。
+///
+/// ```text
+/// GALLERY_REAL_RAW_DIR="C:/Users/VerNe/Pictures/Camera Roll/2026年10月31日-知更鸟+甘雨/知更鸟"
+///   cargo test --lib real_retouch_smoke -- --ignored --nocapture
+/// ```
+///
+/// 可选 `GALLERY_REAL_RETOUCH_EXPECT=4`：显式钉住预期数量（换目录时便于复核）。
+#[test]
+#[ignore = "需要真实素材：设置 GALLERY_REAL_RAW_DIR 后加 --ignored 运行"]
+fn real_retouch_smoke() {
+    let Ok(root) = std::env::var("GALLERY_REAL_RAW_DIR") else {
+        println!("[real_retouch] 未设置 GALLERY_REAL_RAW_DIR，跳过");
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    assert!(root.is_dir(), "目录不存在: {}", root.display());
+
+    // ---- 期望值：完全绕开扫描器，直接从盘上数 ----
+    let mut expected: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut acr_files = 0usize;
+    let mut has_settings = 0usize;
+    for entry in fs::read_dir(&root).expect("读目录应成功") {
+        let path = entry.expect("目录项应可读").path();
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
+        let ext = ext.to_ascii_lowercase();
+        if ext == "acr" {
+            acr_files += 1;
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                expected.insert(stem.to_ascii_uppercase());
+            }
+        } else if ext == "xmp" {
+            let text = fs::read_to_string(&path).unwrap_or_default();
+            if text.contains("crs:HasSettings=\"True\"")
+                || text.contains("crs:HasSettings=\"true\"")
+            {
+                has_settings += 1;
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    expected.insert(stem.to_ascii_uppercase());
+                }
+            }
+        }
+    }
+
+    let cancel = AtomicBool::new(false);
+    let res = scan_folders(
+        root.to_str().unwrap(),
+        Some(root.to_str().unwrap()),
+        "filename",
+        &cancel,
+        |_, _, _| {},
+    )
+    .expect("扫描应成功");
+
+    let actual: std::collections::BTreeSet<String> = res
+        .groups
+        .iter()
+        .filter(|g| g.retouched)
+        .map(|g| g.base_name.to_ascii_uppercase())
+        .collect();
+
+    println!(
+        "[real_retouch] {} 组；盘上 .acr={} 个、HasSettings=True 的 xmp={} 个 → 期望 {} 张已修",
+        res.total_count,
+        acr_files,
+        has_settings,
+        expected.len()
+    );
+    for g in res.groups.iter().filter(|g| g.retouched) {
+        println!(
+            "[real_retouch]   {} rating={} has_xmp={}",
+            g.base_name, g.rating, g.has_xmp
+        );
+    }
+
+    assert_eq!(
+        actual, expected,
+        "扫描出的「已修」集合与盘上独立统计不一致\n实际: {:?}\n期望: {:?}",
+        actual, expected
+    );
+
+    if let Ok(want) = std::env::var("GALLERY_REAL_RETOUCH_EXPECT") {
+        let want: usize = want
+            .parse()
+            .expect("GALLERY_REAL_RETOUCH_EXPECT 必须是整数");
+        assert_eq!(actual.len(), want, "已修数量与显式预期不符");
+    }
+}

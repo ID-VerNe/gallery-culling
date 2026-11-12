@@ -28,6 +28,7 @@ export type QueryField =
   | 'ext'
   | 'folder'
   | 'edited'
+  | 'retouched'
   | 'iso'
   | 'camera'
   | 'lens'
@@ -104,6 +105,7 @@ const FIELDS: Record<QueryField, FieldSpec> = {
   ext: { kind: 'text', example: 'ext:arw' },
   folder: { kind: 'text', example: 'folder:2024' },
   edited: { kind: 'bool', example: 'edited' },
+  retouched: { kind: 'bool', example: 'retouched' },
   iso: { kind: 'number', example: 'iso>=3200' },
   camera: { kind: 'text', example: 'camera:sony' },
   lens: { kind: 'text', example: 'lens:85mm' },
@@ -133,6 +135,10 @@ const SHORTHANDS: Record<string, QueryField | 'flag-pick' | 'flag-reject' | 'fla
   rejected: 'flag-reject',
   unflagged: 'flag-none',
   edited: 'edited',
+  // `retouched` / `retouch` 是 issue #200 的裸词简写：`-retouched` 才是用户
+  // 每天真正要用的那个词（「把还没进 PS 的挑出来」）。
+  retouched: 'retouched',
+  retouch: 'retouched',
 };
 
 /** 字段名 + 比较符 + 值。`:` 与 `=` 都表示「等于」。 */
@@ -214,8 +220,9 @@ export function parseQuery(input: string): QueryParseResult {
       // 简写优先于裸词：`picked` 不该被当成文件名搜索。
       const short = SHORTHANDS[lower];
       if (short) {
-        if (short === 'edited') {
-          terms.push({ field: 'edited', op: '=', value: true, negated, raw });
+        if (short !== 'flag-pick' && short !== 'flag-reject' && short !== 'flag-none') {
+          // 布尔字段的裸词一律是「为真」，取反由 `-` 前缀统一处理。
+          terms.push({ field: short, op: '=', value: true, negated, raw });
         } else {
           terms.push({
             field: 'flag',
@@ -381,6 +388,10 @@ function evalTerm(g: PhotoGroupInfo, term: QueryTerm): boolean {
 
     case 'edited':
       return !!g.edited;
+
+    case 'retouched':
+      // 已进过 PS/ACR 精修（issue #200）。`-retouched` = 还没修过。
+      return !!g.retouched;
 
     case 'iso':
       return compareExif('iso', g.exif?.iso, term.op, term.value as number);

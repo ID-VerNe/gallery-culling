@@ -62,6 +62,10 @@ pub struct PhotoGroupInfo {
     /// 唯一真值是 XMP 的 `xmp:Label`（Lightroom 同一字段，双向可见）。
     pub label: String,
     pub has_xmp: bool,
+    /// 是否经 ACR / Photoshop 精修过（issue #200）：sidecar 带 `crs:HasSettings="True"`，
+    /// 或照片旁存在同名 `.acr`。与 `edited`（Luminar 往返产物）是两件事。
+    #[serde(default)]
+    pub retouched: bool,
     pub exif: Option<ExifData>,
     pub thumbnail_path: Option<String>,
 }

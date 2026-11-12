@@ -533,6 +533,15 @@ fn assemble_group(
     }
 
     let tone = xmp_meta.as_ref().and_then(extract_tone_from_xmp);
+    // 「已精修」判据（issue #200）：sidecar 里的 ACR 痕迹 **或** 同名 `.acr` 文件。
+    // 两者取或 —— `.acr` 更像可清的缓存，`HasSettings` 是 Adobe 持久写下的设置记录，
+    // 任一命中都算修过；两者在本机 161 组真实素材上逐一对应（4 / 161）。
+    let retouched = xmp_meta.as_ref().is_some_and(|m| m.acr_edited)
+        || raw_opt
+            .as_ref()
+            .or(jpg_opt.as_ref())
+            .map(|f| Path::new(&f.path).with_extension("acr").exists())
+            .unwrap_or(false);
     let edited = jpg_opt
         .as_ref()
         .and_then(|j| Path::new(&j.path).parent())
@@ -553,6 +562,7 @@ fn assemble_group(
         // 不会出现「星级读 RAW、色标读 JPG」这种自相矛盾的组合。
         label: xmp_meta.as_ref().map(|m| m.label.clone()).unwrap_or_default(),
         has_xmp,
+        retouched,
         exif,
         thumbnail_path: None,
     })

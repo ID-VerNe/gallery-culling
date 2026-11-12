@@ -25,6 +25,7 @@ function doc(over: Partial<AlbumResolvedDoc> = {}): AlbumResolvedDoc {
     jpgSize: 0,
     jpgMtime: 0,
     hasXmp: false,
+    retouched: false,
     tone: null,
     rating: 0,
     flag: 'none',

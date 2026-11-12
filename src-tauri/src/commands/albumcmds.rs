@@ -146,6 +146,8 @@ fn apply_disk_state(entries: &mut [album::ResolvedDoc]) {
         // 侧边栏**存在**与**读得出**是两件事：`read_xmp_full` 对空文件/坏 XML
         // 也返回 None，但文件确实在，导出时的文件计数与宫格角标都按「在不在」算。
         e.has_xmp = xmp_path.is_file();
+        // issue #200：`.acr` 旁证与 sidecar 内容无关，先单独取，两条分支都要用。
+        let has_acr_file = p.with_extension("acr").is_file();
 
         match crate::xmp::read_xmp_full(&xmp_path) {
             Some(m) => {
@@ -156,6 +158,7 @@ fn apply_disk_state(entries: &mut [album::ResolvedDoc]) {
                     entry,
                 );
                 e.label = m.label.clone();
+                e.retouched = m.acr_edited || has_acr_file;
                 // 调色基线必须一起带回来：面板显示全 0 时用户点保存就会把
                 // 真实调色覆盖成 0。与扫描路径共用同一份提取逻辑。
                 e.tone = crate::scanner::extract_tone_from_xmp(&m);
@@ -165,6 +168,8 @@ fn apply_disk_state(entries: &mut [album::ResolvedDoc]) {
                 e.flag = crate::cullstore::resolve_flag(false, "none", entry);
                 e.label = String::new();
                 e.tone = None;
+                // 侧边栏读不出来不等于没修过：`.acr` 还在就能证明进过 ACR。
+                e.retouched = has_acr_file;
             }
         }
     }

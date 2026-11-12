@@ -76,6 +76,14 @@ export interface PhotoGroupInfo {
   /** 色标：`''` 表示无色标。唯一真值是 XMP 的 `xmp:Label`。 */
   label: string;
   hasXmp: boolean;
+  /**
+   * 是否经 ACR / Photoshop 精修过（issue #200）。
+   *
+   * 判据见后端 `xmp::is_acr_edited`：sidecar 里有 `crs:HasSettings="True"`
+   * 或照片旁有同名 `.acr`。**不是**「有 XMP」—— 本应用自己的调色面板也会写
+   * `crs:` 元素，拿「含 crs」当判据会把所有调过色的照片误标成已修。
+   */
+  retouched: boolean;
   exif?: ExifData;
   thumbnailPath?: string;
 }
@@ -377,6 +385,8 @@ export interface CullStateSnapshot {
 export interface XmpRefreshItem {
   path: string;
   state: CullStateSnapshot;
+  /** 是否经 ACR / Photoshop 精修（issue #200）。与 `state` 独立：星级没变也要更。 */
+  retouched: boolean;
   /** 侧边栏在磁盘上已不存在（外部删除）—— 界面值被清空，值得单独提示一句。 */
   sidecarRemoved: boolean;
 }
@@ -460,6 +470,8 @@ export interface AlbumResolvedDoc {
   jpgSize: number;
   jpgMtime: number;
   hasXmp: boolean;
+  /** 是否经 ACR / Photoshop 精修（issue #200）。判据同 `PhotoGroupInfo.retouched`。 */
+  retouched: boolean;
   /** XMP 里的调色基线（调色面板靠它，缺了会把真实调色覆盖成 0）。 */
   tone?: ToneAdjustments | null;
   /**
