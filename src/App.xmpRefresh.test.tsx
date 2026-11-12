@@ -204,6 +204,8 @@ describe('FR-08 —— 冲突不自动覆盖', () => {
         path: 'D:/shoot/JPG/IMG_0001.jpg',
         action: 'use-external',
         external: { rating: 2, flag: 'reject', label: 'Blue' },
+        // JPG-only 的组没有配对 JPG；键仍要出现，后端靠它判「已修」（issue #203）
+        jpgPath: null,
       },
     ]);
 

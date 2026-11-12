@@ -178,6 +178,29 @@ pub fn is_acr_edited(image_path: &Path) -> bool {
         || image_path.with_extension("acr").is_file()
 }
 
+/// 主路径或配对 JPG 旁是否存在同名 `.acr`（issue #203）。
+///
+/// `.acr` 是 ACR 点「完成」时写在**图片旁边**的旁证；分目录摆放（`RAW/` 与
+/// `JPG/`）时它可能只落在 JPG 侧。所有判据一律看两侧 —— 只看主路径会让同一组
+/// 照片在「扫描 / 刷新」与「选片集 / 冲突裁决」里出现两套标记。
+///
+/// 已经读过 sidecar 的调用点（扫描、选片集）用这一条拼 `.acr` 部分即可，别
+/// 为此多读一次文件；需要连内容判据一起要的用 [`is_acr_edited_with_pair`]。
+pub fn acr_exists_with_pair(primary: &Path, paired: Option<&Path>) -> bool {
+    primary.with_extension("acr").is_file()
+        || paired.is_some_and(|p| p.with_extension("acr").is_file())
+}
+
+/// 一组照片（主路径 + 配对 JPG）是否经 ACR / Photoshop 精修过（issue #203）。
+///
+/// 与 [`is_acr_edited`] 唯一的区别：`.acr` 旁证看两侧。内容判据
+/// （`crs:HasSettings`）仍只读主路径的 sidecar —— 那是唯一一份真值，配对 JPG
+/// 不会有自己的 sidecar。
+pub fn is_acr_edited_with_pair(primary: &Path, paired: Option<&Path>) -> bool {
+    read_xmp_full(&get_xmp_path(primary)).is_some_and(|m| m.acr_edited)
+        || acr_exists_with_pair(primary, paired)
+}
+
 /// 本方（Gallery Culling）拥有的命名空间。
 ///
 /// 这里是这四个 URI 的**唯一真值**：`build_our_description` 生成 xmlns 声明、

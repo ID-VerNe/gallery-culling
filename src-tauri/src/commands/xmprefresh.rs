@@ -31,6 +31,7 @@ pub enum ConflictAction {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConflictChoice {
     pub path: String,
     pub action: ConflictAction,
@@ -40,6 +41,12 @@ pub struct ConflictChoice {
     /// 造成二次不一致 —— 用户裁决的是他**看到的**那个值。
     #[serde(default)]
     pub external: Option<CullState>,
+    /// 配对 JPG（issue #203）：回传的 `retouched` 要看 JPG 侧的 `.acr`。
+    ///
+    /// 前端把 `RefreshConflict.jpgPath` 原样带回来。`#[serde(default)]` 意味着
+    /// 老前端不带这个键时退化成「只看主路径」—— 与修复前一致，不会更糟。
+    #[serde(default)]
+    pub jpg_path: Option<String>,
 }
 
 /// 一张裁决失败。`path` 单独给出（而不是拼进错误文案）：前端要按路径把
@@ -117,6 +124,14 @@ pub fn resolve_conflicts(
             }
         };
 
+        // 裁决只改评级/旗标/色标，ACR 状态原样保留 —— 所以「已修」必须在**裁决前**
+        // 按磁盘现状取，且与刷新路径同口径：配对 JPG 侧的 `.acr` 也算（issue #203）。
+        // 取一次给两条分支复用：`UseExternal` 要写进游标 + 回传，两处必须同一个值。
+        let retouched = xmp::is_acr_edited_with_pair(
+            Path::new(&choice.path),
+            choice.jpg_path.as_deref().map(Path::new),
+        );
+
         match choice.action {
             ConflictAction::KeepLocal => {
                 let state = CullState::new(pending.rating, &pending.flag, &pending.label);
@@ -142,7 +157,7 @@ pub fn resolve_conflicts(
                             path: choice.path.clone(),
                             state,
                             // 裁决只改评级/旗标/色标，ACR 设置原样保留（issue #200）。
-                            retouched: xmp::is_acr_edited(Path::new(&choice.path)),
+                            retouched,
                             sidecar_removed: false,
                         }),
                         // 写盘失败：DiskSink 不删意图，用户下次刷新还能再裁决一次。
@@ -168,9 +183,6 @@ pub fn resolve_conflicts(
                 let sidecar_key = sidecar.to_string_lossy().to_string();
                 match choice.external {
                     Some(state) => {
-                        // 游标与 `RefreshItem` 要的是同一个值：算一次，别让每张照片
-                        // 把 sidecar 重读两遍（issue #203 顺手项，行为不变）。
-                        let retouched = xmp::is_acr_edited(Path::new(&choice.path));
                         // 游标推进到外部值：否则下次刷新会把「刚采用的」再报一遍。
                         match probe.mtime_ms(&sidecar) {
                             Some(mtime_ms) => {
@@ -240,6 +252,7 @@ mod tests {
             path: path.to_string(),
             action,
             external: None,
+            jpg_path: None,
         }
     }
 
@@ -304,6 +317,7 @@ mod tests {
                 path: photo_str.clone(),
                 action: ConflictAction::UseExternal,
                 external: Some(CullState::new(5, "none", "Blue")),
+                jpg_path: None,
             }],
         );
 
@@ -597,11 +611,13 @@ mod tests {
                     path: paths[0].clone(),
                     action: ConflictAction::KeepLocal,
                     external: None,
+                    jpg_path: None,
                 },
                 ConflictChoice {
                     path: paths[1].clone(),
                     action: ConflictAction::UseExternal,
                     external: Some(crate::xmprefresh::CullState::new(2, "none", "")),
+                    jpg_path: None,
                 },
             ],
         );
@@ -637,6 +653,68 @@ mod tests {
         assert!(
             db.lookup_xmp_cursor(&sidecar).unwrap().unwrap().retouched,
             "游标里的 retouched 也要跟上，否则下次刷新会重复报一条"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// issue #203：裁决回传的「已修」必须看**配对 JPG** 侧的 `.acr`。
+    ///
+    /// 裁决只改评级/旗标/色标，ACR 状态原样保留。这里若只看主路径，前端会拿到
+    /// `retouched: false` 把徽章压成未修 —— 而且 `UseExternal` 还会把这个错值
+    /// 连同当前 mtime 写进游标，下次刷新因 mtime 未变直接跳过，徽章就一直错下去。
+    #[test]
+    fn resolve_reads_acr_beside_paired_jpg() {
+        let dir = temp_dir("retouch_resolve_pair");
+        let db = Database::open(&dir.join("t.db")).expect("临时库");
+        let queue = queue_for(&db);
+        let raw_dir = dir.join("raw");
+        let jpg_dir = dir.join("jpg");
+        std::fs::create_dir_all(&raw_dir).expect("RAW 目录");
+        std::fs::create_dir_all(&jpg_dir).expect("JPG 目录");
+
+        let mut choices = Vec::new();
+        let mut use_external_sidecar = String::new();
+        for (name, action) in [
+            ("keep", ConflictAction::KeepLocal),
+            ("take", ConflictAction::UseExternal),
+        ] {
+            let raw = raw_dir.join(format!("{name}.ARW"));
+            let jpg = jpg_dir.join(format!("{name}.JPG"));
+            std::fs::write(&raw, b"raw").expect("占位");
+            std::fs::write(&jpg, b"jpg").expect("占位");
+            // 侧边栏在 RAW 旁（可读、但没有 HasSettings），`.acr` 只在 JPG 旁。
+            xmp::write_xmp(&raw, 4, "none", None).expect("预置侧边栏");
+            std::fs::write(jpg.with_extension("acr"), b"ACR\0placeholder").expect("ACR 旁证");
+            let p = raw.to_string_lossy().to_string();
+            db.enqueue_pending(&p, 5, "pick", "", 100).expect("记意图");
+            if action == ConflictAction::UseExternal {
+                use_external_sidecar = xmp::get_xmp_path(&raw).to_string_lossy().to_string();
+            }
+            choices.push(ConflictChoice {
+                path: p,
+                action,
+                external: Some(CullState::new(3, "none", "")),
+                jpg_path: Some(jpg.to_string_lossy().to_string()),
+            });
+        }
+
+        let report = resolve_conflicts(&db, &FsProbe, &queue, choices);
+        assert!(report.failed.is_empty(), "{:?}", report.failed);
+        assert_eq!(report.applied.len(), 2, "两条裁决都要回传");
+        for item in &report.applied {
+            assert!(
+                item.retouched,
+                "配对 JPG 旁的 .acr 也是证据（{}）—— 判据又只看主路径了？",
+                item.path
+            );
+        }
+        assert!(
+            db.lookup_xmp_cursor(&use_external_sidecar)
+                .unwrap()
+                .unwrap()
+                .retouched,
+            "游标也要带 true：写成 false + 当前 mtime 之后，刷新会因 mtime 未变跳过，徽章永远修不回来"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

@@ -401,6 +401,13 @@ export interface XmpRefreshConflict {
   path: string;
   local: CullStateSnapshot;
   external: CullStateSnapshot;
+  /**
+   * 配对 JPG 的绝对路径（issue #203）。
+   *
+   * 裁决时原样带回后端：回传的「已修」要看 JPG 侧的 `.acr`，否则徽章会被
+   * 一句「只看主路径」的判据压成未修。
+   */
+  jpgPath?: string | null;
 }
 
 /** 一次增量刷新的汇总。 */
@@ -425,6 +432,8 @@ export interface XmpConflictChoice {
   action: XmpConflictAction;
   /** `use-external` 时回传弹窗里显示的外部值（后端据此推进游标，不重读磁盘）。 */
   external?: CullStateSnapshot;
+  /** 配对 JPG；与 `XmpRefreshConflict.jpgPath` 同源，回传后按两侧判「已修」（issue #203）。 */
+  jpgPath?: string | null;
 }
 
 /**
