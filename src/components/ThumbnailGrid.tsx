@@ -87,10 +87,6 @@ interface ThumbnailGridProps {
   /** Total photos loaded, before the grid's own search is applied. */
   totalLoaded?: number;
   /**
-   * 宫格缩略图也走 LUMEN RAW 渲染（设置里的开关）。
-   * 只在引擎握手成功时为 true —— 不可用时保持 EXIF 内嵌缩略图这条零成本路径。
-   */
-  /**
    * B1 多选：当前选中的照片 id 集合（受控）。
    * 未提供 `onSelectionChange` 时退回既有单选行为（独立编译/测试仍可用）。
    */
