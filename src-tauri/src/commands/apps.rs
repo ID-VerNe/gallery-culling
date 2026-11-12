@@ -41,15 +41,35 @@ pub fn decide_external_launch(
 mod elevation {
     use std::ffi::c_void;
 
+    /// `SID_IDENTIFIER_AUTHORITY`：Win32 里是「6 字节权限值」的**结构体**，按值地址传入。
+    ///
+    /// issue #195 的教训：以前这里只会用 `[u8; 6]` 裸转 `*const c_void`，于是有人把
+    /// 「revision」当成了 `AllocateAndInitializeSid` 的入参 —— 它其实是本结构体的字段。
+    /// 用带名字的 `#[repr(C)]` 结构体，参数表就没法再被凭空加一项。
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct SidIdentifierAuthority {
+        /// Win32 里这个字段叫 `Value`；本进程只构造不读取，故显式放行 dead_code。
+        #[allow(dead_code)]
+        value: [u8; 6],
+    }
+
+    const SECURITY_NT_AUTHORITY: SidIdentifierAuthority = SidIdentifierAuthority {
+        value: [0, 0, 0, 0, 0, 5],
+    };
+    /// `S-1-5-32-…` 的第二段：内置域（BUILTIN）。
+    const SECURITY_BUILTIN_DOMAIN_RID: u32 = 32;
+    /// `S-1-5-32-544` 的末段：Administrators 别名。
+    const DOMAIN_ALIAS_RID_ADMINS: u32 = 544;
+
     #[link(name = "advapi32")]
     extern "system" {
-        fn GetCurrentProcess() -> *mut c_void;
-        fn OpenProcessToken(process: *mut c_void, access: u32, token: *mut *mut c_void) -> i32;
-        fn CloseHandle(h: *mut c_void) -> i32;
-        fn CheckTokenMembership(token: *mut c_void, sid: *mut c_void, is_member: *mut i32) -> i32;
+        // 真签名 11 参（issue #195）：`pIdentifierAuthority, nSubAuthorityCount,
+        // nSubAuthority0..7, pSid`。多写一个参数会让后面所有实参整体错位一档，
+        // `pSid` 收到 0 → API 往 NULL 写 SID → 整个进程 0xc0000005（Rust 无法捕获）。
+        // 注：extern 块里不能用 `///`（会触发 unused_doc_comments），一律用 `//`。
         fn AllocateAndInitializeSid(
-            authority: *const c_void,
-            revision: u8,
+            authority: *const SidIdentifierAuthority,
             sub_authority_count: u8,
             n0: u32,
             n1: u32,
@@ -61,48 +81,81 @@ mod elevation {
             n7: u32,
             out_sid: *mut *mut c_void,
         ) -> i32;
+        // `token` 传 NULL 表示「调用线程的有效令牌」（本进程不做 impersonation）。
+        fn CheckTokenMembership(token: *mut c_void, sid: *mut c_void, is_member: *mut i32) -> i32;
         fn FreeSid(sid: *mut c_void) -> *mut c_void;
     }
 
-    const TOKEN_QUERY: u32 = 0x0008;
-    const SECURITY_NT_AUTHORITY: [u8; 6] = [0, 0, 0, 0, 0, 5];
-    const DOMAIN_ADMIN_GROUP_RID: u32 = 544;
+    // SID 结构读回（只给测试用）：`GetSidSubAuthorityCount` / `GetSidSubAuthority`。
+    // 没有这层断言，参数错位可以「不崩但构造出 `S-1-5-1`」而门禁全绿。
+    #[cfg(test)]
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn GetSidSubAuthorityCount(sid: *mut c_void) -> *mut u8;
+        fn GetSidSubAuthority(sid: *mut c_void, index: u32) -> *mut u32;
+    }
+
+    /// 分配 `S-1-5-32-544`（BUILTIN\Administrators）的 SID。
+    ///
+    /// 成功后**调用方必须 `free_sid`**；失败返回 `None`（不泄漏半成品）。
+    pub fn administrators_sid() -> Option<*mut c_void> {
+        let mut sid: *mut c_void = std::ptr::null_mut();
+        // count=2 + [32, 544] 才是 Administrators；以前误传成 count=1、[1] 得到 S-1-5-1。
+        let ok = unsafe {
+            AllocateAndInitializeSid(
+                &SECURITY_NT_AUTHORITY,
+                2,
+                SECURITY_BUILTIN_DOMAIN_RID,
+                DOMAIN_ALIAS_RID_ADMINS,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                &mut sid,
+            )
+        };
+        if ok == 0 || sid.is_null() {
+            None
+        } else {
+            Some(sid)
+        }
+    }
+
+    pub fn free_sid(sid: *mut c_void) {
+        if !sid.is_null() {
+            unsafe {
+                let _ = FreeSid(sid);
+            }
+        }
+    }
+
+    /// 读回 SID 的 RID 数组（测试与诊断用）。
+    #[cfg(test)]
+    pub fn sid_sub_authorities(sid: *mut c_void) -> Option<Vec<u32>> {
+        if sid.is_null() {
+            return None;
+        }
+        unsafe {
+            let count = *GetSidSubAuthorityCount(sid) as u32;
+            Some((0..count).map(|i| *GetSidSubAuthority(sid, i)).collect())
+        }
+    }
 
     /// 当前进程管理员组是否启用（UAC 提权后的 High IL）？
-    /// 用 `CheckTokenMembership` 查 BUILTIN\Administrators；非提权时仅存在但未启用。
+    ///
+    /// 用 `CheckTokenMembership(NULL, …)` 查 BUILTIN\Administrators：非提权时该组
+    /// 「存在但未启用」，返回 false。NULL 令牌省掉 `OpenProcessToken` / `CloseHandle`
+    /// 两个句柄与两条手写声明 —— 少一条声明就少一处错位的机会（issue #195）。
     pub fn is_elevated() -> bool {
-        unsafe {
-            let mut token: *mut c_void = std::ptr::null_mut();
-            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0
-                || token.is_null()
-            {
-                return false;
-            }
-            let mut admin_sid: *mut c_void = std::ptr::null_mut();
-            let ok = AllocateAndInitializeSid(
-                SECURITY_NT_AUTHORITY.as_ptr() as *const c_void,
-                1,
-                1,
-                DOMAIN_ADMIN_GROUP_RID,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                &mut admin_sid,
-            );
-            if ok == 0 || admin_sid.is_null() {
-                let _ = CloseHandle(token);
-                return false;
-            }
-            let mut is_member: i32 = 0;
-            let check = CheckTokenMembership(token, admin_sid, &mut is_member);
-            let _ = FreeSid(admin_sid);
-            let _ = CloseHandle(token);
-            check != 0 && is_member != 0
-        }
+        let Some(sid) = administrators_sid() else {
+            return false;
+        };
+        let mut is_member: i32 = 0;
+        let ok = unsafe { CheckTokenMembership(std::ptr::null_mut(), sid, &mut is_member) };
+        free_sid(sid);
+        ok != 0 && is_member != 0
     }
 }
 
@@ -116,6 +169,16 @@ pub fn host_is_elevated() -> bool {
     {
         false
     }
+}
+
+/// 「外部打开」的启动决策（issue #195 抽出）。
+///
+/// 抽出来是为了让**生产路径和真机用例跑同一份代码** —— 以前单测只覆盖纯函数
+/// `decide_external_launch`，崩溃发生在它上游的 FFI 里，门禁因此全绿。
+/// 只收 `ps_path`：目标文件路径不参与决策，只在真正 spawn 时作为 argv 传下去。
+pub fn plan_external_open(ps_path: &str) -> ExternalLaunch {
+    // A 档目标 Medium（want_medium=true），提权时 explorer 代理降权，IL 与用户手动启动的 PS 一致。
+    decide_external_launch(host_is_elevated(), Path::new(ps_path).exists(), true)
 }
 
 #[tauri::command]
@@ -133,9 +196,7 @@ pub async fn open_in_photoshop_cmd(
         .trim_matches(|c| c == '"' || c == '\'' || c == ' ')
         .to_string();
 
-    let ps_exists = Path::new(&ps_path).exists();
-    // A 档目标 Medium（want_medium=true），提权时 explorer 代理降权，IL 与用户手动启动的 PS 一致。
-    let kind = decide_external_launch(host_is_elevated(), ps_exists, true);
+    let kind = plan_external_open(&ps_path);
 
     match kind {
         ExternalLaunch::PhotoshopDirect => {
@@ -307,9 +368,95 @@ mod tests {
         );
     }
 
+    /// 墓碑（issue #195）：点「外部打开」时的崩溃点。
+    ///
+    /// 旧实现的 `AllocateAndInitializeSid` 多声明了一个 `revision` 参数，x64 下实参整体
+    /// 错位，`pSid` 收到 0 → API 写 NULL → **整个测试二进制 `0xc0000005`**。所以这条
+    /// 用例不需要断言崩溃之外的任何东西：它在旧代码上根本跑不到 `assert`。
+    /// 同时把它从 `#[ignore]` 提成常规用例 —— 一个必现的进程级崩溃被 ignore 藏了整整一版。
     #[test]
-    #[ignore]
-    fn smoke_host_is_elevated_runs() {
-        let _ = super::host_is_elevated();
+    fn host_is_elevated_返回bool且不崩() {
+        let first = super::host_is_elevated();
+        let second = super::host_is_elevated();
+        println!("[elevation] host_is_elevated() = {first}");
+        assert_eq!(first, second, "同一进程内两次判定必须一致");
+    }
+
+    /// 结构断言：SID 必须是 `S-1-5-32-544`。
+    ///
+    /// 「不崩」不等于「判对」—— 参数错位还可能构造出 `S-1-5-1`（count=1、rid=1），
+    /// 判定恒 false，并把 #106 的降权路径悄悄废掉。这里读回 RID 数组钉死。
+    #[cfg(windows)]
+    #[test]
+    fn administrators_sid_结构是_builtin_32_544() {
+        let sid =
+            super::elevation::administrators_sid().expect("分配 BUILTIN\\Administrators SID 失败");
+        let rids = super::elevation::sid_sub_authorities(sid).expect("读回 SID 失败");
+        super::elevation::free_sid(sid);
+        assert_eq!(
+            rids,
+            vec![32, 544],
+            "必须是 S-1-5-32-544（BUILTIN\\Administrators）；出现 [1] 或 [] 说明实参错位（issue #195）"
+        );
+    }
+
+    /// 真机：按「点外部打开」那一步跑一遍，素材与设置都用真实数据。
+    ///
+    /// `GALLERY_REAL_RAW_DIR="…\2026年9月12日-惠州西湖"` 后
+    /// `cargo test --lib -- --ignored 外部打开`。
+    /// 真实素材路径来自该目录，Photoshop 路径来自用户真实设置库里的 `photoshop_path`
+    /// —— 就是 `open_in_photoshop_cmd` 实际会用的那个。旧实现（issue #195）在这里必崩。
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "需要真实素材与真实设置库：设置 GALLERY_REAL_RAW_DIR 后加 --ignored 运行"]
+    fn 外部打开_真实素材走通决策链路() {
+        let Ok(dir) = std::env::var("GALLERY_REAL_RAW_DIR") else {
+            println!("[external-open] 未设置 GALLERY_REAL_RAW_DIR，跳过");
+            return;
+        };
+        let sample = std::fs::read_dir(&dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok()).map(|e| e.path()).find(|p| {
+                    matches!(
+                        p.extension()
+                            .and_then(|s| s.to_str())
+                            .map(|s| s.to_ascii_lowercase())
+                            .as_deref(),
+                        Some("arw") | Some("jpg")
+                    )
+                })
+            })
+            .ok()
+            .flatten()
+            .expect("GALLERY_REAL_RAW_DIR 下没找到 arw/jpg");
+        assert!(sample.is_file(), "真实素材应可读：{}", sample.display());
+
+        // 用户真实设置库（`~/.galleryculling/gallery_culling.db`），只读。
+        let settings = crate::db::Database::new()
+            .and_then(|db| db.load_settings())
+            .expect("读用户设置库失败");
+        let ps_path = settings
+            .photoshop_path
+            .trim_matches(|c| c == '"' || c == '\'' || c == ' ')
+            .to_string();
+
+        let elevated = super::host_is_elevated();
+        let kind = super::plan_external_open(&ps_path);
+        let ps_exists = std::path::Path::new(&ps_path).exists();
+        println!(
+            "[external-open] 素材={} PS={:?} 存在={} 提权={} 决策={:?}",
+            sample.display(),
+            ps_path,
+            ps_exists,
+            elevated,
+            kind
+        );
+
+        // 跑完还活着 = 崩溃没复发；再钉住「决策必须与 PS 路径存在性自洽」。
+        match (ps_exists, kind) {
+            (true, ExternalLaunch::PhotoshopDirect | ExternalLaunch::PhotoshopViaExplorer) => {}
+            (false, ExternalLaunch::DefaultDirect | ExternalLaunch::DefaultViaExplorer) => {}
+            _ => panic!("决策与 PS 路径存在性不一致：ps_exists={ps_exists} kind={kind:?}"),
+        }
     }
 }
