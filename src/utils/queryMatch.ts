@@ -114,15 +114,21 @@ const FIELDS: Record<QueryField, FieldSpec> = {
   focal: { kind: 'number', example: 'focal>=85' },
 };
 
-/** 布尔字段允许显式写的值：`retouched:no` 等价于 `-retouched`。 */
-const BOOL_VALUES: Record<string, boolean> = {
-  yes: true,
-  true: true,
-  1: true,
-  no: false,
-  false: false,
-  0: false,
-};
+/**
+ * 布尔字段允许显式写的值：`retouched:no` 等价于 `-retouched`。
+ *
+ * 用 `Map` 而不是对象字面量：对象会继承原型链，`retouched:constructor` /
+ * `__proto__` / `toString` 都能查到真值，于是被静默当成 `yes` 生效 ——
+ * 拼错的词条不会报错、而是筛出一屏「都算已修」，比拒绝更难发现。
+ */
+const BOOL_VALUES = new Map<string, boolean>([
+  ['yes', true],
+  ['true', true],
+  ['1', true],
+  ['no', false],
+  ['false', false],
+  ['0', false],
+]);
 
 const FIELD_NAMES = Object.keys(FIELDS) as QueryField[];
 
@@ -282,7 +288,7 @@ export function parseQuery(input: string): QueryParseResult {
       // 用户照着试是最自然的路径。`no` 等价于给整条词条取反，
       // 与 `-` 前缀叠加时按异或处理（`-retouched:no` = 修过）。
       const v = rawValue.toLowerCase();
-      const asTrue = BOOL_VALUES[v];
+      const asTrue = BOOL_VALUES.get(v);
       if (asTrue === undefined) {
         errors.push(`「${field}」只接受 yes / no（或直接写 ${field} / -${field}）。`);
         continue;

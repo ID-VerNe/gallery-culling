@@ -1955,6 +1955,16 @@ mod tests {
         let _ = fs::remove_file(&xmp);
     }
 
+    /// 同名 `.acr` 是**目录**时不算修过：`exists()` 会误判，`is_file()` 不会。
+    #[test]
+    fn acr_directory_is_not_retouched() {
+        let (img, xmp) = temp_img("acrdir");
+        fs::create_dir_all(img.with_extension("acr")).unwrap();
+        assert!(!is_acr_edited(&img), "同名目录不是 ACR 产物");
+        let _ = fs::remove_dir_all(img.with_extension("acr"));
+        let _ = fs::remove_file(&xmp);
+    }
+
     /// 默认构造必须是「没修过」—— 误选 Default 会让全库都亮「已修」。
     #[test]
     fn default_metadata_is_not_retouched() {

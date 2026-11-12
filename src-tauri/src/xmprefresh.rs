@@ -88,7 +88,15 @@ pub trait SidecarProbe: Send + Sync {
     /// 侧边栏的毫秒级 mtime；不存在或读不到元数据返回 `None`。
     fn mtime_ms(&self, sidecar: &Path) -> Option<i64>;
     /// 读 XMP 的星级 / 是否淘汰 / 色标 / 是否经 ACR 精修。读失败返回 `None`。
+    ///
+    /// 这里的 `retouched` 只代表**sidecar 里写的**判据（`crs:HasSettings`）；
+    /// 照片旁 `.acr` 那一路由 [`SidecarProbe::acr_exists`] 单独提供，两者在
+    /// `refresh` 里取或。分开是为了让「sidecar 被删了但 .acr 还在」这条能测 ——
+    /// 合在一起时它读的是真实文件系统，测试就只能靠现造文件，跨平台还脆。
     fn read_xmp(&self, photo: &Path) -> Option<DiskXmp>;
+
+    /// 照片旁有没有同名 `.acr`。
+    fn acr_exists(&self, photo: &Path) -> bool;
 }
 
 /// 真实文件系统探测。
@@ -107,13 +115,16 @@ impl SidecarProbe for FsProbe {
         // `read_xmp_full` 读不到内容时返回 None；这里保留它的 None 语义，
         // 与旧 `read_disk_state` 的「空状态」区分开：读失败不能当成「外部清空」。
         let meta = xmp::read_xmp_full(&xmp_path)?;
-        let retouched = meta.acr_edited || photo.with_extension("acr").is_file();
         Some(DiskXmp {
             rating: meta.rating,
             rejected: meta.rejected,
             label: meta.label,
-            retouched,
+            retouched: meta.acr_edited,
         })
+    }
+
+    fn acr_exists(&self, photo: &Path) -> bool {
+        photo.with_extension("acr").is_file()
     }
 }
 
@@ -257,10 +268,9 @@ pub fn refresh(
         let (disk, disk_retouched) = if sidecar_removed {
             // 外部删了侧边栏 → 采用空状态。三元标记没有依据了，但「已精修」还有
             // 一路独立证据：同名 `.acr` 还在的话，这张确实进过 ACR。
-            let acr_left = Path::new(&target.path).with_extension("acr").is_file();
             (
                 CullState::new(0, &resolve_flag_for(&mut stores, target, false, ""), ""),
-                acr_left,
+                probe.acr_exists(Path::new(&target.path)),
             )
         } else {
             match probe.read_xmp(Path::new(&target.path)) {
@@ -270,7 +280,8 @@ pub fn refresh(
                         &resolve_flag_for(&mut stores, target, d.rejected, &d.label),
                         &d.label,
                     ),
-                    d.retouched,
+                    // sidecar 里的 `HasSettings` 与照片旁 `.acr` 任一命中即已修。
+                    d.retouched || probe.acr_exists(Path::new(&target.path)),
                 ),
                 None => {
                     // mtime 说有文件、读却失败：不推进游标，下次再试。
@@ -472,6 +483,8 @@ mod tests {
     struct FakeProbe {
         mtimes: Mutex<HashMap<String, Option<i64>>>,
         states: Mutex<HashMap<String, Option<XmpTriple>>>,
+        /// 照片旁「存在 .acr」的路径集合（issue #200）。
+        acrs: Mutex<HashSet<String>>,
         mtime_calls: AtomicUsize,
         read_calls: AtomicUsize,
     }
@@ -513,6 +526,11 @@ mod tests {
             if let Some(Some(state)) = self.states.lock().unwrap().get_mut(photo) {
                 state.retouched = retouched;
             }
+        }
+
+        /// 照片旁存在同名 `.acr`。
+        fn acr_file(&self, photo: &str) {
+            self.acrs.lock().unwrap().insert(photo.to_string());
         }
 
         /// 侧边栏不存在。
@@ -569,6 +587,13 @@ mod tests {
                 .get(&photo.to_string_lossy().to_string())
                 .cloned()
                 .flatten()
+        }
+
+        fn acr_exists(&self, photo: &Path) -> bool {
+            self.acrs
+                .lock()
+                .unwrap()
+                .contains(&photo.to_string_lossy().to_string())
         }
     }
 
@@ -1140,28 +1165,47 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
     }
 
+    /// sidecar 里没有 `HasSettings`，但照片旁有 `.acr` → 正常分支也必须推一条。
+    ///
+    /// 这条守的是「两路证据取或」的**前半**：只在 sidecar_removed 分支认 `.acr`
+    /// 的话，用户从 PS 存了 `.acr`、而 sidecar 恰好没写 HasSettings 时会漏标。
+    #[test]
+    fn acr_file_alone_marks_retouched_on_normal_path() {
+        let (db, db_path) = temp_db("acr_normal");
+        let probe = FakeProbe::new();
+        probe.file("C:/p/a.ARW", 2000, 3, false, "");
+        probe.acr_file("C:/p/a.ARW");
+        db.upsert_xmp_cursor(&cursor("C:/p/a.xmp", 1000, 3, "none", ""))
+            .unwrap();
+
+        let report = refresh(&db, &probe, targets(&["C:/p/a.ARW"]));
+
+        assert_eq!(report.adopted.len(), 1, ".acr 出现也是变化");
+        assert!(report.adopted[0].retouched);
+        assert!(
+            db.lookup_xmp_cursor("C:/p/a.xmp")
+                .unwrap()
+                .unwrap()
+                .retouched,
+            "游标要记下来，否则每次都推"
+        );
+        let _ = std::fs::remove_file(&db_path);
+    }
+
     /// 侧边栏被外部删掉、但 `.acr` 还在 → 星级/旗标清空，「已修」必须留着。
     ///
     /// 这两个信号本来就独立：sidecar 里是设置记录，`.acr` 是 ACR 的产物。
     /// 顺手把 sidecar 挪走的用户，不该连「这张修过」的记忆一起丢。
     #[test]
     fn sidecar_removed_keeps_acr_evidence() {
-        let dir = std::env::temp_dir().join(format!("gc_acr_left_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let photo = dir.join("a.ARW");
-        std::fs::write(&photo, b"raw").unwrap();
-        std::fs::write(dir.join("a.acr"), b"ACR\0placeholder").unwrap();
-
         let (db, db_path) = temp_db("acr_left");
         let probe = FakeProbe::new();
-        let p = photo.to_string_lossy().to_string();
-        probe.missing(&p);
-        let sidecar = xmp::get_xmp_path(&photo).to_string_lossy().to_string();
-        db.upsert_xmp_cursor(&cursor(&sidecar, 1000, 3, "pick", "Red"))
+        probe.missing("C:/p/a.ARW");
+        probe.acr_file("C:/p/a.ARW");
+        db.upsert_xmp_cursor(&cursor("C:/p/a.xmp", 1000, 3, "pick", "Red"))
             .unwrap();
 
-        let report = refresh(&db, &probe, vec![target(&p)]);
+        let report = refresh(&db, &probe, targets(&["C:/p/a.ARW"]));
 
         assert_eq!(report.adopted.len(), 1);
         let item = &report.adopted[0];
@@ -1169,7 +1213,6 @@ mod tests {
         assert_eq!(item.state.rating, 0, "三元标记无从判断，归空");
         assert!(item.retouched, "`.acr` 还在，就还是修过的");
 
-        let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_file(&db_path);
     }
 

@@ -167,6 +167,35 @@ describe('已精修筛选 —— 格头快捷入口（issue #200）', () => {
     ).toBe('true');
   });
 
+  it('手写 `retouched:no` / `-retouched:no` 也各自对到正确的按钮上', () => {
+    const cases: Array<[string, '只看已精修的照片' | '只看未精修的照片']> = [
+      ['retouched:yes', '只看已精修的照片'],
+      ['retouched:no', '只看未精修的照片'],
+      // 双重否定 = 肯定，与解析器的异或语义一致
+      ['-retouched:no', '只看已精修的照片'],
+      ['-retouched:yes', '只看未精修的照片'],
+    ];
+    for (const [query, active] of cases) {
+      const { unmount } = render(
+        <ThumbnailGrid
+          groups={[group('a')]}
+          selectedIndex={0}
+          onSelect={() => {}}
+          searchQuery={query}
+          onSearchQueryChange={() => {}}
+          onSearchOpenChange={() => {}}
+        />,
+      );
+      const pressed = screen
+        .getAllByRole('button')
+        .filter((b) => b.getAttribute('aria-pressed') === 'true')
+        .map((b) => b.getAttribute('aria-label'))
+        .filter((name) => name?.startsWith('只看'));
+      expect(pressed, query).toEqual([active]);
+      unmount();
+    }
+  });
+
   it('筛选生效时自动展开搜索框，让用户看得见为什么少了照片', () => {
     const { onSearchOpenChange } = setup();
     fireEvent.click(screen.getByRole('button', { name: '只看未精修的照片' }));

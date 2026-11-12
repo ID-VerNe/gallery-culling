@@ -142,6 +142,11 @@ describe('parseQuery：字段与运算符', () => {
     });
     // 其他值必须报错，不能静默当成 yes。
     expect(parseQuery('retouched:maybe').errors.length).toBeGreaterThan(0);
+    // 原型链上的名字也不行：对象字面量当查表时 `constructor` / `__proto__` 能查到
+    // 真值，会被静默当成 yes —— 拼错一个词就筛出一屏「都算已修」。
+    for (const bad of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+      expect(parseQuery(`retouched:${bad}`).errors.length, bad).toBeGreaterThan(0);
+    }
   });
 
   it('EXIF 数值宽容解析：f/2.8、1/500、85mm', () => {

@@ -224,9 +224,6 @@ export const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
         {/* 已 PS 精修（issue #200）：实心琥珀色小牌子，刻意比 X/T/E 单字母更醒目。
             用户的原话是「要一个很醒目的标记」—— 单字母角标在一屏 200 张里看不见，
             所以这里给的是带文字的实心块，位置在旗标下方，不与右上序号抢位。 */}
-        {/* 已 PS 精修（issue #200）：实心琥珀色小牌子，刻意比 X/T/E 单字母更醒目。
-            用户的原话是「要一个很醒目的标记」—— 单字母角标在一屏 200 张里看不见，
-            所以这里给的是带文字的实心块，位置在旗标下方，不与右上序号抢位。 */}
         {group.retouched && (
           <div
             className="absolute top-6 left-1 bg-amber-400 text-black rounded px-1 py-[1px] flex items-center gap-0.5 text-[9px] font-semibold leading-none shadow-sm"

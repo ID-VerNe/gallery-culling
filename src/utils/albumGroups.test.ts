@@ -130,6 +130,25 @@ describe('toAlbumGroups —— 分组重建', () => {
     expect(load.groups[0].flag).toBe('none');
   });
 
+  // issue #200：这条守的是**第四条入口** —— 后端 ResolvedDoc.retouched 到界面
+  // PhotoGroupInfo.retouched 的映射。前三条（扫描 / 选片集命令层 / 单图视图）
+  // 各有自己的测试，但把这里的两行删掉，它们全都还是绿的，而「用选片集打开」
+  // 就再也看不到「已修」—— 同一个目录两种打开方式两套标记。
+  it('retouched 原样带出（选片集入口的「已修」靠它）', () => {
+    const load = toAlbumGroups(result([doc({ retouched: true }), doc({ retouched: false })]));
+    expect(load.groups[0].retouched).toBe(true);
+    expect(load.groups[1].retouched).toBe(false);
+  });
+
+  it('后端没给 retouched（老版本选片集 / 字段缺失）时落到 false，不是 undefined', () => {
+    // `undefined` 会被 `group.retouched && …` 当假值，看起来一样，但一旦有人
+    // 写 `retouched === false` 判断就会分叉；类型上也不该留洞。
+    const legacy = doc();
+    delete (legacy as Partial<typeof legacy>).retouched;
+    const load = toAlbumGroups(result([legacy]));
+    expect(load.groups[0].retouched).toBe(false);
+  });
+
   it('hasXmp 原样带出（宫格角标与导出文件计数都靠它）', () => {
     const load = toAlbumGroups(result([doc({ hasXmp: true })]));
     expect(load.groups[0].hasXmp).toBe(true);

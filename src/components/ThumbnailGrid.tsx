@@ -220,10 +220,19 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   // 归一成「正向/取反」两种，`retouch` 单数别名与手打的 `-retouch` 也算同一档 ——
   // 否则用户手写 `retouch` 时按钮不高亮，看起来像没生效。
   const retouchFilterOf = (token: string): 'yes' | 'no' | null => {
-    const t = token.toLowerCase();
-    if (t === 'retouch' || t === 'retouched') return 'yes';
-    if (t === '-retouch' || t === '-retouched') return 'no';
-    return null;
+    let t = token.toLowerCase();
+    let negated = false;
+    if (t.startsWith('-')) {
+      negated = true;
+      t = t.slice(1);
+    }
+    // 也要认 `retouched:yes` / `retouched:no` / `-retouched:no` —— 解析器接受这些
+    // 写法，按钮若不认，用户手写一遍就会看到「结果变了但按钮没亮」。
+    const m = /^(retouch|retouched)(?::(yes|no|true|false|1|0))?$/.exec(t);
+    if (!m) return null;
+    const positive = !m[2] || m[2] === 'yes' || m[2] === 'true' || m[2] === '1';
+    if (!positive) negated = !negated;
+    return negated ? 'no' : 'yes';
   };
   const activeRetouchFilter =
     searchQuery
