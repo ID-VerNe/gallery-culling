@@ -168,6 +168,9 @@ pub fn resolve_conflicts(
                 let sidecar_key = sidecar.to_string_lossy().to_string();
                 match choice.external {
                     Some(state) => {
+                        // 游标与 `RefreshItem` 要的是同一个值：算一次，别让每张照片
+                        // 把 sidecar 重读两遍（issue #203 顺手项，行为不变）。
+                        let retouched = xmp::is_acr_edited(Path::new(&choice.path));
                         // 游标推进到外部值：否则下次刷新会把「刚采用的」再报一遍。
                         match probe.mtime_ms(&sidecar) {
                             Some(mtime_ms) => {
@@ -177,7 +180,7 @@ pub fn resolve_conflicts(
                                     rating: state.rating,
                                     flag: state.flag.clone(),
                                     label: state.label.clone(),
-                                    retouched: xmp::is_acr_edited(Path::new(&choice.path)),
+                                    retouched,
                                 });
                             }
                             // 文件已不在：清掉游标，下次按「首次见到」重建基线。
@@ -188,7 +191,7 @@ pub fn resolve_conflicts(
                         report.applied.push(RefreshItem {
                             path: choice.path.clone(),
                             state,
-                            retouched: xmp::is_acr_edited(Path::new(&choice.path)),
+                            retouched,
                             sidecar_removed: false,
                         });
                     }

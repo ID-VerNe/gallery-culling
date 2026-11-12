@@ -147,7 +147,14 @@ fn apply_disk_state(entries: &mut [album::ResolvedDoc]) {
         // 也返回 None，但文件确实在，导出时的文件计数与宫格角标都按「在不在」算。
         e.has_xmp = xmp_path.is_file();
         // issue #200：`.acr` 旁证与 sidecar 内容无关，先单独取，两条分支都要用。
-        let has_acr_file = p.with_extension("acr").is_file();
+        // issue #203：主路径与**配对 JPG** 两侧都要看（`chain` union，不短路）。
+        // 分目录摆放是常态，Adobe 把 `.acr` 写在图片旁边；只看主路径会出现
+        // 「同一组照片：扫描说有已修、选片集说没有」。三处判据（scanner /
+        // xmprefresh / 这里）必须同口径，改一处就要三处一起改。
+        let has_acr_file = [Some(p.as_path()), e.jpg_path.as_deref().map(Path::new)]
+            .into_iter()
+            .flatten()
+            .any(|q| q.with_extension("acr").is_file());
 
         match crate::xmp::read_xmp_full(&xmp_path) {
             Some(m) => {
@@ -474,6 +481,47 @@ mod tests {
             flags,
             vec![true, true, false],
             "选片集入口的「已修」判据必须与扫描入口同口径（第三条是本应用自己的调色，不算）"
+        );
+    }
+
+    /// issue #203：`.acr` 的检查范围必须覆盖**配对 JPG**，与扫描 / 刷新同口径。
+    ///
+    /// 分目录摆放（`RAW/` 与 `JPG/`）是常态，而 Adobe 把 `.acr` 写在图片旁边。
+    /// 只在主路径上 stat，就会出现「同一组照片：扫描说有已修、选片集说没有」。
+    #[test]
+    fn open_reports_retouched_from_acr_beside_paired_jpg() {
+        let dir = scratch("retouchpair");
+        let raw_dir = dir.join("raw");
+        let jpg_dir = dir.join("jpg");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        std::fs::create_dir_all(&jpg_dir).unwrap();
+        let album_path = dir.join("a.galleryalbum");
+        let raw = raw_dir.join("A.ARW");
+        let jpg = jpg_dir.join("A.JPG");
+        let raw_plain = raw_dir.join("B.ARW");
+        let jpg_plain = jpg_dir.join("B.JPG");
+        for p in [&raw, &jpg, &raw_plain, &jpg_plain] {
+            std::fs::write(p, b"x").unwrap();
+        }
+        // `A` 的 `.acr` 只落在 JPG 旁；`B` 两侧都没有（负对照）。
+        std::fs::write(jpg.with_extension("acr"), b"ACR\0placeholder").unwrap();
+
+        save_album_impl(
+            &album_path.to_string_lossy(),
+            &[pair(&raw, &jpg, 0), pair(&raw_plain, &jpg_plain, 0)],
+        )
+        .unwrap();
+        let opened = open_album_impl(&album_path.to_string_lossy()).unwrap();
+        assert_eq!(
+            opened.entries[0].jpg_path.as_deref(),
+            Some(jpg.to_string_lossy().as_ref()),
+            "前提：配对 JPG 确实解析出来了"
+        );
+        let flags: Vec<bool> = opened.entries.iter().map(|e| e.retouched).collect();
+        assert_eq!(
+            flags,
+            vec![true, false],
+            "配对 JPG 旁的 .acr 也算已修；两侧都没有时仍为 false"
         );
     }
 
