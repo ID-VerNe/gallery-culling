@@ -31,7 +31,6 @@ function renderGrid(props: {
       onSelect={() => {}}
       selectedIds={props.selectedIds}
       onSelectionChange={props.onSelectionChange}
-      lumenThumbnails={false}
     />,
   );
 }

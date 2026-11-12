@@ -34,7 +34,6 @@ function renderGrid(props: Partial<React.ComponentProps<typeof ThumbnailGrid>> =
       onSelect={onSelect}
       selectedIds={new Set()}
       onSelectionChange={onSelectionChange}
-      lumenThumbnails={false}
       {...props}
     />,
   );
@@ -175,7 +174,6 @@ describe('issue #79：宫格连选（Shift 扩展）', () => {
         onSelect={onSelect}
         selectedIds={new Set()}
         onSelectionChange={onSelectionChange}
-        lumenThumbnails={false}
       />,
     );
     key('ArrowDown', { shiftKey: true });
@@ -222,7 +220,6 @@ describe('issue #79：宫格连选（Shift 扩展）', () => {
         onSelect={onSelect}
         selectedIds={new Set()}
         onSelectionChange={onSelectionChange}
-        lumenThumbnails={false}
       />,
     );
 
@@ -241,7 +238,6 @@ describe('issue #79：宫格连选（Shift 扩展）', () => {
         groups={GROUPS}
         selectedIndex={2}
         onSelect={onSelect}
-        lumenThumbnails={false}
       />,
     );
 

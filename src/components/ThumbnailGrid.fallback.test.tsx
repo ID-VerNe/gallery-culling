@@ -1,15 +1,14 @@
 /**
- * 回落路径自身的失败处理。
+ * 取图失败自身的处理（issue #192 后只剩一条路）。
  *
- * 已有 ThumbnailGrid.test.tsx 覆盖"引擎失败 → 回落成功"。这里补另一半：
- * **回落也失败**时（磁盘只读、权限不足，与引擎死亡同源）格子不能永远停在
- * "加载中"，也不能产生未处理的 Promise rejection。修复前 fallback 的
- * getThumbnail 没有 .catch，正好是这个洞。
+ * 宫格恒走 `get_thumbnail_cmd`（相机内嵌图）。磁盘只读、权限不足、文件被删时
+ * 它会抛错 —— 格子不能永远停在「加载中」，也不能产生未处理的 Promise rejection。
+ * 修复前 `thumbnail()` 没有 `.catch`，正好是这个洞。
  */
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { ThumbnailGrid } from './ThumbnailGrid';
-import { mockInvokeCommand, mockInvokeError } from '../test/setup';
+import { mockInvokeError } from '../test/setup';
 import { makeGroup, rawFile } from '../test/factories';
 
 const group = (id: string) =>
@@ -22,12 +21,7 @@ function renderGrid() {
       ({ width: 800, height: 600, top: 0, left: 0, bottom: 600, right: 800, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect,
   );
   return render(
-    <ThumbnailGrid
-      groups={[group('g1')]}
-      selectedIndex={0}
-      onSelect={() => undefined}
-      lumenThumbnails
-    />,
+    <ThumbnailGrid groups={[group('g1')]} selectedIndex={0} onSelect={() => undefined} />,
   );
 }
 
@@ -35,8 +29,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('ThumbnailGrid —— 回落路径自身失败', () => {
-  it('引擎与回落都失败：格子不得停在「加载中」，且无未处理 rejection', async () => {
+describe('ThumbnailGrid —— 取图失败', () => {
+  it('读取失败：格子显示「无预览」，不停在「加载中」，且无未处理 rejection', async () => {
     const unhandled = vi.fn();
     // tsconfig 只配了 DOM lib，不引 node 类型
     const proc = () =>
@@ -48,30 +42,17 @@ describe('ThumbnailGrid —— 回落路径自身失败', () => {
       }).process;
     proc().on('unhandledRejection', unhandled);
 
-    mockInvokeError('lumen_preview_cmd', new Error('引擎挂了'));
     mockInvokeError('get_thumbnail_cmd', new Error('磁盘只读'));
-
-    renderGrid();
-
-    await waitFor(() => {
-      expect(screen.queryByText('加载中')).toBeNull();
-    });
-
-    proc().off('unhandledRejection', unhandled);
-    expect(unhandled).not.toHaveBeenCalled();
-  });
-
-  it('引擎失败、回落成功：照常显示内嵌缩略图（不能被前一条的错误处理牵连）', async () => {
-    mockInvokeError('lumen_preview_cmd', new Error('引擎挂了'));
-    mockInvokeCommand('get_thumbnail_cmd', 'fallback-thumb.jpg');
 
     const { container } = renderGrid();
 
     await waitFor(() => {
-      expect(container.querySelector('img')?.getAttribute('src')).toBe(
-        'asset://localhost/fallback-thumb.jpg',
-      );
+      expect(screen.queryByText('加载中')).toBeNull();
     });
-    expect(screen.queryByText('加载中')).toBeNull();
+    expect(screen.getByLabelText('缩略图不可用')).toBeInTheDocument();
+    expect(container.querySelector('img')).toBeNull();
+
+    proc().off('unhandledRejection', unhandled);
+    expect(unhandled).not.toHaveBeenCalled();
   });
 });

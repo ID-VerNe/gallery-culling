@@ -90,8 +90,6 @@ export interface AppSettings {
   lumenEnabled: boolean;
   /** lumen-cli.exe 路径（空 = 自动查找） */
   lumenCliPath: string;
-  /** 宫格缩略图是否走 LUMEN RAW 渲染（默认 false = EXIF 内嵌缩略图） */
-  lumenGridThumbnails: boolean;
   /** 用户是否期待 AI 能力（GPU 版）。为 true 但指向 CPU 版时设置页会明确警告。 */
   lumenExpectAi: boolean;
   /**

@@ -19,7 +19,6 @@ describe('makeSettings —— 默认 9 字段（issue #134）', () => {
       sortOrder: 'time_filename',
       lumenEnabled: false,
       lumenCliPath: '',
-      lumenGridThumbnails: false,
       lumenExpectAi: false,
     });
   });
@@ -39,7 +38,6 @@ describe('makeSettings —— overrides 透传', () => {
       sortOrder: 'time_filename',
       lumenEnabled: false,
       lumenCliPath: '',
-      lumenGridThumbnails: false,
       lumenExpectAi: false,
     });
   });

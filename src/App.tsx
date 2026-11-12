@@ -317,7 +317,6 @@ function AppShell() {
   // LUMEN 前端编排（FE-06）：能力探测、AI 蒙版、宫格开关、评级同步。
   const lumen = useLumenOrchestration({
     available: lumenAvailable,
-    gridThumbnails: settings?.lumenGridThumbnails ?? false,
     defaultRawFolder: settings?.defaultRawFolder,
     currentGroup,
     onRescan: handleScan,
@@ -910,7 +909,6 @@ function AppShell() {
                     else setGridSearchFocusToken((t) => t + 1);
                   }}
                   totalLoaded={filteredGroups.length}
-                  lumenThumbnails={lumen.gridThumbs}
                   candidateId={rightCompareGroup?.id}
                   /* B1：多选（Ctrl/Shift 点选、Ctrl+A、方向键重置为单选） */
                   selectedIds={selectedIds}

@@ -41,10 +41,6 @@ pub(crate) fn settings_pairs(settings: &AppSettings) -> Vec<(&'static str, Strin
         ("sort_order", settings.sort_order.clone()),
         ("lumen_enabled", settings.lumen_enabled.to_string()),
         ("lumen_cli_path", settings.lumen_cli_path.clone()),
-        (
-            "lumen_grid_thumbnails",
-            settings.lumen_grid_thumbnails.to_string(),
-        ),
         ("lumen_expect_ai", settings.lumen_expect_ai.to_string()),
         ("tone_auto_save", settings.tone_auto_save.to_string()),
     ]
@@ -66,7 +62,6 @@ pub(crate) fn apply_setting(settings: &mut AppSettings, key: &str, value: &str) 
         "sort_order" => settings.sort_order = value.to_string(),
         "lumen_enabled" => settings.lumen_enabled = value == "true",
         "lumen_cli_path" => settings.lumen_cli_path = value.to_string(),
-        "lumen_grid_thumbnails" => settings.lumen_grid_thumbnails = value == "true",
         "lumen_expect_ai" => settings.lumen_expect_ai = value == "true",
         // issue #67：默认是**开**，所以不能沿用 `value == "true"` —— 那会把
         // 垃圾值（"yes" / 空串）误判成「用户主动关闭」。只接受明确的布尔字面量。
@@ -1162,25 +1157,24 @@ mod tests {
 
     #[test]
     fn settings_pairs_contains_lumen_keys() {
-        let mut s = AppSettings::default();
+        let s = AppSettings::default();
         let pairs = settings_pairs(&s);
         let map: std::collections::HashMap<&str, String> = pairs.into_iter().collect();
         // issue #68：sidecar 随包分发，新装默认开启
         assert_eq!(map.get("lumen_enabled").map(String::as_str), Some("true"));
         assert_eq!(map.get("lumen_cli_path").map(String::as_str), Some(""));
-        // 宫格引擎开关：默认 false（EXIF 内嵌缩略图），必须与其它键一起落盘
-        assert_eq!(
-            map.get("lumen_grid_thumbnails").map(String::as_str),
-            Some("false")
+        // issue #192：宫格缩略图恒走相机内嵌图，`lumen_grid_thumbnails` 键已下线。
+        // 老库里残留的同名行读时被 apply_setting 的 `_ => {}` 忽略、也不再回写。
+        assert!(
+            !map.contains_key("lumen_grid_thumbnails"),
+            "该键已下线，不得再落盘"
         );
-        apply_setting(&mut s, "lumen_grid_thumbnails", "true");
-        assert!(s.lumen_grid_thumbnails);
         // issue #67：调色自动保存默认开启，且必须与其它键一起落盘
         assert_eq!(map.get("tone_auto_save").map(String::as_str), Some("true"));
         // 既有 5 键不回归
         assert!(map.contains_key("photoshop_path"));
         assert!(map.contains_key("thumbnail_width"));
-        assert_eq!(map.len(), 10);
+        assert_eq!(map.len(), 9);
     }
 
     #[test]

@@ -18,7 +18,6 @@ const base = (patch: Partial<AppSettings> = {}): AppSettings =>
     sortOrder: 'time_filename',
     lumenEnabled: false,
     lumenCliPath: '',
-    lumenGridThumbnails: false,
     lumenExpectAi: false,
     ...patch,
   }) as AppSettings;

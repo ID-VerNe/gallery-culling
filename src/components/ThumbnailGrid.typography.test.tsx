@@ -30,7 +30,6 @@ function renderGrid(props: Partial<React.ComponentProps<typeof ThumbnailGrid>> =
       groups={[group('a'), group('b'), group('c')]}
       selectedIndex={0}
       onSelect={() => {}}
-      lumenThumbnails={false}
       {...props}
     />,
   );

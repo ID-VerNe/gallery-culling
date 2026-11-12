@@ -1,8 +1,9 @@
 /**
  * 首选项弹窗里的 LUMEN RAW 区块。
  *
- * 三条契约：开关的**依赖顺序**（宫格开关必须先开引擎）、握手 detail 的如实展示、
- * 以及保存时整份设置（含新增字段）一次性上报。
+ * 两条契约：引擎开关本身不得被禁用（用户必须能打开它）、握手 detail 的如实展示；
+ * 以及保存时整份设置（含新增字段）一次性上报。宫格缩略图的 LUMEN 开关已随
+ * issue #192 下线（宫格恒走相机内嵌图）。
  */
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -48,27 +49,14 @@ function setup(overrides: Partial<AppSettings> = {}, lumenStatus?: LumenStatus |
 }
 
 const engineToggle = () => screen.getByLabelText(/启用 LUMEN RAW 引擎/);
-const gridToggle = () => screen.getByLabelText(/宫格缩略图也用 LUMEN RAW 渲染/);
 const saveButton = () => screen.getByRole('button', { name: /保存设置/ });
 
 describe('SettingsModal —— LUMEN RAW 开关', () => {
-  it('lumenEnabled=false 时宫格引擎开关 disabled（不能先开后端再开前端）', async () => {
+  it('lumenEnabled=false 时引擎开关仍可操作（用户必须能打开它）', async () => {
     setup({ lumenEnabled: false });
 
-    await waitFor(() => expect(gridToggle()).toBeInTheDocument());
-    expect(gridToggle()).toBeDisabled();
+    await waitFor(() => expect(engineToggle()).toBeInTheDocument());
     expect(engineToggle()).toBeEnabled();
-  });
-
-  it('勾掉引擎开关会连带禁用宫格开关', async () => {
-    const { user } = setup({ lumenEnabled: true, lumenGridThumbnails: true });
-
-    await waitFor(() => expect(gridToggle()).toBeEnabled());
-
-    await user.click(engineToggle());
-
-    expect(engineToggle()).not.toBeChecked();
-    expect(gridToggle()).toBeDisabled();
   });
 
   it('lumenEnabled=false 时不渲染握手状态区域', async () => {
@@ -134,26 +122,10 @@ describe('SettingsModal —— 握手状态展示', () => {
 });
 
 describe('SettingsModal —— 保存', () => {
-  it('勾选 lumenGridThumbnails 后保存，会连同整份设置上报', async () => {
-    const { user, onSettingsSaved, onClose } = setup({ lumenEnabled: true });
-
-    await waitFor(() => expect(gridToggle()).toBeEnabled());
-    await user.click(gridToggle());
-    expect(gridToggle()).toBeChecked();
-
-    await user.click(saveButton());
-
-    await waitFor(() => expect(onSettingsSaved).toHaveBeenCalledTimes(1));
-    expect(onSettingsSaved).toHaveBeenCalledWith(
-      expect.objectContaining({ lumenEnabled: true, lumenGridThumbnails: true }),
-    );
-    expect(onClose).toHaveBeenCalledTimes(1);
-  });
-
   it('保存时透传用户刚改的路径字段', async () => {
     const { user, onSettingsSaved } = setup({ lumenEnabled: true });
 
-    await waitFor(() => expect(gridToggle()).toBeEnabled());
+    await waitFor(() => expect(engineToggle()).toBeEnabled());
     const path = screen.getByLabelText('lumen-cli.exe 路径');
     await user.clear(path);
     await user.type(path, 'C:/tools/lumen-cli.exe');

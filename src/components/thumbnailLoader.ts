@@ -26,10 +26,11 @@ export const GRID_THUMB_WIDTH = 200;
  * 键用 `宽度|路径`：`group.jpg?.path` / `raw.path` 稳定，适合做键（见 §4 (b)）。
  */
 export interface ThumbnailLoader {
-  /** EXIF 内嵌/缩放缩略图，resolve 已 `convertFileSrc` 的 URL。 */
+  /**
+   * 相机内嵌缩略图（无内嵌时后端退回整图缩放），resolve 已 `convertFileSrc`
+   * 的 URL。宫格**只走这一条**（issue #192：不再为缩略图付 LUMEN 真实解码）。
+   */
   thumbnail: (path: string, width: number) => Promise<string>;
-  /** LUMEN 预览路径；无预览视为失败（不缓存），触发调用方的内嵌回落。 */
-  lumenPreview: (path: string, width: number) => Promise<string>;
 }
 
 /** 通用去重器：命中缓存直接返回；命中 inflight 复用；否则发起并登记。 */
@@ -79,20 +80,11 @@ export function resetThumbnailLoaderForTest(): void {
 function createThumbnailLoader(): ThumbnailLoader {
   const thumbCache = new Map<string, string>();
   const thumbInflight = new Map<string, Promise<string>>();
-  const lumenCache = new Map<string, string>();
-  const lumenInflight = new Map<string, Promise<string>>();
 
   return {
     thumbnail: (path, width) =>
       dedupeAsync(thumbCache, thumbInflight, `${width}|${path}`, () =>
         api.getThumbnail(path, width),
       ),
-    lumenPreview: (path, width) =>
-      dedupeAsync(lumenCache, lumenInflight, `${width}|${path}`, async () => {
-        const r = await api.getLumenPreview(path, { width });
-        // 无预览路径 = 本次拿不到（引擎忙/失败），当作失败：不缓存、走内嵌回落。
-        if (!r.previewPath) throw new Error('lumen preview unavailable');
-        return r.previewPath;
-      }),
   };
 }

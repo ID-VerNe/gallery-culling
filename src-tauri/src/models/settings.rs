@@ -28,9 +28,6 @@ pub struct AppSettings {
     pub lumen_enabled: bool,
     /// lumen-cli.exe 路径（留空 = 自动查找）
     pub lumen_cli_path: String,
-    /// 宫格缩略图是否走 LUMEN RAW 渲染（默认 false = 继续用 EXIF 内嵌缩略图，
-    /// 那条路近乎零成本；开开后 200px 约 0.3s/张，由用户自己权衡）
-    pub lumen_grid_thumbnails: bool,
     /// 用户是否期待 AI 能力（GPU 版）。为 true 但实际指向 CPU 版时，设置页会明确
     /// 警告"你指向的是 CPU 版，AI 蒙版不可用"——能力判定本身按磁盘事实走。
     pub lumen_expect_ai: bool,
@@ -51,7 +48,6 @@ impl Default for AppSettings {
             sort_order: "time_filename".to_string(),
             lumen_enabled: true,
             lumen_cli_path: String::new(),
-            lumen_grid_thumbnails: false,
             lumen_expect_ai: false,
             tone_auto_save: true,
         }

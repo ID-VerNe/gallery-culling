@@ -28,7 +28,6 @@ function renderGrid(over: Record<string, unknown> = {}) {
       groups={GROUPS}
       selectedIndex={0}
       onSelect={() => {}}
-      lumenThumbnails={false}
       {...(over as object)}
     />,
   );
