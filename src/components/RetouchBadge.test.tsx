@@ -11,7 +11,7 @@
  *  - 格头有「未修/已修」快捷筛选，且它改的是查询串本身（唯一真值）。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { resetThumbnailLoaderForTest, ThumbnailGrid } from './ThumbnailGrid';
 import { mockInvokeCommand } from '../test/setup';
 import { makeGroup } from '../test/factories';
@@ -39,8 +39,12 @@ describe('已精修标记 —— 宫格（issue #200）', () => {
       />,
     );
 
+    // 徽章必须长在**那一格里面**：只断言「页面上有一个」的话，把徽章渲染到
+    // 错误的格子上（比如永远渲染第一张）这条用例照样绿。
     expect(
-      screen.getByRole('img', { name: /已进 Photoshop \/ Camera Raw 精修/ }),
+      within(cellFor('DSC04852')).getByRole('img', {
+        name: /已进 Photoshop \/ Camera Raw 精修/,
+      }),
     ).toBeTruthy();
     // 只有一张修过 → 标记只能出现一次。
     expect(
@@ -141,6 +145,26 @@ describe('已精修筛选 —— 格头快捷入口（issue #200）', () => {
     const { onSearchQueryChange } = setup('-retouched');
     fireEvent.click(screen.getByRole('button', { name: '只看已精修的照片' }));
     expect(onSearchQueryChange).toHaveBeenCalledWith('retouched');
+  });
+
+  it('手写单数别名 `retouch` 时，按钮同样高亮（归一后是同一档）', () => {
+    render(
+      <ThumbnailGrid
+        groups={[group('a')]}
+        selectedIndex={0}
+        onSelect={() => {}}
+        searchQuery="retouch"
+        onSearchQueryChange={() => {}}
+        onSearchOpenChange={() => {}}
+      />,
+    );
+    // 不归一的话，用户手打 retouch 会看到「按钮没亮但结果变了」——
+    // 比报错更让人怀疑应用坏了。
+    expect(
+      screen
+        .getByRole('button', { name: '只看已精修的照片' })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
   });
 
   it('筛选生效时自动展开搜索框，让用户看得见为什么少了照片', () => {

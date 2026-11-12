@@ -638,3 +638,51 @@ describe('PreviewViewport —— 不再有悬浮底栏（issue #62）', () => {
     expect(onZoomApi).toHaveBeenLastCalledWith(null);
   });
 });
+
+/**
+ * 已精修角标（issue #200）。
+ *
+ * 这条守的是**单图视图这条入口**：宫格有自己的组件测试，但单图视图是另一处
+ * 渲染点，判定写在 JSX 里，删掉那一块不会有任何测试变红 —— 这个用例就是补
+ * 这个洞。顺带钉住「与含成品并排、不抢同一坐标」这个曾经踩过的坑。
+ */
+describe('PreviewViewport —— 已精修角标（issue #200）', () => {
+  const renderWith = (over: Partial<PhotoGroupInfo>) => {
+    const g = makeGroup('g1', { jpg: jpgFile('g1', 'D:/shoot'), ...over });
+    render(<PreviewViewport group={g} onPrev={vi.fn()} onNext={vi.fn()} />);
+  };
+
+  it('修过的照片显示「已修」角标', () => {
+    renderWith({ retouched: true });
+    expect(
+      screen.getByRole('img', { name: '已进 Photoshop / Camera Raw 精修' }),
+    ).toBeTruthy();
+  });
+
+  it('没修过的照片不显示「已修」角标', () => {
+    renderWith({ retouched: false });
+    expect(
+      screen.queryByRole('img', { name: '已进 Photoshop / Camera Raw 精修' }),
+    ).toBeNull();
+  });
+
+  it('「已修」与「含成品」同时成立时两块角标都在（共用一个定位容器）', () => {
+    renderWith({
+      retouched: true,
+      edited: {
+        name: 'g1.jpg',
+        extension: 'jpg',
+        path: 'D:/shoot/g1_edited.jpg',
+        size: 1,
+        mtime: 0,
+      },
+    });
+    const repaired = screen.getByRole('img', {
+      name: '已进 Photoshop / Camera Raw 精修',
+    });
+    const finished = screen.getByTitle('包含精修成果 (Luminar AI)');
+    expect(repaired.parentElement).toBe(finished.parentElement);
+    // 同一容器且是竖列：否则两块 absolute 会叠在同一坐标上互相遮挡。
+    expect(repaired.parentElement?.className).toContain('flex-col');
+  });
+});

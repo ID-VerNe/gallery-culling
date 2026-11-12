@@ -107,7 +107,7 @@ impl SidecarProbe for FsProbe {
         // `read_xmp_full` 读不到内容时返回 None；这里保留它的 None 语义，
         // 与旧 `read_disk_state` 的「空状态」区分开：读失败不能当成「外部清空」。
         let meta = xmp::read_xmp_full(&xmp_path)?;
-        let retouched = meta.acr_edited || photo.with_extension("acr").exists();
+        let retouched = meta.acr_edited || photo.with_extension("acr").is_file();
         Some(DiskXmp {
             rating: meta.rating,
             rejected: meta.rejected,
@@ -255,11 +255,12 @@ pub fn refresh(
         let sidecar_removed = mtime.is_none();
 
         let (disk, disk_retouched) = if sidecar_removed {
-            // 外部删了侧边栏 → 采用空状态，且「已精修」一并归零。
-            // 旗标仍以本地 store 为准。
+            // 外部删了侧边栏 → 采用空状态。三元标记没有依据了，但「已精修」还有
+            // 一路独立证据：同名 `.acr` 还在的话，这张确实进过 ACR。
+            let acr_left = Path::new(&target.path).with_extension("acr").is_file();
             (
                 CullState::new(0, &resolve_flag_for(&mut stores, target, false, ""), ""),
-                false,
+                acr_left,
             )
         } else {
             match probe.read_xmp(Path::new(&target.path)) {
@@ -322,7 +323,9 @@ pub fn refresh(
                     report.adopted.push(RefreshItem {
                         path: target.path.clone(),
                         state: disk,
-                        retouched: false,
+                        // 星级/旗标无从判断了，但「修没修过」还有 `.acr` 这一路证据：
+                        // 用户把 sidecar 挪走或删掉时，不该顺手抹掉精修标记。
+                        retouched: disk_retouched,
                         sidecar_removed: true,
                     });
                 } else if cursor.as_ref().map(state_of) == Some(disk.clone())
@@ -1134,6 +1137,39 @@ mod tests {
             true,
             "游标要记下已精修，否则下次还会重复推"
         );
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    /// 侧边栏被外部删掉、但 `.acr` 还在 → 星级/旗标清空，「已修」必须留着。
+    ///
+    /// 这两个信号本来就独立：sidecar 里是设置记录，`.acr` 是 ACR 的产物。
+    /// 顺手把 sidecar 挪走的用户，不该连「这张修过」的记忆一起丢。
+    #[test]
+    fn sidecar_removed_keeps_acr_evidence() {
+        let dir = std::env::temp_dir().join(format!("gc_acr_left_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let photo = dir.join("a.ARW");
+        std::fs::write(&photo, b"raw").unwrap();
+        std::fs::write(dir.join("a.acr"), b"ACR\0placeholder").unwrap();
+
+        let (db, db_path) = temp_db("acr_left");
+        let probe = FakeProbe::new();
+        let p = photo.to_string_lossy().to_string();
+        probe.missing(&p);
+        let sidecar = xmp::get_xmp_path(&photo).to_string_lossy().to_string();
+        db.upsert_xmp_cursor(&cursor(&sidecar, 1000, 3, "pick", "Red"))
+            .unwrap();
+
+        let report = refresh(&db, &probe, vec![target(&p)]);
+
+        assert_eq!(report.adopted.len(), 1);
+        let item = &report.adopted[0];
+        assert!(item.sidecar_removed, "侧边栏确实不在了");
+        assert_eq!(item.state.rating, 0, "三元标记无从判断，归空");
+        assert!(item.retouched, "`.acr` 还在，就还是修过的");
+
+        let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_file(&db_path);
     }
 

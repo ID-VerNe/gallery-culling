@@ -105,13 +105,23 @@ const FIELDS: Record<QueryField, FieldSpec> = {
   ext: { kind: 'text', example: 'ext:arw' },
   folder: { kind: 'text', example: 'folder:2024' },
   edited: { kind: 'bool', example: 'edited' },
-  retouched: { kind: 'bool', example: 'retouched' },
+  retouched: { kind: 'bool', example: 'retouched（或 retouched:no）' },
   iso: { kind: 'number', example: 'iso>=3200' },
   camera: { kind: 'text', example: 'camera:sony' },
   lens: { kind: 'text', example: 'lens:85mm' },
   aperture: { kind: 'number', example: 'aperture>=2.8' },
   shutter: { kind: 'number', example: 'shutter<=1/500' },
   focal: { kind: 'number', example: 'focal>=85' },
+};
+
+/** 布尔字段允许显式写的值：`retouched:no` 等价于 `-retouched`。 */
+const BOOL_VALUES: Record<string, boolean> = {
+  yes: true,
+  true: true,
+  1: true,
+  no: false,
+  false: false,
+  0: false,
 };
 
 const FIELD_NAMES = Object.keys(FIELDS) as QueryField[];
@@ -268,7 +278,22 @@ export function parseQuery(input: string): QueryParseResult {
     }
 
     if (spec.kind === 'bool') {
-      errors.push(`「${field}」不需要值，直接写 ${field}。`);
+      // `retouched:yes` / `retouched:no` 也要能用：issue #200 里就是这么写的，
+      // 用户照着试是最自然的路径。`no` 等价于给整条词条取反，
+      // 与 `-` 前缀叠加时按异或处理（`-retouched:no` = 修过）。
+      const v = rawValue.toLowerCase();
+      const asTrue = BOOL_VALUES[v];
+      if (asTrue === undefined) {
+        errors.push(`「${field}」只接受 yes / no（或直接写 ${field} / -${field}）。`);
+        continue;
+      }
+      terms.push({
+        field,
+        op: '=',
+        value: true,
+        negated: asTrue ? negated : !negated,
+        raw,
+      });
       continue;
     }
 

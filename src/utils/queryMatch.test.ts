@@ -126,8 +126,22 @@ describe('parseQuery：字段与运算符', () => {
     });
     // 单数别名：手快少打一个 d 也要能用。
     expect(parseQuery('retouch').terms[0]).toMatchObject({ field: 'retouched', value: true });
-    // 带值写是误用，必须报错而不是静默吞掉。
-    expect(parseQuery('retouched:yes').errors.length).toBeGreaterThan(0);
+    // 带值写要能用（issue #200 的正文就是这么写的），`no` 等价于取反。
+    expect(parseQuery('retouched:yes').terms[0]).toMatchObject({
+      field: 'retouched',
+      negated: false,
+    });
+    expect(parseQuery('retouched:no').terms[0]).toMatchObject({
+      field: 'retouched',
+      negated: true,
+    });
+    // 与 `-` 前缀叠加按异或：双重否定 = 肯定。
+    expect(parseQuery('-retouched:no').terms[0]).toMatchObject({
+      field: 'retouched',
+      negated: false,
+    });
+    // 其他值必须报错，不能静默当成 yes。
+    expect(parseQuery('retouched:maybe').errors.length).toBeGreaterThan(0);
   });
 
   it('EXIF 数值宽容解析：f/2.8、1/500、85mm', () => {

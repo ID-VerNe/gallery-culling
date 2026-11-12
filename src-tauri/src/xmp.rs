@@ -119,6 +119,11 @@ pub fn read_xmp_full(xmp_path: &Path) -> Option<XmpMetadata> {
 
     // ACR 精修痕迹（issue #200）：只有 Adobe 写 Camera Raw 设置时才带 HasSettings 属性。
     // 属性值大小写随版本可能是 `True` / `true`，两种都认。
+    //
+    // **刻意不认** `crs:HasSettings='True'`（单引号）与 `crs:HasSettings = "True"`
+    // （等号带空格）：Adobe XMP Toolkit 序列化属性恒用双引号、无空格（本机 4 份
+    // 真机 sidecar 逐一核对过）。真做等价化就要引入属性解析，等于为一个没出现过的
+    // 写法重写 XML 扫描；`.acr` 旁证是第二道网，漏判成本可控。
     let acr_edited = content.contains("crs:HasSettings=\"True\"")
         || content.contains("crs:HasSettings=\"true\"");
 
@@ -170,7 +175,7 @@ pub fn read_xmp_full(xmp_path: &Path) -> Option<XmpMetadata> {
 /// 拼同样的或，别为此多读一次文件。
 pub fn is_acr_edited(image_path: &Path) -> bool {
     read_xmp_full(&get_xmp_path(image_path)).is_some_and(|m| m.acr_edited)
-        || image_path.with_extension("acr").exists()
+        || image_path.with_extension("acr").is_file()
 }
 
 /// 本方（Gallery Culling）拥有的命名空间。

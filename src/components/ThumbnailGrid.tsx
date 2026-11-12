@@ -217,20 +217,27 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   // 查询框里的文字一致，否则会出现「按钮说只看未修、输入框里写着 retouched」
   // 这种自相矛盾的状态，而且导出时按 `current_query` 复制条件也会漏掉它。
   // 因此这里只是「往查询串里加/删一个词」的语法糖。
-  const RETOUCH_TOKENS = ['retouched', '-retouched'] as const;
-  const activeRetouchToken =
+  // 归一成「正向/取反」两种，`retouch` 单数别名与手打的 `-retouch` 也算同一档 ——
+  // 否则用户手写 `retouch` 时按钮不高亮，看起来像没生效。
+  const retouchFilterOf = (token: string): 'yes' | 'no' | null => {
+    const t = token.toLowerCase();
+    if (t === 'retouch' || t === 'retouched') return 'yes';
+    if (t === '-retouch' || t === '-retouched') return 'no';
+    return null;
+  };
+  const activeRetouchFilter =
     searchQuery
       .trim()
       .split(/\s+/)
-      .map((t) => t.toLowerCase())
-      .find((t) => (RETOUCH_TOKENS as readonly string[]).includes(t)) ?? null;
-  const toggleRetouchFilter = (token: 'retouched' | '-retouched') => {
+      .map(retouchFilterOf)
+      .find((f) => f !== null) ?? null;
+  const toggleRetouchFilter = (want: 'yes' | 'no') => {
     const kept = searchQuery
       .trim()
       .split(/\s+/)
       .filter(Boolean)
-      .filter((t) => !(RETOUCH_TOKENS as readonly string[]).includes(t.toLowerCase()));
-    if (activeRetouchToken !== token) kept.push(token);
+      .filter((t) => retouchFilterOf(t) === null);
+    if (activeRetouchFilter !== want) kept.push(want === 'yes' ? 'retouched' : '-retouched');
     onSearchQueryChange?.(kept.join(' '));
     // 筛选生效但查询框关着 → 用户看不到「为什么少了这么多张」，顺手展开。
     onSearchOpenChange?.(true);
@@ -304,31 +311,31 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
 
           {/* issue #200：精修状态快捷筛选。用户的原话是「想一眼知道哪张修过、
               哪张没修」，所以入口必须常驻在格头，而不是藏在查询语法里。 */}
-          {onSearchQueryChange && (
+          {onSearchQueryChange && !isEmpty && (
             <div className="flex items-center bg-background-base p-0.5 rounded-md border border-border-default shrink-0">
               <button
-                onClick={() => toggleRetouchFilter('-retouched')}
+                onClick={() => toggleRetouchFilter('no')}
                 className={`focus-ring flex items-center gap-1 px-1.5 min-h-7 rounded text-[10px] transition-colors shrink-0 whitespace-nowrap ${
-                  activeRetouchToken === '-retouched'
+                  activeRetouchFilter === 'no'
                     ? 'bg-amber-400 text-black font-medium'
                     : 'text-white/60 hover:text-white hover:bg-white/10'
                 }`}
                 title="只看还没进 Photoshop / ACR 精修的照片（查询语法：-retouched）"
                 aria-label="只看未精修的照片"
-                aria-pressed={activeRetouchToken === '-retouched'}
+                aria-pressed={activeRetouchFilter === 'no'}
               >
                 未修
               </button>
               <button
-                onClick={() => toggleRetouchFilter('retouched')}
+                onClick={() => toggleRetouchFilter('yes')}
                 className={`focus-ring flex items-center gap-1 px-1.5 min-h-7 rounded text-[10px] transition-colors shrink-0 whitespace-nowrap ${
-                  activeRetouchToken === 'retouched'
+                  activeRetouchFilter === 'yes'
                     ? 'bg-amber-400 text-black font-medium'
                     : 'text-white/60 hover:text-white hover:bg-white/10'
                 }`}
                 title="只看已进 Photoshop / ACR 精修的照片（查询语法：retouched）"
                 aria-label="只看已精修的照片"
-                aria-pressed={activeRetouchToken === 'retouched'}
+                aria-pressed={activeRetouchFilter === 'yes'}
               >
                 已修
               </button>
