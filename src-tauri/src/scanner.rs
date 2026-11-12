@@ -536,12 +536,15 @@ fn assemble_group(
     // 「已精修」判据（issue #200）：sidecar 里的 ACR 痕迹 **或** 同名 `.acr` 文件。
     // 两者取或 —— `.acr` 更像可清的缓存，`HasSettings` 是 Adobe 持久写下的设置记录，
     // 任一命中都算修过；两者在本机 161 组真实素材上逐一对应（4 / 161）。
-    let retouched = xmp_meta.as_ref().is_some_and(|m| m.acr_edited)
-        || raw_opt
-            .as_ref()
-            .or(jpg_opt.as_ref())
-            .map(|f| Path::new(&f.path).with_extension("acr").is_file())
-            .unwrap_or(false);
+    // `.acr` 可能落在 RAW 旁边，也可能落在配对 JPG 旁边（PS 的「存储为」跟着
+    // 主文件走；RAW/JPG 分目录摆放时两边都可能出现），所以两处都要看 ——
+    // 旧写法 `raw.or(jpg)` 在 RAW 在场时短路，JPG 侧的证据就永远读不到。
+    let has_acr = raw_opt
+        .as_ref()
+        .into_iter()
+        .chain(jpg_opt.as_ref())
+        .any(|f| Path::new(&f.path).with_extension("acr").is_file());
+    let retouched = xmp_meta.as_ref().is_some_and(|m| m.acr_edited) || has_acr;
     let edited = jpg_opt
         .as_ref()
         .and_then(|j| Path::new(&j.path).parent())
@@ -1159,6 +1162,40 @@ mod tests {
         // `has_xmp` 的既有语义是「.xmp **或** .acr 侧边栏存在」（见
         // `xmp::check_sidecar_exists`），所以这一项也会跟着变真 —— 两条判据
         // 关注的不是同一件事，别指望它能区分。
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// RAW 与配对 JPG 都在、`.acr` 只在 JPG 旁边时，也必须算已修。
+    ///
+    /// 旧写法 `raw.or(jpg)` 在 RAW 在场时短路，JPG 侧的证据永远读不到 ——
+    /// 分目录摆放（RAW/ 与 JPG/）的用户会整批丢标记。
+    #[test]
+    fn scan_finds_acr_on_paired_jpg() {
+        let dir = unique_dir("retouch_acr_on_jpg");
+        let raw_dir = dir.join("RAW");
+        let jpg_dir = dir.join("JPG");
+        fs::create_dir_all(&raw_dir).unwrap();
+        fs::create_dir_all(&jpg_dir).unwrap();
+        fs::write(raw_dir.join("R0004.ARW"), b"raw").unwrap();
+        fs::write(jpg_dir.join("R0004.JPG"), b"jpeg").unwrap();
+        // .acr 只落在 JPG 旁边
+        fs::write(jpg_dir.join("R0004.acr"), b"ACR\0placeholder").unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let res = scan_folders(
+            jpg_dir.to_str().unwrap(),
+            Some(raw_dir.to_str().unwrap()),
+            "filename",
+            &cancel,
+            |_, _, _| {},
+        )
+        .expect("扫描应成功");
+        assert_eq!(res.groups.len(), 1);
+        assert!(
+            res.groups[0].retouched,
+            "配对 JPG 旁的 .acr 漏读了（`raw.or(jpg)` 短路？）"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

@@ -140,6 +140,19 @@ describe('parseQuery：字段与运算符', () => {
       field: 'retouched',
       negated: false,
     });
+    // 其余真假写法也认，避免用户凭直觉写 `true` 时踩空。
+    for (const t of ['true', '1']) {
+      expect(parseQuery(`retouched:${t}`).terms[0], t).toMatchObject({ negated: false });
+    }
+    for (const t of ['false', '0']) {
+      expect(parseQuery(`retouched:${t}`).terms[0], t).toMatchObject({ negated: true });
+    }
+    // 比较符对布尔无大小意义，一律按「等于」：与 `:` 等价而不是报错
+    // （报错会让整屏放行，用户以为筛选失效）。
+    expect(parseQuery('retouched>=yes').terms[0]).toMatchObject({
+      field: 'retouched',
+      negated: false,
+    });
     // 其他值必须报错，不能静默当成 yes。
     expect(parseQuery('retouched:maybe').errors.length).toBeGreaterThan(0);
     // 原型链上的名字也不行：对象字面量当查表时 `constructor` / `__proto__` 能查到

@@ -287,6 +287,9 @@ export function parseQuery(input: string): QueryParseResult {
       // `retouched:yes` / `retouched:no` 也要能用：issue #200 里就是这么写的，
       // 用户照着试是最自然的路径。`no` 等价于给整条词条取反，
       // 与 `-` 前缀叠加时按异或处理（`-retouched:no` = 修过）。
+      // 布尔字段没有大小关系，比较符一律按「等于」处理：`retouched>=yes` 与
+      // `retouched:yes` 等价。不为它单独报错，是因为语法错误的代价是整屏放行
+      // （见文件头原则 2），用户会以为筛选失效。
       const v = rawValue.toLowerCase();
       const asTrue = BOOL_VALUES.get(v);
       if (asTrue === undefined) {

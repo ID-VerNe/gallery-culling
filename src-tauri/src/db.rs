@@ -1104,6 +1104,69 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// issue #200：老库的 `xmp_cursor` 没有 `retouched` 列，打开时必须自动补上。
+    ///
+    /// 这条是给**升级用户**兜底的：`lookup_xmp_cursor` 的 SELECT 里带了这一列，
+    /// 少了 `ensure_column` 老库会直接报错（读游标失败 → 每次刷新整盘报 failed），
+    /// 而不是「标记不亮」这种温和症状。造一张旧表结构再打开，就是为了让缺列
+    /// 那个版本的代码在这里红。
+    #[test]
+    fn old_xmp_cursor_table_gets_retouched_column() {
+        let path = std::env::temp_dir().join(format!("gc_db_cursor_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            // 造一个「已精修」落地前的库：表结构与那个版本一致（无 retouched）
+            let conn = Connection::open(&path).expect("建旧库");
+            conn.execute(
+                "CREATE TABLE xmp_cursor (
+                    sidecar_path TEXT PRIMARY KEY,
+                    mtime_ms     INTEGER NOT NULL,
+                    rating       INTEGER NOT NULL,
+                    flag         TEXT NOT NULL,
+                    label        TEXT NOT NULL DEFAULT '',
+                    seen_at      INTEGER NOT NULL
+                )",
+                [],
+            )
+            .expect("旧表");
+            conn.execute(
+                "INSERT INTO xmp_cursor VALUES ('C:/p/old.xmp', 1000, 4, 'pick', 'Red', 500)",
+                [],
+            )
+            .expect("旧行");
+        }
+
+        let db = Database::open(&path).expect("打开旧库应自动补列");
+        let row = db
+            .lookup_xmp_cursor("C:/p/old.xmp")
+            .expect("补列后旧行仍可读")
+            .expect("旧行不该丢");
+        assert_eq!(row.rating, 4, "补列不得丢行");
+        assert_eq!(row.label, "Red");
+        assert!(!row.retouched, "旧行的已精修按 false 处理");
+
+        // 补列之后能正常写/读新值
+        db.upsert_xmp_cursor(&XmpCursor {
+            sidecar_path: "C:/p/old.xmp".to_string(),
+            mtime_ms: 2000,
+            rating: 4,
+            flag: "pick".to_string(),
+            label: "Red".to_string(),
+            retouched: true,
+        })
+        .expect("写新值");
+        assert!(
+            db.lookup_xmp_cursor("C:/p/old.xmp")
+                .unwrap()
+                .unwrap()
+                .retouched,
+            "补列后写入的 true 必须读得回来"
+        );
+
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn pending_roundtrip_and_delete() {
         let (db, path) = temp_db("pending_roundtrip");

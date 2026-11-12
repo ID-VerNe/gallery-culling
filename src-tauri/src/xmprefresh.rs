@@ -265,12 +265,20 @@ pub fn refresh(
         let first_seen = cursor.is_none();
         let sidecar_removed = mtime.is_none();
 
+        // `.acr` 可能落在主路径旁边，也可能落在配对 JPG 旁边（分目录摆放时
+        // 两边都可能出现），两处都要看。一次算好，两个分支共用。
+        let acr_exists = probe.acr_exists(Path::new(&target.path))
+            || target
+                .jpg_path
+                .as_deref()
+                .is_some_and(|j| probe.acr_exists(Path::new(j)));
+
         let (disk, disk_retouched) = if sidecar_removed {
             // 外部删了侧边栏 → 采用空状态。三元标记没有依据了，但「已精修」还有
             // 一路独立证据：同名 `.acr` 还在的话，这张确实进过 ACR。
             (
                 CullState::new(0, &resolve_flag_for(&mut stores, target, false, ""), ""),
-                probe.acr_exists(Path::new(&target.path)),
+                acr_exists,
             )
         } else {
             match probe.read_xmp(Path::new(&target.path)) {
@@ -281,7 +289,7 @@ pub fn refresh(
                         &d.label,
                     ),
                     // sidecar 里的 `HasSettings` 与照片旁 `.acr` 任一命中即已修。
-                    d.retouched || probe.acr_exists(Path::new(&target.path)),
+                    d.retouched || acr_exists,
                 ),
                 None => {
                     // mtime 说有文件、读却失败：不推进游标，下次再试。
@@ -1162,6 +1170,33 @@ mod tests {
             true,
             "游标要记下已精修，否则下次还会重复推"
         );
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    /// `.acr` 落在**配对 JPG** 旁边（RAW/JPG 分目录摆放）时也算已修。
+    ///
+    /// 这是 `raw.or(jpg)` 那类短路的经典坑：RAW 在场时只看 RAW 一侧，
+    /// 用户在 PS 里对 JPG 应用了 Camera Raw 滤镜就完全读不到。
+    #[test]
+    fn acr_on_paired_jpg_counts_as_retouched() {
+        let (db, db_path) = temp_db("acr_jpg");
+        let probe = FakeProbe::new();
+        probe.file("C:/raw/a.ARW", 2000, 3, false, "");
+        probe.acr_file("C:/jpg/a.JPG");
+        db.upsert_xmp_cursor(&cursor("C:/raw/a.xmp", 1000, 3, "none", ""))
+            .unwrap();
+
+        let report = refresh(
+            &db,
+            &probe,
+            vec![RefreshTarget {
+                path: "C:/raw/a.ARW".to_string(),
+                jpg_path: Some("C:/jpg/a.JPG".to_string()),
+            }],
+        );
+
+        assert_eq!(report.adopted.len(), 1, "JPG 侧的 .acr 也必须算变化");
+        assert!(report.adopted[0].retouched);
         let _ = std::fs::remove_file(&db_path);
     }
 
