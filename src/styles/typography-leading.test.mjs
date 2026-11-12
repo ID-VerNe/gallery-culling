@@ -126,8 +126,12 @@ describe('小字行高口径（issue #39 · PC-8）', () => {
     expect(leadingViolations(PANEL_FILES, 'text-[11px]', ['leading-snug'])).toEqual([]);
   });
 
-  it('迁移台账：9 个面板文件里 10px + leading-[1.5] 不少于 26 处（防批量回退）', () => {
-    expect(countPairs(PANEL_FILES, 'text-[10px]', 'leading-[1.5]')).toBeGreaterThanOrEqual(26);
+  // issue #192：SettingsSections 的「宫格缩略图也用 LUMEN RAW 渲染」说明段随开关
+  // 一起下线，台账从 26 降到 25。这是**净减少一处合法用法**，不是放宽口径 ——
+  // 阈值仍按「现存每一处都必须在」卡住，任何批量回退（例如把 leading 改回
+  // relaxed）都会让计数继续下降并变红。
+  it('迁移台账：9 个面板文件里 10px + leading-[1.5] 不少于 25 处（防批量回退）', () => {
+    expect(countPairs(PANEL_FILES, 'text-[10px]', 'leading-[1.5]')).toBeGreaterThanOrEqual(25);
   });
 
   it('迁移台账：9 个面板文件里 11px + leading-snug 不少于 10 处（防批量回退）', () => {

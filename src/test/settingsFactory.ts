@@ -33,7 +33,6 @@ export function makeSettings(partial: Partial<AppSettings> = {}): AppSettings {
     sortOrder: 'time_filename',
     lumenEnabled: false,
     lumenCliPath: '',
-    lumenGridThumbnails: false,
     lumenExpectAi: false,
     ...partial,
   };

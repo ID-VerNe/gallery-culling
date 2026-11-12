@@ -31,12 +31,11 @@ beforeEach(() => {
   resetThumbnailLoaderForTest();
 });
 
-const grid = (groups: PhotoGroupInfo[], lumenThumbnails = false) => (
+const grid = (groups: PhotoGroupInfo[]) => (
   <ThumbnailGrid
     groups={groups}
     selectedIndex={0}
     onSelect={() => {}}
-    lumenThumbnails={lumenThumbnails}
   />
 );
 

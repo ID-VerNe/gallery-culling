@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Star, Check, X, Pin, Target } from 'lucide-react';
 import { PhotoGroupInfo } from '../types';
-import { api } from '../services/api';
 import { LABEL_DOT_CLASS, LABEL_NAMES, isColorLabel } from '../utils/labels';
 import { GRID_THUMB_WIDTH, type ThumbnailLoader } from './thumbnailLoader';
 
@@ -31,8 +30,6 @@ export interface GridPhotoCellProps {
   isUnsynced?: boolean;
   /** B6：点击"未同步"角标重试。 */
   onRetrySync?: (group: PhotoGroupInfo) => void;
-  /** 见 ThumbnailGridProps.lumenThumbnails */
-  lumenThumbnails?: boolean;
   /** 缩略图加载器（去重 + 缓存），模块级单例（issue #107）。 */
   loader: ThumbnailLoader;
 }
@@ -49,11 +46,10 @@ export const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
   onClick,
   isUnsynced = false,
   onRetrySync,
-  lumenThumbnails = false,
   loader,
 }) => {
-  // 三态：`null` 加载中 · `undefined` 两条路都失败 · 字符串 有图。
-  // 之前用 null 同时表示"加载中"和"失败"，回落也失败时格子会永远显示加载中。
+  // 三态：`null` 加载中 · `undefined` 读取失败 · 字符串 有图。
+  // 之前用 null 同时表示"加载中"和"失败"，两条路都失败时格子会永远显示加载中。
   const [thumbSrc, setThumbSrc] = useState<string | null | undefined>(null);
   // PB-3：按下即时反馈。原实现只有 onMouseDown preventDefault + onClick 选中，
   // 按住期间零响应（用户感知「点了没反应」）。onPointerDown 立即加 pressed 态，
@@ -65,36 +61,24 @@ export const GridPhotoCell: React.FC<GridPhotoCellProps> = ({
     const targetPath = group.jpg?.path || group.raw?.path;
     if (!targetPath) return;
 
+    // 宫格缩略图**恒走相机内嵌图**（issue #192）：LUMEN 真实解码那张要 1.2s/张，
+    // 且引擎侧单实例互斥，宫格只能一张一张排队；内嵌图 8–18ms，够「看个大概」。
     // 走带去重/缓存的 loader：并发与滚动回来的重复请求共享同一 Promise，不再重复 IPC。
-    const { thumbnail, lumenPreview } = loader;
-
-    // 兜住「回落也失败」的错误：磁盘/权限问题会让两条路同时失败，没有 catch 的话
-    // 格子会永远停在"加载中"（这正是本模块要避免的整屏空洞）。失败态用 undefined。
-    const loadFallback = () =>
-      thumbnail(targetPath, GRID_THUMB_WIDTH)
-        .then((url) => {
-          if (active) setThumbSrc(url);
-        })
-        .catch(() => {
-          if (active) setThumbSrc(undefined);
-        });
-
-    if (lumenThumbnails && group.raw?.path) {
-      // 引擎路径：RAW 由 LUMEN RAW 真实解码渲染（200px）。
-      // 无预览或抛错都静默回落到内嵌缩略图 —— 引擎抖动不该让宫格出现空洞。
-      lumenPreview(group.raw.path, GRID_THUMB_WIDTH)
-        .then((previewPath) => {
-          if (active) setThumbSrc(api.toAssetUrl(previewPath));
-        })
-        .catch(loadFallback);
-    } else {
-      loadFallback();
-    }
+    // 兜住失败的错误：磁盘/权限问题会让读取失败，没有 catch 的话格子会永远停在
+    // "加载中"（这正是本模块要避免的整屏空洞）。失败态用 undefined。
+    loader
+      .thumbnail(targetPath, GRID_THUMB_WIDTH)
+      .then((url) => {
+        if (active) setThumbSrc(url);
+      })
+      .catch(() => {
+        if (active) setThumbSrc(undefined);
+      });
 
     return () => {
       active = false;
     };
-  }, [group.jpg?.path, group.raw?.path, lumenThumbnails, loader]);
+  }, [group.jpg?.path, group.raw?.path, loader]);
 
   const flagBorder =
     group.flag === 'pick'

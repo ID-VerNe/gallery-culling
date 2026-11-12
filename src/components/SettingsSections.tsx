@@ -301,31 +301,6 @@ export const LumenSettingsSection: React.FC<{
             </p>
           )}
 
-          <div className="flex flex-col gap-1.5 pt-1">
-            <label
-              htmlFor="settings-lumen-grid"
-              className="text-white/80 font-medium cursor-pointer flex items-center gap-2"
-            >
-              <input
-                id="settings-lumen-grid"
-                type="checkbox"
-                checked={settings.lumenGridThumbnails}
-                disabled={!settings.lumenEnabled}
-                onChange={(e) =>
-                  setSettings({ ...settings, lumenGridThumbnails: e.target.checked })
-                }
-                className="focus-ring w-4 h-4 accent-white disabled:opacity-40"
-              />
-              宫格缩略图也用 LUMEN RAW 渲染
-            </label>
-            <p
-              className="text-[10px] leading-[1.5] text-white/60"
-              title="关闭时宫格用相机内嵌缩略图（近乎零成本）；开启后每张约 0.3 秒，好处是宫格与大图显影一致。"
-            >
-              关闭用内嵌缩略图（快）；开启与大图显影一致（每张约 0.3 秒）。
-            </p>
-          </div>
-
           {/* AI（GPU 版）入口：勾选后若指向的是 CPU 版，明确警告而不是等点下去 */}
           <div className="flex flex-col gap-1.5 pt-1">
             <label

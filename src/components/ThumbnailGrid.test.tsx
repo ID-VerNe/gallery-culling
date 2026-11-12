@@ -1,29 +1,22 @@
 /**
- * 宫格的缩略图来源选择。
+ * 宫格的缩略图来源。
  *
- * 这是全应用里最容易造成"整屏空洞"的地方：LUMEN RAW 渲染可能返回 null、可能直接
- * 抛错，两条路都必须静默回落到相机内嵌缩略图。断言用 invoke 的**命令名**来区分
- * 走了哪条路。
+ * issue #192 起宫格**恒走相机内嵌缩略图**（`get_thumbnail_cmd`）：LUMEN 真实解码
+ * 1.2s/张且引擎侧单实例互斥，宫格只能一张一张排队。这里用 invoke 的**命令名**
+ * 锁住「一次都不碰 lumen_preview_cmd」。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { GRID_THUMB_WIDTH, resetThumbnailLoaderForTest, ThumbnailGrid } from './ThumbnailGrid';
-import { invokeCount, lastInvokeArgs, mockInvokeCommand, mockInvokeError } from '../test/setup';
+import { invokeCount, lastInvokeArgs, mockInvokeCommand } from '../test/setup';
 import { makeGroup, rawFile } from '../test/factories';
 import type { PhotoGroupInfo } from '../types';
 
 const group = (id: string, overrides: Partial<PhotoGroupInfo> = {}) =>
   makeGroup(id, { status: 'RAW_ONLY', raw: rawFile(id, 'CR3', 'D:/shoot'), jpg: undefined, ...overrides });
 
-function renderGrid(groups: PhotoGroupInfo[], lumenThumbnails: boolean) {
-  return render(
-    <ThumbnailGrid
-      groups={groups}
-      selectedIndex={0}
-      onSelect={() => {}}
-      lumenThumbnails={lumenThumbnails}
-    />,
-  );
+function renderGrid(groups: PhotoGroupInfo[]) {
+  return render(<ThumbnailGrid groups={groups} selectedIndex={0} onSelect={() => {}} />);
 }
 
 const cellFor = (name: string) =>
@@ -35,27 +28,31 @@ beforeEach(() => {
   resetThumbnailLoaderForTest();
 });
 
-describe('ThumbnailGrid —— 缩略图来源', () => {
-  it('lumenThumbnails=false：只调 get_thumbnail_cmd，一次都不碰 lumen_preview_cmd', async () => {
+describe('ThumbnailGrid —— 缩略图来源（issue #192：恒走内嵌图）', () => {
+  it('只调 get_thumbnail_cmd，一次都不碰 lumen_preview_cmd', async () => {
     const groups = [group('a'), group('b'), group('c')];
     mockInvokeCommand('get_thumbnail_cmd', (args) => `thumb-${args?.filePath}`);
+    // 即使引擎「可用」（IPC 会成功），宫格也不得走真实解码：任一格调用即红。
+    mockInvokeCommand('lumen_preview_cmd', (args) => ({
+      previewPath: `${String(args?.filePath)}.preview`,
+      width: 200,
+      original: null,
+      cached: false,
+    }));
 
-    renderGrid(groups, false);
+    renderGrid(groups);
 
     await waitFor(() => expect(invokeCount('get_thumbnail_cmd')).toBe(3));
     expect(invokeCount('lumen_preview_cmd')).toBe(0);
   });
 
-  it('lumenThumbnails=false 时按 200px 宽度请求，且 JPG 优先于 RAW', async () => {
+  it('按 200px 宽度请求，且 JPG 优先于 RAW', async () => {
     mockInvokeCommand('get_thumbnail_cmd', 'thumb.jpg');
-    renderGrid(
-      [
-        group('a', {
-          jpg: { name: 'a.jpg', extension: 'jpg', path: 'D:/shoot/a.jpg', size: 1, mtime: 0 },
-        }),
-      ],
-      false,
-    );
+    renderGrid([
+      group('a', {
+        jpg: { name: 'a.jpg', extension: 'jpg', path: 'D:/shoot/a.jpg', size: 1, mtime: 0 },
+      }),
+    ]);
 
     await waitFor(() => expect(invokeCount('get_thumbnail_cmd')).toBe(1));
     expect(lastInvokeArgs('get_thumbnail_cmd')).toMatchObject({
@@ -64,132 +61,19 @@ describe('ThumbnailGrid —— 缩略图来源', () => {
     });
   });
 
-  it('lumenThumbnails=true 且渲染成功：走 lumen_preview_cmd 并直接用预览 URL', async () => {
-    mockInvokeCommand('lumen_preview_cmd', (args) => ({
-      previewPath: `${String(args?.filePath)}.preview`,
-      width: 200,
-      original: null,
-      cached: false,
-    }));
+  it('无配对 JPG 的 RAW_ONLY 组用 raw 路径取内嵌缩略图', async () => {
     mockInvokeCommand('get_thumbnail_cmd', 'thumb.jpg');
-
-    renderGrid([group('a')], true);
-
-    const cell = cellFor('a');
-    await waitFor(() => {
-      const img = within(cell).getByRole('presentation', { hidden: true });
-      expect(img).toBeInTheDocument();
-    });
-
-    expect(invokeCount('lumen_preview_cmd')).toBe(1);
-    // 引擎路径成功了就不该再走 EXIF 内嵌缩略图
-    expect(invokeCount('get_thumbnail_cmd')).toBe(0);
-    await waitFor(() => {
-      const img = cell.querySelector('img');
-      expect(img?.getAttribute('src')).toBe('asset://localhost/D:/shoot/a.CR3.preview');
-    });
-  });
-
-  it('lumenThumbnails=true 且 previewPath=null：静默回落到 get_thumbnail_cmd，不留空洞', async () => {
-    mockInvokeCommand('lumen_preview_cmd', { previewPath: null, width: 200, original: null, cached: false });
-    mockInvokeCommand('get_thumbnail_cmd', 'fallback-thumb.jpg');
-
-    renderGrid([group('a')], true);
-
-    const cell = cellFor('a');
-    await waitFor(() => {
-      const img = cell.querySelector('img');
-      expect(img?.getAttribute('src')).toBe('asset://localhost/fallback-thumb.jpg');
-    });
-
-    expect(invokeCount('lumen_preview_cmd')).toBe(1);
-    expect(invokeCount('get_thumbnail_cmd')).toBe(1);
-    // 引擎抖动不该在格子里留"加载中"
-    expect(within(cell).queryByText('加载中')).toBeNull();
-  });
-
-  it('lumenThumbnails=true 且 invoke 抛错：同样回落，不产生空洞', async () => {
-    mockInvokeError('lumen_preview_cmd', new Error('sidecar crashed'));
-    mockInvokeCommand('get_thumbnail_cmd', 'fallback-thumb.jpg');
-
-    renderGrid([group('a')], true);
-
-    const cell = cellFor('a');
-    await waitFor(() => {
-      const img = cell.querySelector('img');
-      expect(img?.getAttribute('src')).toBe('asset://localhost/fallback-thumb.jpg');
-    });
-
-    expect(invokeCount('get_thumbnail_cmd')).toBe(1);
-    expect(within(cell).queryByText('加载中')).toBeNull();
-  });
-
-  it('回落时用 jpg||raw 的 targetPath 取内嵌缩略图', async () => {
-    mockInvokeCommand('lumen_preview_cmd', { previewPath: null, width: 200, original: null, cached: false });
-    mockInvokeCommand('get_thumbnail_cmd', 'thumb.jpg');
-
-    renderGrid(
-      [
-        group('a', {
-          jpg: { name: 'a.jpg', extension: 'jpg', path: 'D:/shoot/a.jpg', size: 1, mtime: 0 },
-        }),
-      ],
-      true,
-    );
+    renderGrid([group('raw-only')]);
 
     await waitFor(() => expect(invokeCount('get_thumbnail_cmd')).toBe(1));
-    expect(lastInvokeArgs('get_thumbnail_cmd')).toMatchObject({ filePath: 'D:/shoot/a.jpg' });
+    expect(lastInvokeArgs('get_thumbnail_cmd')).toMatchObject({
+      filePath: 'D:/shoot/raw-only.CR3',
+    });
   });
 
-  it('lumenThumbnails=true 但该组没有 RAW 时，不发 lumen 请求', async () => {
-    mockInvokeCommand('lumen_preview_cmd', { previewPath: 'p.jpg', width: 200, original: null, cached: false });
+  it('多格混合时每格都有图（没有一格停在「加载中」）', async () => {
     mockInvokeCommand('get_thumbnail_cmd', 'thumb.jpg');
-
-    renderGrid(
-      [
-        group('a', {
-          raw: undefined,
-          status: 'JPG_ONLY',
-          jpg: { name: 'a.jpg', extension: 'jpg', path: 'D:/shoot/a.jpg', size: 1, mtime: 0 },
-        }),
-      ],
-      true,
-    );
-
-    await waitFor(() => expect(invokeCount('get_thumbnail_cmd')).toBe(1));
-    expect(invokeCount('lumen_preview_cmd')).toBe(0);
-  });
-
-  it('一批照片里只有部分有 RAW：只对有 RAW 的组发 lumen 请求', async () => {
-    mockInvokeCommand('lumen_preview_cmd', { previewPath: 'p.jpg', width: 200, original: null, cached: false });
-    mockInvokeCommand('get_thumbnail_cmd', 'thumb.jpg');
-
-    renderGrid(
-      [
-        group('raw-one'),
-        group('jpg-one', {
-          raw: undefined,
-          status: 'JPG_ONLY',
-          jpg: { name: 'jpg-one.jpg', extension: 'jpg', path: 'D:/shoot/jpg-one.jpg', size: 1, mtime: 0 },
-        }),
-        group('raw-two'),
-      ],
-      true,
-    );
-
-    await waitFor(() => expect(invokeCount('lumen_preview_cmd')).toBe(2));
-    expect(invokeCount('get_thumbnail_cmd')).toBe(1); // 只有 jpg-one
-  });
-
-  it('三种结果混合时每格都有图（没有一格停在"加载中"）', async () => {
-    mockInvokeCommand('lumen_preview_cmd', (args) =>
-      String(args?.filePath).includes('null') || String(args?.filePath).includes('raw-b')
-        ? { previewPath: null, width: 200, original: null, cached: false }
-        : { previewPath: `${String(args?.filePath)}.preview`, width: 200, original: null, cached: false },
-    );
-    mockInvokeCommand('get_thumbnail_cmd', 'thumb.jpg');
-
-    renderGrid([group('raw-a'), group('raw-b'), group('raw-c')], true);
+    renderGrid([group('raw-a'), group('raw-b'), group('raw-c')]);
 
     for (const id of ['raw-a', 'raw-b', 'raw-c']) {
       const cell = cellFor(id);
@@ -213,7 +97,6 @@ describe('ThumbnailGrid —— 无障碍与选择', () => {
           tone: { exposure: 1, highlights: 0, shadows: 0, temperature: 0, tint: 0, contrast: 0 },
         }),
       ],
-      false,
     );
 
     await waitFor(() => expect(screen.getByRole('option')).toBeInTheDocument());
@@ -229,7 +112,7 @@ describe('ThumbnailGrid —— 无障碍与选择', () => {
 
   it('listbox 的 aria-activedescendant 指向选中项', async () => {
     mockInvokeCommand('get_thumbnail_cmd', 'thumb.jpg');
-    renderGrid([group('a'), group('b')], false);
+    renderGrid([group('a'), group('b')]);
 
     await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(2));
     const list = screen.getByRole('listbox');
@@ -237,13 +120,13 @@ describe('ThumbnailGrid —— 无障碍与选择', () => {
   });
 
   it('空列表显示空态而不是空白', () => {
-    renderGrid([], false);
+    renderGrid([]);
     expect(screen.getByText('当前筛选下没有照片')).toBeInTheDocument();
   });
 
   it('L-06：每个 option 带 aria-setsize / aria-posinset（虚拟化列表也能报出总数与位置）', async () => {
     mockInvokeCommand('get_thumbnail_cmd', 'thumb.jpg');
-    renderGrid([group('a'), group('b'), group('c')], false);
+    renderGrid([group('a'), group('b'), group('c')]);
 
     await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(3));
     const cells = screen.getAllByRole('option');
@@ -288,7 +171,7 @@ describe('ThumbnailGrid —— 无障碍与选择', () => {
 describe('ThumbnailGrid —— 色标色点（FR-02）', () => {
   it('有色标的格子渲染色点，并把色名写进无障碍标签', async () => {
     mockInvokeCommand('get_thumbnail_cmd', 'thumb.jpg');
-    renderGrid([group('a', { label: 'Red' })], false);
+    renderGrid([group('a', { label: 'Red' })]);
 
     const cell = await screen.findByRole('option', { name: /色标红/ });
     const dot = within(cell).getByRole('img', { name: '色标：红' });
@@ -297,7 +180,7 @@ describe('ThumbnailGrid —— 色标色点（FR-02）', () => {
 
   it('无色标的格子不渲染色点', async () => {
     mockInvokeCommand('get_thumbnail_cmd', 'thumb.jpg');
-    renderGrid([group('b', { label: '' })], false);
+    renderGrid([group('b', { label: '' })]);
 
     const cell = await screen.findByRole('option', { name: /b/ });
     expect(within(cell).queryByRole('img', { name: /^色标：/ })).toBeNull();
@@ -305,7 +188,7 @@ describe('ThumbnailGrid —— 色标色点（FR-02）', () => {
 
   it('色点与旗标角标并存（红标 + 淘汰是两个维度）', async () => {
     mockInvokeCommand('get_thumbnail_cmd', 'thumb.jpg');
-    renderGrid([group('c', { label: 'Red', flag: 'reject' })], false);
+    renderGrid([group('c', { label: 'Red', flag: 'reject' })]);
 
     const cell = await screen.findByRole('option', { name: /已淘汰/ });
     expect(within(cell).getByRole('img', { name: '已标记淘汰' })).toBeTruthy();

@@ -25,7 +25,6 @@ function renderGrid(enabled: boolean) {
       onSelect={() => {}}
       selectedIds={enabled ? new Set(['a']) : undefined}
       onSelectionChange={enabled ? () => {} : undefined}
-      lumenThumbnails={false}
     />,
   );
 }

@@ -10,7 +10,6 @@ use fast_image_resize::images::Image as FirImage;
 use fast_image_resize::{PixelType, Resizer};
 use image::{DynamicImage, GenericImageView, ImageFormat, RgbImage};
 use std::collections::HashMap;
-use std::fs::File;
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -44,32 +43,35 @@ pub fn apply_orientation(img: DynamicImage, orientation: u32) -> DynamicImage {
     }
 }
 
+/// 取相机内嵌缩略图（IFD1）的原始 JPEG 字节。
+///
+/// 偏移量语义（issue #193 墓碑）：`JPEGInterchangeFormat` 是**相对 TIFF 头**的
+/// 偏移，不是相对文件起点。TIFF 容器（ARW/NEF/CR2）的 TIFF 头就在文件 0 处，
+/// 两种读法碰巧等价；JPEG 容器里 TIFF 头在 APP1 段内（本机样本 `Exif\0\0`
+/// 之后，即 12），从文件起点 seek 会整体错位 —— 解出「长度对、内容错」的字节，
+/// 调用方 `image::load_from_memory` 必然失败，静默退回整图解码（实测 2.68s/张）。
+///
+/// 所以直接在 `exif.buf()`（kamadak-exif 读出的 TIFF 数据）上切片：两种容器
+/// 同一套算法，且省掉二次开文件。`checked_add` + `get` 同时挡住不可信 length
+/// （旧实现按文件里写的 length 直接 `vec![0u8; length]` 分配）。
+pub fn embedded_thumbnail_bytes(exif: &exif::Exif) -> Option<&[u8]> {
+    // Some cameras store JPEG thumbnail in IFD1
+    let offset = exif
+        .get_field(exif::Tag::JPEGInterchangeFormat, exif::In::THUMBNAIL)?
+        .value
+        .get_uint(0)? as usize;
+    let length = exif
+        .get_field(exif::Tag::JPEGInterchangeFormatLength, exif::In::THUMBNAIL)?
+        .value
+        .get_uint(0)? as usize;
+    let end = offset.checked_add(length)?;
+    exif.buf().get(offset..end)
+}
+
 /// Try to extract embedded thumbnail from EXIF
 pub fn try_extract_exif_thumbnail(file_path: &Path) -> Option<Vec<u8>> {
     let exif = crate::scanner::open_exif_reader(file_path)?;
-
-    // Some cameras store JPEG thumbnail in IFD1
-    if let Some(offset_field) =
-        exif.get_field(exif::Tag::JPEGInterchangeFormat, exif::In::THUMBNAIL)
-    {
-        if let Some(length_field) =
-            exif.get_field(exif::Tag::JPEGInterchangeFormatLength, exif::In::THUMBNAIL)
-        {
-            if let (Some(offset), Some(length)) = (
-                offset_field.value.get_uint(0),
-                length_field.value.get_uint(0),
-            ) {
-                use std::io::{Read, Seek, SeekFrom};
-                let mut file = File::open(file_path).ok()?;
-                file.seek(SeekFrom::Start(offset as u64)).ok()?;
-                let mut thumb_buf = vec![0u8; length as usize];
-                if file.read_exact(&mut thumb_buf).is_ok() {
-                    return Some(thumb_buf);
-                }
-            }
-        }
-    }
-    None
+    Some(embedded_thumbnail_bytes(&exif)?.to_vec())
 }
 
 /// Fast downsample using fast_image_resize SIMD
@@ -836,5 +838,142 @@ mod tests {
             "thumb-v3 必须与 v2 秒级旧算法不同（有意失效，不得静默复用旧缓存）"
         );
         cleanup_temp(&src);
+    }
+}
+
+/* -------------------- issue #193：内嵌缩略图偏移按 TIFF 头，不按文件起点 -------------------- */
+
+#[cfg(test)]
+mod embedded_thumbnail_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+
+    /// 合成最小 JPEG：SOI + APP1(`Exif\0\0` + TIFF) + EOI。
+    /// TIFF 布局：header 8B → IFD0@8（0 条 + next）→ IFD1@14（2 条 + next）→ blob@44。
+    /// TIFF 头在文件 **12** 处（`Exif\0\0` 之后），与真机 JPEG 同构。
+    fn synthetic_jpeg_with_ifd1_thumb(blob: &[u8], len_override: Option<u32>) -> Vec<u8> {
+        const BLOB_OFF: usize = 44;
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(b"II\x2a\x00");
+        tiff.extend_from_slice(&8u32.to_le_bytes());
+        // IFD0 @8：0 条，next 指向 IFD1
+        tiff.extend_from_slice(&0u16.to_le_bytes());
+        tiff.extend_from_slice(&14u32.to_le_bytes());
+        // IFD1 @14：JPEGInterchangeFormat / JPEGInterchangeFormatLength
+        tiff.extend_from_slice(&2u16.to_le_bytes());
+        tiff.extend_from_slice(&0x0201u16.to_le_bytes());
+        tiff.extend_from_slice(&4u16.to_le_bytes());
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&(BLOB_OFF as u32).to_le_bytes());
+        tiff.extend_from_slice(&0x0202u16.to_le_bytes());
+        tiff.extend_from_slice(&4u16.to_le_bytes());
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&len_override.unwrap_or(blob.len() as u32).to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(tiff.len(), BLOB_OFF, "夹具布局漂移：blob 必须紧接 IFD1");
+        tiff.extend_from_slice(blob);
+
+        let mut out = Vec::new();
+        out.extend_from_slice(&[0xFF, 0xD8]); // SOI
+        out.extend_from_slice(&[0xFF, 0xE1]); // APP1
+        let seg_len = (2 + 6 + tiff.len()) as u16;
+        out.extend_from_slice(&seg_len.to_be_bytes());
+        out.extend_from_slice(b"Exif\x00\x00");
+        out.extend_from_slice(&tiff);
+        out.extend_from_slice(&[0xFF, 0xD9]); // EOI
+        out
+    }
+
+    fn write_temp(tag: &str, bytes: &[u8]) -> PathBuf {
+        let seq = SEQ.fetch_add(1, Ordering::SeqCst);
+        let dir =
+            std::env::temp_dir().join(format!("gfx_emb193_{}_{}_{}", std::process::id(), tag, seq));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join(format!("{}.jpg", tag));
+        std::fs::write(&path, bytes).expect("write fixture");
+        path
+    }
+
+    fn cleanup(path: &Path) {
+        let _ = std::fs::remove_file(path);
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
+
+    /// issue #193 墓碑：取出的字节必须与写入的内嵌 blob **逐字节相同**。
+    /// 变异：把切片基准改回「文件起点 offset」（`&bytes[offset..]`）必须红 ——
+    /// 那样会错开 `Exif\0\0` 的 12 字节，返回的是 blob 中段。
+    #[test]
+    fn thumb_bytes_use_tiff_base_not_file_offset() {
+        let blob: Vec<u8> = b"\xff\xd8IFD1-EMBEDDED-THUMBNAIL\xff\xd9".to_vec();
+        let path = write_temp("ok", &synthetic_jpeg_with_ifd1_thumb(&blob, None));
+
+        let got = try_extract_exif_thumbnail(&path).expect("合成夹具必须能取到内嵌缩略图");
+        assert_eq!(got, blob, "内嵌字节必须原样返回（偏移相对 TIFF 头）");
+
+        cleanup(&path);
+    }
+
+    /// 越界长度不得 panic / 不得分配：返回 None，交给整图解码兜底。
+    #[test]
+    fn oversized_length_returns_none() {
+        let blob = b"\xff\xd8tiny\xff\xd9";
+        let path = write_temp(
+            "overflow",
+            &synthetic_jpeg_with_ifd1_thumb(blob, Some(64 * 1024 * 1024)),
+        );
+
+        assert_eq!(
+            try_extract_exif_thumbnail(&path),
+            None,
+            "length 超出 TIFF 数据范围必须返回 None"
+        );
+
+        cleanup(&path);
+    }
+
+    /// 真机冒烟：`GALLERY_REAL_RAW_DIR=<含 ARW+JPG 的目录>` 后
+    /// `cargo test --lib real_embedded_thumbnail -- --ignored --nocapture`。
+    /// 断言 JPG 与 ARW 都能取到可解码的内嵌图（#193 修复前 JPG 必红）。
+    #[test]
+    #[ignore = "需要真实素材：设置 GALLERY_REAL_RAW_DIR 后加 --ignored 运行"]
+    fn real_embedded_thumbnail_decodes_for_jpg_and_raw() {
+        let Ok(dir) = std::env::var("GALLERY_REAL_RAW_DIR") else {
+            println!("[real_embedded] 未设置 GALLERY_REAL_RAW_DIR，跳过");
+            return;
+        };
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&dir).expect("read real dir").flatten() {
+            let path = entry.path();
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if ext != "jpg" && ext != "arw" {
+                continue;
+            }
+            let t0 = std::time::Instant::now();
+            let bytes = try_extract_exif_thumbnail(&path)
+                .unwrap_or_else(|| panic!("内嵌缩略图缺失: {}", path.display()));
+            let img = image::load_from_memory(&bytes)
+                .unwrap_or_else(|e| panic!("内嵌缩略图解码失败 {}: {e}", path.display()));
+            println!(
+                "[real_embedded] {} ext={} bytes={} dims={:?} cost={:?}",
+                path.file_name().unwrap().to_string_lossy(),
+                ext,
+                bytes.len(),
+                img.dimensions(),
+                t0.elapsed()
+            );
+            checked += 1;
+            if checked >= 4 {
+                break;
+            }
+        }
+        assert!(checked > 0, "GALLERY_REAL_RAW_DIR 下没找到 jpg/arw");
     }
 }

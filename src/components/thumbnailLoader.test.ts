@@ -89,39 +89,6 @@ describe('thumbnailLoader —— 去重与缓存（issue #116 承接 N-09）', (
     expect(invokeCount('get_thumbnail_cmd')).toBe(2);
   });
 
-  it('lumenPreview 成功时返回预览路径且命中缓存', async () => {
-    mockInvokeCommand('lumen_preview_cmd', {
-      previewPath: 'C:/preview/a.jpg',
-      width: 200,
-      original: null,
-      cached: false,
-    });
-    const loader = getSharedThumbnailLoader();
-
-    await expect(loader.lumenPreview('D:/shoot/a.CR3', 200)).resolves.toBe('C:/preview/a.jpg');
-    await expect(loader.lumenPreview('D:/shoot/a.CR3', 200)).resolves.toBe('C:/preview/a.jpg');
-    expect(invokeCount('lumen_preview_cmd')).toBe(1);
-  });
-
-  it('lumenPreview 无预览路径不缓存：下一次重新请求', async () => {
-    mockInvokeCommand('lumen_preview_cmd', { previewPath: null, width: 200, original: null, cached: false });
-    const loader = getSharedThumbnailLoader();
-
-    await expect(loader.lumenPreview('D:/shoot/none.CR3', 200)).rejects.toThrow(
-      'lumen preview unavailable',
-    );
-    expect(invokeCount('lumen_preview_cmd')).toBe(1);
-
-    mockInvokeCommand('lumen_preview_cmd', {
-      previewPath: 'C:/preview/none.jpg',
-      width: 200,
-      original: null,
-      cached: false,
-    });
-    await expect(loader.lumenPreview('D:/shoot/none.CR3', 200)).resolves.toBe('C:/preview/none.jpg');
-    expect(invokeCount('lumen_preview_cmd')).toBe(2);
-  });
-
   it('reset 清掉模块级缓存：同一请求重新发 IPC', async () => {
     mockInvokeCommand('get_thumbnail_cmd', 'thumb.jpg');
     const first = getSharedThumbnailLoader();
