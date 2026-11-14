@@ -37,12 +37,21 @@ node e2e/run-inapp.mjs --scenario=render-export --timeout=600000
 
 # detail-1to1 必须用**真实 ARW**：夹具里的 RAW 是 JPEG 改后缀，photo.export
 # 解不出图，1:1 永远走不到 —— 用夹具跑出来的「通过」毫无意义。
-GALLERY_REAL_RAW_DIR='C:/.../gallery-realraw-20261018' npm run e2e:detail
-node e2e/run-inapp.mjs --scenario=detail-1to1 --raw-dir='C:/.../gallery-realraw-20261018'
+# 不带参数时自动探测 ~/Pictures/Camera Roll；也可显式覆盖：
+npm run e2e:detail
+GALLERY_REAL_RAW_DIR='D:/photos/raw' npm run e2e:detail
+node e2e/run-inapp.mjs --scenario=detail-1to1 --raw-dir='D:/photos/raw'
 ```
 
-`GALLERY_REAL_RAW_DIR` 指向的目录要含 `rawonly/`（≥2 张真实 RAW）：
-`run-inapp.mjs` 取前两张的 baseName，清空细节缓存后交给场景，
+自动探测（`e2e/lib/real-raw.mjs`）按文件头 magic（ARW `II*\0` / `MM\0*`、
+CR3 `ftypcrx`、RAF `FUJIFILM`）+ 1 MiB 体积门槛排除 JPEG 改后缀的假 RAW；
+从 `os.homedir()/Pictures/Camera Roll` 起逐棵深度优先找 ≥2 张，选中的两张
+**硬链接**到 `e2e/.tmp/realraw`（跨卷时回落复制），所以 `VITE_E2E_RAW`
+永远只含这两张，扫描时是 RAW-only 组。`node e2e/lib/real-raw.mjs --probe`
+只打印会自动挑中的来源与文件名，不建目录，便于人工核对。
+
+显式目录仍兼容旧布局：先看 `<dir>/rawonly/`，没有再看目录本身，仍不足
+再递归；`run-inapp.mjs` 取前两张的 baseName，清空细节缓存后交给场景，
 断言首次 ≤10s、`scale` 真的是 `naturalWidth / offsetWidth`、命中 ≤2s、
 取消后仍停在预览且再按 Z 能重新认领。
 
@@ -91,8 +100,9 @@ Tauri 的 WebView2 不把 DOM 暴露给 Windows UI Automation，所以界面断�
 3. `e2e/run-inapp.mjs` 读日志断言 UI 部分，并**直接读文件系统**断言落盘与清单
    （浏览器里读不到目录，账实对账必须在外侧做）。
 
-`e2e/run.mjs` + `suites/01-08` 是旧的 Playwright 路线，本机只会白等到超时，
-保留只为在 CDP 正常的机器上仍可用。
+`e2e/run.mjs` + `suites/01-08` 是旧的 Playwright 路线，本机只会白等到超时。
+**DEPRECATED**：保留只为在 CDP 正常的机器上仍可用，不再新增用例、不纳入
+`npm run e2e` 或发版闸门；新用例一律走 `run-inapp.mjs`。
 
 ## `ui-contract` 覆盖什么（issue #53 · issue #62 改写）
 
@@ -114,10 +124,17 @@ Tauri 的 WebView2 不把 DOM 暴露给 Windows UI Automation，所以界面断�
   参数组必须 visible）；身份/参数组 `overflow-x=hidden`（漆面不越盒，
   computed style 补齐——纯几何量不出「裁掉」与「画过去」的区别）。
 - **#105 格头控件**：`WIDE` 夹具（107 张 JPG，`VITE_E2E_WIDE`）扫出
-  「宫格列表 (107) · 已选 1」最宽左状态后，格头右侧 5 个控件
-  （全选/清除/搜索/3列/4列）单行（top 极差 ≤1px、高 ≤32px、各自
+  「宫格列表 (107) · 已选 1」最宽左状态后，格头右侧 **7 个控件**
+  （全选/清除/搜索/3列/4列/未修/已修）单行（top 极差 ≤1px、高 ≤32px、各自
   `scrollWidth ≤ clientWidth`）、控件组总宽 ≤370px（390 侧栏 − px-2.5×2）、
-  不越格头内右缘、左状态不压控件组、格头行与 390px 侧栏都无横向溢出。
+  不越格头内右缘、左状态不压控件组、格头行与 390px 侧栏都无横向溢出；
+  七个控件中心逐个 `elementFromPoint` 必须命中自身（#200 新加的两个按钮
+  不能被相邻控件压住）。
+- **#200 已修徽章与筛选**：夹具 `IMG_010` 旁空 `.acr`（文件旁证）、`IMG_011`
+  的 sidecar 写 `crs:HasSettings="True"`（内容判据），两条判定路径都必须在
+  格头 `aria-label` 与单图预览的 `role="img"` 徽章上可见；点「已修」后
+  「宫格列表」为 2、点「未修」为 10，`aria-pressed` 与激活态一致，再点一次
+  取消必须回到 12，两个按钮中心命中自身。
 
 - **常驻与占位**（#62 替代 #47 的「静息整条移出视口」）：`[data-status-bar]` 必须是
   文档流元素，`top >= [data-viewport-photo] 的 bottom - 1`，`opacity >= 0.95`，
@@ -146,26 +163,41 @@ Tauri 的 WebView2 不把 DOM 暴露给 Windows UI Automation，所以界面断�
 
 issue #106 的提权两场景（已开 PS 收不到 RAW / 新起 PS 未提权）要管理员真机 + UAC + 进程 IL 实测，应用内 e2e 够不到，仍留人工回签（issue 保持 OPEN）。
 
+## 覆盖边界（刻意分层，不是漏测）
+
+真窗口一轮 2–4 分钟，只留给「jsdom 证不了」的契约。以下三条链路**不由本目录
+重复覆盖**，改动时看对应档位：
+
+| 能力 | 归属 | 为什么不进真窗口 |
+|---|---|---|
+| 边框水印 | `src-tauri/src/watermark.rs` 单测 + `scripts/check-watermark.mjs`（预设名/尺寸四份一致）+ 导出 UX 用例 | 像素级字体渲染与 24MP 耗时用例放 Rust 更快、更稳；真窗口不重复像素级水印断言 |
+| 镜头快捷预设 | `src/utils/lensPresets.ts` 纯逻辑用例 + `src/hooks/useLensPresets.test.tsx` + `scripts/check-lens-parity.mjs`（前后端出厂表一致） | 逻辑与 IO 已分离，jsdom 能覆盖增删改与恢复默认；真窗口重复一遍只会增加启动成本 |
+| 选片集（Album） | `src/utils/albumGroups.test.ts` + Rust album 单测（含 `.acr` / 配对 JPG 口径） | 数据层与命令层已锁死；真窗口只在扫描/刷新路径上顺带验，不为它单开场景 |
+
+新增真窗口场景的门槛：**只有真浏览器/真磁盘/真 IPC 才能证伪**。纯状态机、
+纯字符串、纯数据映射留在 vitest 或 Rust。
+
 ## 目录
 
 ```
 e2e/
   run-inapp.mjs           应用内驱动编排器（真窗口用例走这条）
-  run.mjs                 旧 Playwright 编排器（本机不可用）
+  run.mjs                 旧 Playwright 编排器（DEPRECATED，本机不可用）
   lib/
     app.mjs               应用生命周期：启停 / 端口回收 / 日志等待
     harness.mjs           CDP 连接、弹窗清理、底栏读取、断言与报告（旧路线用）
+    real-raw.mjs          真实 RAW 自动探测 + detail 夹具准备（issue #212）
     close-app.ps1         CloseMainWindow（触发 onCloseRequested）
   fixtures/
     generate.mjs          确定性素材 + EXPECTED 期望态表
-  suites/                 旧 Playwright 套件（01-08）
-  .tmp/                   运行时产物（素材 / 日志），已 gitignore
+  suites/                 旧 Playwright 套件（01-08，DEPRECATED）
+  .tmp/                   运行时产物（素材 / 日志 / realraw），已 gitignore
 ```
 
 ## 期望值只有一份
 
-`fixtures/generate.mjs` 导出 `EXPECTED` 表（每张素材的星级/旗标真值），
-套件从它**推导**断言，而不是在校验里另抄一份数字。改素材只需改这一处。
+`fixtures/generate.mjs` 导出 `EXPECTED` 表（每张素材的星级/旗标/是否已修
+真值），套件从它**推导**断言，而不是在校验里另抄一份数字。改素材只需改这一处。
 
 ## 素材说明
 
@@ -173,8 +205,12 @@ e2e/
   「取内嵌预览 → 否则按宽度缩放」，用 64×48 的迷你图会让缩放路径失去意义。
 - WIDE：107 张同名规律 JPG（#105 格头夹具，只有 JPG 无 sidecar），只在
   `ui-contract` 场景的几何断言里扫描；其余场景不读它，素材体积可忽略。
-- XMP：7 个真 sidecar，覆盖 pick / reject（`Rating=-1` 与 `Label=Red` 两种约定）/
-  普通星级 / 带 tone / `Label=None` 边界。
+- XMP：8 个真 sidecar，覆盖 pick / reject（`Rating=-1` 与 `Label=Red` 两种约定）/
+  普通星级 / 带 tone / `Label=None` 边界 / `crs:HasSettings="True"`（#200
+  内容判据，`IMG_011`）。
+- ACR：`IMG_010.acr` 空文件，覆盖 #200 的第二条判定路径（图片旁同名
+  `.acr` 即视为已进 ACR/PS，不看内容）。两条路径各锁一张，任何一条被改坏
+  都会让 `ui-contract` 的 R1/R2 变红。
 - RAW：**合成**（JPEG 字节 + `.ARW` 扩展名）。e2e 关心的是**配对与占位规则**
   （按扩展名/词干分组、C2 的 RAW-only 无预览），真解码 NEF 需要 LUMEN sidecar，
   那是另一个 opt-in 套件，不在本目录。
