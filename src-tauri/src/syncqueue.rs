@@ -45,6 +45,8 @@ pub struct Intent {
     pub label: String,
     /// 是否写 XMP。`false` 时只落本地旗标存储。
     pub sync_xmp: bool,
+    /// 配对 JPG 路径（issue #206）：写游标判 `.acr` 时两侧都看。`None` = 只看主路径。
+    pub jpg_path: Option<PathBuf>,
 }
 
 /// 真正的落盘动作。抽成 trait 是为了让合并逻辑能在不碰磁盘的前提下被测到。
@@ -260,6 +262,7 @@ pub fn replay_pending(db: &Database, coalescer: &Coalescer) -> Result<usize, Str
             flag: row.flag,
             label: row.label,
             sync_xmp: true,
+            jpg_path: row.jpg_path.map(PathBuf::from),
         };
         // 回放逐条立即写：没有「后续改动」需要等，别在启动时白等防抖窗口。
         match coalescer.submit(intent, false) {
@@ -328,6 +331,7 @@ mod tests {
             flag: "none".to_string(),
             label: String::new(),
             sync_xmp: true,
+            jpg_path: None,
         }
     }
 
@@ -595,7 +599,7 @@ mod tests {
         let (db, db_path) = temp_db("replay_missing");
         let photo = std::env::temp_dir().join(format!("gc_sq_missing_{}.JPG", std::process::id()));
         let _ = std::fs::remove_file(xmp::get_xmp_path(&photo));
-        db.enqueue_pending(&photo.to_string_lossy(), 5, "pick", "", 0)
+        db.enqueue_pending(&photo.to_string_lossy(), 5, "pick", "", 0, None)
             .unwrap();
 
         let sink = Arc::new(CountingSink::ok());
@@ -607,6 +611,37 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
     }
 
+    /// issue #206：回放必须把配对 JPG 路径带进 Intent，写游标判 `.acr` 时两侧都看。
+    #[test]
+    fn replay_carries_jpg_path_into_intent() {
+        let (db, db_path) = temp_db("replay_jpg");
+        let photo = std::env::temp_dir().join(format!("gc_sq_jpg_{}.ARW", std::process::id()));
+        let jpg = std::env::temp_dir().join(format!("gc_sq_jpg_{}.jpg", std::process::id()));
+        let _ = std::fs::remove_file(xmp::get_xmp_path(&photo));
+        db.enqueue_pending(
+            &photo.to_string_lossy(),
+            5,
+            "pick",
+            "",
+            0,
+            Some(&jpg.to_string_lossy()),
+        )
+        .unwrap();
+
+        let sink = Arc::new(CountingSink::ok());
+        let coalescer = Coalescer::with_debounce(sink.clone(), Duration::ZERO);
+        let written = replay_pending(&db, &coalescer).unwrap();
+
+        assert_eq!(written, 1);
+        let intent = sink.last().expect("有落盘");
+        assert_eq!(
+            intent.jpg_path,
+            Some(PathBuf::from(&jpg)),
+            "回放必须把配对 JPG 路径带进 Intent"
+        );
+        let _ = std::fs::remove_file(&db_path);
+    }
+
     /// 变异靶点（issue #139）：updated_at = -1 的边界。正确哨兵 -1：
     /// `-1 > -1` 为假 → 回放写入；变异成 0：`0 > -1` 为真 → 误判外部修改而跳过。
     /// 把 db.rs 的 -1 改 0，本用例必红（以及 db.rs 的哨兵锁定用例）。
@@ -615,7 +650,7 @@ mod tests {
         let (db, db_path) = temp_db("replay_boundary");
         let photo = std::env::temp_dir().join(format!("gc_sq_boundary_{}.JPG", std::process::id()));
         let _ = std::fs::remove_file(xmp::get_xmp_path(&photo));
-        db.enqueue_pending(&photo.to_string_lossy(), 5, "pick", "", -1)
+        db.enqueue_pending(&photo.to_string_lossy(), 5, "pick", "", -1, None)
             .unwrap();
 
         let sink = Arc::new(CountingSink::ok());
@@ -637,7 +672,7 @@ mod tests {
         let photo = std::env::temp_dir().join(format!("gc_sq_skip_{}.JPG", std::process::id()));
         let sidecar = xmp::get_xmp_path(&photo);
         std::fs::write(&sidecar, b"<x:xmpmeta/>").expect("建侧边栏");
-        db.enqueue_pending(&photo.to_string_lossy(), 5, "pick", "", 0)
+        db.enqueue_pending(&photo.to_string_lossy(), 5, "pick", "", 0, None)
             .unwrap();
 
         let sink = Arc::new(CountingSink::ok());

@@ -86,6 +86,7 @@ export const api = {
     syncXmp: boolean = true,
     coalesce: boolean = true,
     label?: string,
+    jpgPath?: string,
   ): Promise<boolean> => {
     return await invoke<boolean>('update_rating_flag_cmd', {
       filePath,
@@ -94,6 +95,7 @@ export const api = {
       label,
       syncXmp,
       coalesce,
+      jpgPath,
     });
   },
 

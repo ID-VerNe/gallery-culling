@@ -119,6 +119,7 @@ export function useRatingFlagSync(opts: {
           {
             id: group.id,
             path,
+            jpgPath: group.jpg?.path,
             before: { rating: group.rating, flag: group.flag, label: group.label },
             after,
           },
@@ -171,6 +172,7 @@ export function useRatingFlagSync(opts: {
           true,
           true,
           targetGroup.label,
+          targetGroup.jpg?.path,
         );
         markSynced(targetGroup.id);
       } catch (err) {
@@ -205,6 +207,7 @@ export function useRatingFlagSync(opts: {
           true,
           true,
           targetGroup.label,
+          targetGroup.jpg?.path,
         );
         markSynced(targetGroup.id);
       } catch (err) {
@@ -244,6 +247,7 @@ export function useRatingFlagSync(opts: {
           true,
           true,
           label,
+          targetGroup.jpg?.path,
         );
         markSynced(targetGroup.id);
       } catch (err) {
@@ -299,6 +303,7 @@ export function useRatingFlagSync(opts: {
           true,
           false,
           group.label,
+          group.jpg?.path,
         );
         markSynced(group.id);
         toast.success('已重新同步到 XMP 侧边栏。');
@@ -342,6 +347,7 @@ export function useRatingFlagSync(opts: {
         true,
         true,
         targetGroup.label,
+        targetGroup.jpg?.path,
       );
       markSynced(targetGroup.id);
     } catch (err) {
@@ -384,6 +390,7 @@ export function useRatingFlagSync(opts: {
             true,
             false,
             state.label,
+            item.jpgPath,
           );
           markSynced(item.id);
         } catch (err) {

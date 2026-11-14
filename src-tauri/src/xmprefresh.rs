@@ -853,7 +853,7 @@ mod tests {
         probe.file("C:/p/a.ARW", 2000, 5, false, "");
         db.upsert_xmp_cursor(&cursor("C:/p/a.xmp", 1000, 3, "none", ""))
             .unwrap();
-        db.enqueue_pending("C:/p/a.ARW", 4, "pick", "", 1500)
+        db.enqueue_pending("C:/p/a.ARW", 4, "pick", "", 1500, None)
             .unwrap();
 
         let report = refresh(&db, &probe, targets(&["C:/p/a.ARW"]));
@@ -888,7 +888,7 @@ mod tests {
         probe.file("C:/raw/a.ARW", 2000, 5, false, "");
         db.upsert_xmp_cursor(&cursor("C:/raw/a.xmp", 1000, 3, "none", ""))
             .unwrap();
-        db.enqueue_pending("C:/raw/a.ARW", 4, "pick", "", 1500)
+        db.enqueue_pending("C:/raw/a.ARW", 4, "pick", "", 1500, None)
             .unwrap();
 
         let report = refresh(
@@ -924,7 +924,7 @@ mod tests {
         probe.file("C:/p/a.ARW", 2000, 4, false, "");
         db.upsert_xmp_cursor(&cursor("C:/p/a.xmp", 1000, 3, "none", ""))
             .unwrap();
-        db.enqueue_pending("C:/p/a.ARW", 4, "none", "", 1500)
+        db.enqueue_pending("C:/p/a.ARW", 4, "none", "", 1500, None)
             .unwrap();
 
         let report = refresh(&db, &probe, targets(&["C:/p/a.ARW"]));
@@ -1357,7 +1357,7 @@ mod tests {
         probe.file_retouched("C:/p/a.ARW", 2000, 3, false, "", true);
         db.upsert_xmp_cursor(&cursor("C:/p/a.xmp", 1000, 1, "none", ""))
             .unwrap();
-        db.enqueue_pending("C:/p/a.ARW", 5, "pick", "Blue", 1500)
+        db.enqueue_pending("C:/p/a.ARW", 5, "pick", "Blue", 1500, None)
             .unwrap();
 
         let report = refresh(&db, &probe, targets(&["C:/p/a.ARW"]));
