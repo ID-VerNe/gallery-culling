@@ -1,11 +1,11 @@
 {
-  "version": "v2.0.14",
-  "notes": "v2.0.14\n\n- 新增「已修」标记：进过 Photoshop / Camera Raw 精修的照片，宫格与单图视图会显示琥珀色「已修」徽章和卡片描边，一眼分清哪些修过、哪些没修。判据是 sidecar 里的 Adobe 设置记录或同名 `.acr` 文件；应用内自己的调色不会被误标。\n- 支持按精修状态筛选：搜索框输入 `retouched:yes` / `retouched:no`，或用工具栏的「只看已修 / 只看未修」快捷入口。\n- 改完切回应用当场亮起：在 PS 里存盘后回到应用，标记随 XMP 增量刷新立即更新，不用重开文件夹。\n- 修复「侧边栏被外部删除」的提示从不出现：前端读 camelCase、后端按 snake_case 序列化的契约错位已补齐；刷新时传入的配对 JPG 路径也不再被静默丢弃。\n- 统一「已修」判据：`RAW/` 与 `JPG/` 分目录、`.acr` 落在 JPG 旁时，扫描目录 / 打开选片集 / XMP 冲突裁决三条入口结果一致，裁决之后徽章不会莫名消失。\n- 内部：判据收敛为一份实现，补了真序列化 / 反序列化契约用例与分目录场景用例；门禁 13/13、CI 等价复跑通过。\n\n---\n\n下载附件 `gallery-culling_2.0.14_x64-setup.exe` 直接安装覆盖即可，无需卸载旧版。首次使用 LUMEN 相关功能时会自动下载引擎，请保持网络可用。",
-  "pub_date": "2026-11-12T13:32:34.447Z",
+  "version": "v2.0.15",
+  "notes": "# v2.0.15\n\n## 本次更新\n\n- 修复「在应用里调好的曝光 / 对比度 / 高光 / 阴影，用 Photoshop Camera Raw 打开却没有变化」：ACR 只读取第一个设置块，而应用此前总是另起一块，调整值被整块忽略。现在会把四个相对参数合并进 ACR 的设置块，Basic 面板里打开即是应用里的样子；没有 ACR 块的纯应用文档保持字节不变。\n- 应用里的色温 / 色调调整改存到独立字段，不再与 ACR 的绝对色温 / 色调互相覆盖：在 ACR 里改完存盘再回到应用，应用侧的相对调整仍然保留。\n- 读取口径统一：文档带 ACR 设置块时不再把 `crs:Tint` 当作相对值；应用自己的值优先，旧版本写入的 `<crs:Tint>` 继续兼容。\n\n---\n\n下载附件 `gallery-culling_2.0.15_x64-setup.exe` 直接安装覆盖即可，无需卸载旧版。首次使用 LUMEN 相关功能时会自动下载引擎，请保持网络可用。",
+  "pub_date": "2026-11-14T07:42:15.134Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNGdpUHpjeVFjbkJRMjVsUVJDdHNaTlJoQkVTdENtdUlXMWExeFZWSGhsNnJUeUVXeXF0ZThDcWxlNFhJUXN4UlNQU1g0bnByVnNLejdKekpxUHJNb0FrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDkwMzUzCWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC4xNF94NjQtc2V0dXAuZXhlCXZlcnNpb246Mi4wLjE0CjZhd3hpYndpbWtSMXdwcGVHVzhsaFZHQlFheW1teE1XNXJYajNvdUg5Zkl4eVJ2ajFqWnlKM0sxNS9IRTdiRWdmcThETE8xZ0lQOTgrUklRb2t2RUJnPT0K",
-      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.14/gallery-culling_2.0.14_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNG5GN0xWNWZaTDBrUmxCQ095dmU5MG56UDJEZ0lwbGNjOHN0c1prS3p2UFZ1Y1VDdzQ2QzVLbzJ1OStsVVFnaVRraGE0cllib2FvVHpBdFZNZUlXcFFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NjQyMTM1CWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC4xNV94NjQtc2V0dXAuZXhlCXZlcnNpb246Mi4wLjE1CjJod21Ic1FZUDN0bGlEVi9TaFJabWxzNkpUOC9mYzRuOHJjRW1Xa3UzZ2tkUDB2SW91cjBtVzhaZGxwU09ac2FFTFBhZnFiYjk5dmg0dWZ0ekpmVUR3PT0K",
+      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.15/gallery-culling_2.0.15_x64-setup.exe"
     }
   }
 }
