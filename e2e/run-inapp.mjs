@@ -40,6 +40,11 @@ import {
 } from './lib/app.mjs';
 import { generateFixtures, JPG, RAW, OUT } from './fixtures/generate.mjs';
 import { prepareDetailRaw } from './lib/real-raw.mjs';
+import {
+  evaluateExpectedAssertions,
+  expectedForScenario,
+  parseAssertionLines,
+} from './lib/assertions.mjs';
 
 const LOG_FILE = path.join(PROJECT_ROOT, 'e2e', '.tmp', 'e2e-app.log');
 const DEV_LOG = path.join(PROJECT_ROOT, 'e2e', '.tmp', 'tauri-dev.log');
@@ -645,21 +650,62 @@ async function main() {
   }
   R.check('无 FATAL', !/FATAL:/.test(log), (log.match(/FATAL:[^\n]*/g) || []).join(' | '));
 
-  // 场景里每条 `>>> 断言X … = true|false` 都必须为真
+  // 场景里每条 `>>> 断言X … = true|false` 都必须为真。
   // 正则不要求 `=` 前有空格：首轮就因为两行写成 `」= true` / `）= true`
   // 被静默漏掉（日志里有 14 条，只解析到 12 条，还显示"全部为真"）。
-  const asserts = [...log.matchAll(/>>> (断言\S+)[^\n]*?= (true|false)/g)];
-  const falseAsserts = asserts.filter((m) => m[2] === 'false');
-  const assertLines = (log.match(/>>> 断言/g) || []).length;
+  //
+  // issue #188：旧口径只比「解析数 == 出现数」，某条断言没下发时出现数同步少 1，
+  // 等式仍成立 → 少发一条仍绿。这里改为按场景期望表点名必备 token、条件跳过
+  // 白名单与互斥分支；纯函数在 `./lib/assertions.mjs`，单测见
+  // `src/devtools/e2e-assertions.test.mjs`。
+  const expected = expectedForScenario(scenario);
+  const verdict = evaluateExpectedAssertions(log, scenario, expected);
+  const { asserts, skipped, rawLines } = parseAssertionLines(log);
+  const falseAsserts = asserts.filter((m) => m.value === 'false');
+
+  // 解析完整性：每条 `>>> 断言` 行要么解析为 true/false，要么是已登记的显式跳过行。
   R.check(
-    `断言行全部被解析（${asserts.length}/${assertLines}）`,
-    assertLines > 0 && asserts.length === assertLines,
-    '有断言行没被正则匹配 —— 等于静默跳过',
+    `断言行全部被解析（${asserts.length}/${rawLines}，跳过 ${skipped.length}）`,
+    rawLines === 0 || asserts.length + skipped.length === rawLines,
+    `解析 ${asserts.length} + 跳过 ${skipped.length} / 出现 ${rawLines}；有断言行没被正则匹配 —— 等于静默跳过`,
   );
+
+  if (expected) {
+    R.check(
+      `必备断言行齐全（缺 ${verdict.missing.length}）`,
+      verdict.missing.length === 0,
+      `缺失：${verdict.missing.join(' | ') || '无'}`,
+    );
+    R.check(
+      `条件降级断言均有落点（缺 ${verdict.missingConditional.length}）`,
+      verdict.missingConditional.length === 0,
+      `既无断言行也无跳过行：${verdict.missingConditional.join(' | ') || '无'}`,
+    );
+    if (verdict.branchHit.length > 0) {
+      R.check(
+        '互斥结果分支至少命中一组',
+        verdict.branchHit.some(Boolean),
+        `分支命中：${JSON.stringify(verdict.branchHit)}`,
+      );
+    }
+    R.check(
+      `断言行达到场景下限（${verdict.parsedCount}/${expected.minCount}）`,
+      verdict.parsedCount >= expected.minCount,
+      `解析 ${verdict.parsedCount}，下限 ${expected.minCount}`,
+    );
+  } else {
+    // 未登记期望表的场景（遗留口径）：至少出现一条断言行且全部被解析。
+    R.check(
+      `断言行全部被解析（${asserts.length}/${rawLines}）`,
+      rawLines > 0 && asserts.length === rawLines,
+      '有断言行没被正则匹配 —— 等于静默跳过',
+    );
+  }
+
   R.check(
     `场景内断言全部为真（共 ${asserts.length} 条）`,
     asserts.length > 0 && falseAsserts.length === 0,
-    falseAsserts.map((m) => m[1].trim()).join(' | '),
+    falseAsserts.map((m) => m.token).join(' | '),
   );
 
   // ── B. 落盘 / 清单（读文件系统）──────────────────────────

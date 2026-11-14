@@ -1638,6 +1638,10 @@ async function scenarioDetailOneToOne(
       `[${el()}] 1:1 读数 scale=${actual.toFixed(3)} 期望=${expected.toFixed(3)}（natural=${shown.naturalWidth} offset=${shown.offsetWidth}）`,
     );
     raw(`[${el()}] >>> 断言D6 缩放就是真 1:1 = ${Math.abs(actual - expected) < 0.05}`);
+  } else {
+    // issue #188：条件降级必须在日志里显式可见，不允许静默跳过（编排器按
+    //「断言行或跳过行二选一」核对，两者皆无即红）。
+    raw(`[${el()}] >>> 断言D6 跳过（原因：视口图元素读不到，未量到 1:1 缩放）`);
   }
 
   // ── B. 再按 Z 回适应窗口 ──────────────────────────────
@@ -1821,6 +1825,9 @@ async function scenarioEngineDownload(el: () => string) {
     raw(
       `[${el()}] >>> 断言E6 重试后仍给出失败与重试入口 = ${!!still && !!findButton('重试')}`,
     );
+  } else {
+    // issue #188：条件降级必须在日志里显式可见，不允许静默跳过。
+    raw(`[${el()}] >>> 断言E6 跳过（原因：失败横幅未出现「重试」按钮，无条件重试路径）`);
   }
 }
 
@@ -2183,6 +2190,10 @@ async function scenarioThumbCache(
         alt2Base === expectThumb
       }`,
     );
+  } else {
+    // issue #188：条件降级必须在日志里显式可见，不允许静默跳过（编排器按
+    //「断言行或跳过行二选一」核对，两者皆无即红）。
+    raw(`[${el()}] >>> 断言T7 跳过（原因：未注入 expectThumb，单段手动跑降级为 T7/T7b 读数）`);
   }
   if (!(await scanFolders(jpgFolder, '', 12, el))) return;
   const c3 = await waitForIpcStable();
