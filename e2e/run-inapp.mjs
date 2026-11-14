@@ -39,6 +39,7 @@ import {
   PROJECT_ROOT,
 } from './lib/app.mjs';
 import { generateFixtures, JPG, RAW, OUT } from './fixtures/generate.mjs';
+import { prepareDetailRaw } from './lib/real-raw.mjs';
 
 const LOG_FILE = path.join(PROJECT_ROOT, 'e2e', '.tmp', 'e2e-app.log');
 const DEV_LOG = path.join(PROJECT_ROOT, 'e2e', '.tmp', 'tauri-dev.log');
@@ -48,7 +49,7 @@ const arg = (k) => argv.find((a) => a.startsWith('--' + k + '='))?.split('=')[1]
 
 const scenario = arg('scenario') || 'render-export';
 const timeoutMs = Number(arg('timeout') || 20 * 60_000);
-/** 真实素材目录（含 `rawonly/`）：`detail-1to1` 必需。 */
+/** 真实素材目录：`detail-1to1` 可显式指定；留空则自动探测 `~/Pictures/Camera Roll`。 */
 const rawDir = arg('raw-dir') || process.env.GALLERY_REAL_RAW_DIR || '';
 
 /** 极简断言收集器：每条 check 立即打印，最后汇总失败明细。 */
@@ -272,6 +273,15 @@ function jpegSize(file) {
   return null;
 }
 
+/** 细节缓存目录：跟随 `GALLERY_DATA_DIR`（issue #81/#107 的同一口径）。
+ *
+ * 不能写 `项目根/src-tauri/app_cache`：e2e 数据目录被隔离到 `e2e/.tmp/data`，
+ * 缓存实际落在 `<data>/cache/gallery/lumen`。旧写死路径在场景首次跑通时
+ * 会把「产物存在」误报成失败（issue #212 实测）。 */
+function detailCacheDir() {
+  return path.join(E2E_DATA_DIR, 'cache', 'gallery', 'lumen');
+}
+
 /**
  * FR-05 的落盘断言：细节缓存里必须是**原生尺寸**的 JPEG。
  *
@@ -280,7 +290,7 @@ function jpegSize(file) {
  * 所以它能区分「真 1:1」和「把预览放大」。
  */
 function checkDetailCache(R) {
-  const dir = path.join(PROJECT_ROOT, 'src-tauri', 'app_cache', 'gallery', 'lumen');
+  const dir = detailCacheDir();
   const all = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
   const details = all.filter((f) => f.endsWith('_detail_lumen.jpg'));
   R.note(`细节缓存 ${details.length} 份：${details.slice(0, 4).join(', ') || '(空)'}`);
@@ -496,29 +506,22 @@ async function main() {
 
   // detail-1to1 要**真实 ARW**：夹具里的 RAW 是 JPEG 改后缀，photo.export
   // 解不出图，1:1 永远走不到 —— 用夹具跑出来的「通过」毫无意义。
+  // 不写死绝对目录：显式 `--raw-dir` / `GALLERY_REAL_RAW_DIR` 优先，留空则
+  // 自动探测 `~/Pictures/Camera Roll`，只把选中的两张硬链接到 e2e/.tmp/realraw。
   let detailRaw = '';
   let detailNames = '';
   if (scenario === 'detail-1to1') {
-    detailRaw = rawDir ? path.join(rawDir, 'rawonly') : '';
-    if (!detailRaw || !fs.existsSync(detailRaw)) {
-      console.error(
-        `缺少真实素材：需要 --raw-dir=<含 rawonly/ 的目录> 或 GALLERY_REAL_RAW_DIR（当前 "${rawDir}"）`,
-      );
+    const prepared = prepareDetailRaw({
+      explicitDir: rawDir,
+      dest: path.join(PROJECT_ROOT, 'e2e', '.tmp', 'realraw'),
+    });
+    if (!prepared.ok) {
+      console.error(prepared.message);
       return 2;
     }
-    const arws = fs
-      .readdirSync(detailRaw)
-      .filter((f) => /\.(arw|nef|cr2|cr3|dng)$/i.test(f))
-      .sort();
-    if (arws.length < 2) {
-      console.error(`${detailRaw} 里真实 RAW 不足 2 张（${arws.length}），取消场景需要两张`);
-      return 2;
-    }
-    detailNames = arws
-      .slice(0, 2)
-      .map((f) => f.replace(/\.[^.]+$/, ''))
-      .join(',');
-    console.log(`真实 RAW：${detailRaw} → ${detailNames}`);
+    detailRaw = prepared.dir;
+    detailNames = prepared.names.join(',');
+    console.log(`真实 RAW：${prepared.sourceDir} → ${detailNames}（已链接到 ${detailRaw}）`);
   }
 
   // issue #75：引擎下载失败场景要一个「坏下载源」+ 干净缓存目录。
@@ -557,7 +560,7 @@ async function main() {
   // 细节缓存必须清空：留着上一轮产物，「首次 ≤10s」就变成在测缓存命中，
   // D2「此时还是预览」也会直接红 —— 这条用例的全部意义就是**真渲染**那一次。
   if (scenario === 'detail-1to1') {
-    const cacheDir = path.join(PROJECT_ROOT, 'src-tauri', 'app_cache', 'gallery', 'lumen');
+    const cacheDir = detailCacheDir();
     const stale = fs.existsSync(cacheDir)
       ? fs.readdirSync(cacheDir).filter((f) => f.includes('_detail_lumen'))
       : [];

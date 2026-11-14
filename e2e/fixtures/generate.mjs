@@ -4,6 +4,8 @@
  * 产出：
  *   <root>/JPG/IMG_001..012.jpg   真 JPEG
  *   <root>/JPG/IMG_001..007.xmp   真 XMP sidecar，覆盖全部评级/旗标分支
+ *   <root>/JPG/IMG_011.xmp        额外的 sidecar（#200 的 HasSettings 内容判据）
+ *   <root>/JPG/IMG_010.acr        空 ACR 旁证（issue #200 的「文件旁证」判定）
  *   <root>/RAW/IMG_001|002|004.ARW   与 JPG 同 stem（应配对成 JPG+RAW）
  *   <root>/RAW/RAW_ONLY_009.ARW      只有 RAW 无 JPG（应触发 C2 占位规则）
  *   <root>/MIXED/                     #66：JPG 与 RAW 同目录（单目录导入夹具）
@@ -40,8 +42,15 @@ const TINY_JPEG_B64 =
 
 const XPACKET_UUID = 'W5M0MpCehiHzreSzNTczkc9d';
 
-/** 造一份带本方 rdf:Description 的 sidecar（属性声明用真换行，可被标准 XML 解析器读）。 */
-function sidecar({ rating = 0, label, lens, focal, aperture, tone } = {}) {
+/**
+ * 造一份带本方 rdf:Description 的 sidecar（属性声明用真换行，可被标准 XML 解析器读）。
+ *
+ * `acr: true` 写 `crs:HasSettings="True"` —— 这是 `src-tauri/src/xmp.rs` 的
+ * 「已进 ACR/PS 精修」内容判据（issue #200）。夹具刻意同时保留 `.acr` 旁证与
+ * 内容判据两条路径，任何一条被改坏都应有真窗口断言变红。
+ */
+function sidecar({ rating = 0, label, lens, focal, aperture, tone, acr = false } = {}) {
+  const acrAttr = acr ? ' crs:HasSettings="True"' : '';
   const crs = tone
     ? [
         tone.exposure != null && `      <crs:Exposure2012>${tone.exposure >= 0 ? '+' : ''}${tone.exposure.toFixed(2)}</crs:Exposure2012>`,
@@ -66,7 +75,7 @@ function sidecar({ rating = 0, label, lens, focal, aperture, tone } = {}) {
         xmlns:xmp="http://ns.adobe.com/xap/1.0/"
         xmlns:aux="http://ns.adobe.com/exif/1.0/aux/"
         xmlns:exif="http://ns.adobe.com/exif/1.0/"
-        xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+        xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"${acrAttr}>
       <xmp:Rating>${rating}</xmp:Rating>
 ${label ? `      <xmp:Label>${label}</xmp:Label>\n` : ''}${lensTags}${focalTags}${apertureTags}${crs}    </rdf:Description>
   </rdf:RDF>
@@ -78,6 +87,10 @@ ${label ? `      <xmp:Label>${label}</xmp:Label>\n` : ''}${lensTags}${focalTags}
 /**
  * 每个 sidecar 对应的期望态。测试脚本直接 import 这张表，
  * 避免「断言里的期望值」和「素材里的真值」各写一份而漂移。
+ *
+ * `retouched: true` 是 issue #200 的两条判定路径：IMG_010 用旁路空 `.acr`
+ * （文件旁证），IMG_011 用 sidecar 的 `crs:HasSettings="True"`（内容判据）。
+ * 其余为 false（未写键即 false）。
  */
 export const EXPECTED = {
   IMG_001: { rating: 5, flag: 'pick' },
@@ -89,8 +102,8 @@ export const EXPECTED = {
   IMG_007: { rating: 0, flag: 'none' }, // Label=None（边界：不得读成 reject）
   IMG_008: { rating: 0, flag: 'none' }, // 干净照片，评级套件在它身上写
   IMG_009: { rating: 0, flag: 'none' },
-  IMG_010: { rating: 0, flag: 'none' },
-  IMG_011: { rating: 0, flag: 'none' },
+  IMG_010: { rating: 0, flag: 'none', retouched: true }, // 旁路空 .acr
+  IMG_011: { rating: 0, flag: 'none', retouched: true }, // sidecar HasSettings
   IMG_012: { rating: 0, flag: 'none' },
   RAW_ONLY_009: { rating: 0, flag: 'none' },
 };
@@ -129,8 +142,8 @@ export function generateFixtures(root = FIXTURE_ROOT) {
     fs.writeFileSync(path.join(jpgDir, `${stem}.jpg`), jpeg);
   }
 
-  // 7 个 sidecar，覆盖：pick / reject(Rating=-1) / reject(Label=Red) /
-  // 普通星级 / 带 tone / Label=None 边界
+  // 8 个 sidecar，覆盖：pick / reject(Rating=-1) / reject(Label=Red) /
+  // 普通星级 / 带 tone / Label=None 边界 / ACR HasSettings（#200 内容判据）
   const sides = {
     IMG_001: { rating: 5, label: 'Green' },
     IMG_002: { rating: 3 },
@@ -145,10 +158,13 @@ export function generateFixtures(root = FIXTURE_ROOT) {
     IMG_005: { rating: 0, label: 'Red' },
     IMG_006: { rating: 0, label: 'Green' },
     IMG_007: { rating: 0, label: 'None' },
+    IMG_011: { rating: 0, acr: true },
   };
   for (const [stem, meta] of Object.entries(sides)) {
     fs.writeFileSync(path.join(jpgDir, `${stem}.xmp`), sidecar(meta), 'utf8');
   }
+  // issue #200 的第二条判定路径：图片旁的空 `.acr` 文件（不看内容）。
+  fs.writeFileSync(path.join(jpgDir, 'IMG_010.acr'), '', 'utf8');
 
   // RAW（合成：JPEG 字节 + .ARW 扩展名，见文件头说明）
   for (const stem of PAIRED_STEMS) {
@@ -171,7 +187,7 @@ export function generateFixtures(root = FIXTURE_ROOT) {
 
   // #105 格头夹具：107 张同名规律 JPG（无 sidecar，纯数量压力）。
   // 只有 JPG：格头左状态「宫格列表 (107) · 已选 1」是最宽形态，
-  // 右侧 5 个控件的单行总宽 ≤370px 才有判别力。
+  // 右侧 7 个控件（含 #200 的未修/已修）的单行总宽 ≤370px 才有判别力。
   for (let i = 1; i <= 107; i += 1) {
     const stem = `IMG_${String(i).padStart(3, '0')}`;
     fs.writeFileSync(path.join(wideDir, `${stem}.jpg`), jpeg);

@@ -254,6 +254,15 @@ function readSelectedCount(): number | null {
   return m ? Number(m[1]) : null;
 }
 
+/** 读宫格格头状态里的「宫格列表 (N)」或筛选中的「(命中/总数)」；读不到返回 null。 */
+function readGridListCount(): number | null {
+  const span = Array.from(document.querySelectorAll<HTMLElement>('span[role="status"]')).find(
+    (s) => /宫格列表/.test(s.textContent || ''),
+  );
+  const m = /宫格列表\s*\((\d+)(?:\s*\/\s*\d+)?\)/.exec(span?.textContent || '');
+  return m ? Number(m[1]) : null;
+}
+
 /** 点宫格里 baseName 命中的单元格；返回是否点到。 */
 async function clickCell(baseName: string, el: () => string): Promise<boolean> {
   const cell = await waitFor(
@@ -986,6 +995,119 @@ async function scenarioUiContract(
   }
   await clearLabel();
 
+  // ── issue #200：已修徽章与快捷筛选（真窗口契约）────────────
+  // 判据两条：IMG_010 靠旁路空 `.acr`（文件旁证），IMG_011 靠 sidecar 的
+  // `crs:HasSettings="True"`（内容判据）。两条都必须在格头 aria-label 与
+  // 单图预览角标上可见；筛选按钮必须真的改「宫格列表 (N)」计数，而不是只
+  // 改按钮颜色。夹具重建后未修/已修为 10/2。
+  raw(`===== #200 已修徽章与筛选 =====`);
+  const cellByStem = (stem: string) =>
+    Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find((o) =>
+      (o.getAttribute('aria-label') || '').includes(stem),
+    ) || null;
+  const retouchBadgeIn = (root: ParentNode | null) =>
+    root?.querySelector('[role="img"][aria-label="已进 Photoshop / Camera Raw 精修"]') || null;
+
+  const cell010 = cellByStem('IMG_010');
+  const cell011 = cellByStem('IMG_011');
+  const cell012 = cellByStem('IMG_012');
+  const aria010 = cell010?.getAttribute('aria-label') || '';
+  const aria011 = cell011?.getAttribute('aria-label') || '';
+  const aria012 = cell012?.getAttribute('aria-label') || '';
+  raw(
+    `[${el()}] 读数 已修单元格：IMG_010=${!!cell010} IMG_011=${!!cell011} IMG_012=${!!cell012}`,
+  );
+  raw(
+    `[${el()}] >>> 断言R1 两条判定路径都进格头 aria-label（IMG_010 .acr / IMG_011 HasSettings / IMG_012 未修） = ${
+      aria010.includes('已 PS 精修') &&
+      aria011.includes('已 PS 精修') &&
+      !aria012.includes('已 PS 精修')
+    }`,
+  );
+  raw(
+    `[${el()}] >>> 断言R2 格头已修徽章 role=img 且 aria-label 可读 = ${
+      !!retouchBadgeIn(cell010) && !!retouchBadgeIn(cell011)
+    }`,
+  );
+
+  const onlyNo = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="只看未精修的照片"]',
+  );
+  const onlyYes = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="只看已精修的照片"]',
+  );
+  const filterHitOk = [onlyNo, onlyYes].every((btn) => {
+    if (!btn) return false;
+    const r = btn.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !!hit && btn.contains(hit);
+  });
+  raw(
+    `[${el()}] 读数 筛选按钮：未修=${!!onlyNo} 已修=${!!onlyYes} 初始 pressed=${onlyNo?.getAttribute(
+      'aria-pressed',
+    )}/${onlyYes?.getAttribute('aria-pressed')} 中心命中=${filterHitOk}`,
+  );
+  raw(
+    `[${el()}] >>> 断言R3 两个快捷筛选按钮常驻、初始未激活且中心命中自身 = ${
+      !!onlyNo &&
+      !!onlyYes &&
+      onlyNo.getAttribute('aria-pressed') === 'false' &&
+      onlyYes.getAttribute('aria-pressed') === 'false' &&
+      filterHitOk
+    }`,
+  );
+
+  onlyYes?.click();
+  const yesCount = await waitFor(() => (readGridListCount() === 2 ? 2 : null), 5_000, 300);
+  raw(
+    `[${el()}] 读数 点已修后 宫格列表=${readGridListCount()} pressed=${onlyNo?.getAttribute(
+      'aria-pressed',
+    )}/${onlyYes?.getAttribute('aria-pressed')}`,
+  );
+  raw(
+    `[${el()}] >>> 断言R4 点「已修」只留 2 组且 aria-pressed 正确 = ${
+      yesCount === 2 &&
+      onlyNo?.getAttribute('aria-pressed') === 'false' &&
+      onlyYes?.getAttribute('aria-pressed') === 'true'
+    }`,
+  );
+
+  onlyNo?.click();
+  const noCount = await waitFor(() => (readGridListCount() === 10 ? 10 : null), 5_000, 300);
+  raw(
+    `[${el()}] 读数 点未修后 宫格列表=${readGridListCount()} pressed=${onlyNo?.getAttribute(
+      'aria-pressed',
+    )}/${onlyYes?.getAttribute('aria-pressed')}`,
+  );
+  raw(
+    `[${el()}] >>> 断言R5 点「未修」只留 10 组且 aria-pressed 正确 = ${
+      noCount === 10 &&
+      onlyNo?.getAttribute('aria-pressed') === 'true' &&
+      onlyYes?.getAttribute('aria-pressed') === 'false'
+    }`,
+  );
+
+  onlyNo?.click();
+  const restoredCount = await waitFor(() => (readGridListCount() === 12 ? 12 : null), 5_000, 300);
+  if (!(await clickCell('IMG_010', el))) return;
+  await sleep(500);
+  const previewBadge = retouchBadgeIn(document.querySelector('[data-viewport-photo]'));
+  raw(
+    `[${el()}] 读数 取消筛选后 宫格列表=${readGridListCount()} 单图预览已修角标=${!!previewBadge}`,
+  );
+  raw(
+    `[${el()}] >>> 断言R6 取消筛选恢复 12 组且单图预览已修角标可见 = ${
+      restoredCount === 12 &&
+      onlyNo?.getAttribute('aria-pressed') === 'false' &&
+      onlyYes?.getAttribute('aria-pressed') === 'false' &&
+      !!previewBadge
+    }`,
+  );
+
+  // 回到 IMG_006：后续 T/Y 与 #99 都假设单图视口有稳定锚点。
+  if (!(await clickCell('IMG_006', el))) return;
+  await sleep(300);
+
   // ── 左手键：T 前后对照；Y 已删除（#61）──────────────────
   // 放在最后：切前后对照会卸载单图视口，先做完底栏相关断言再动视图模式。
   const beforeAfterPressed = () =>
@@ -1124,10 +1246,11 @@ async function scenarioUiContract(
     raw(`[${el()}] >>> 断言U16 顶栏出现 JPG+RAW 识别结果 = false（未提供 mixed 夹具）`);
   }
 
-  // ── issue #105：390px 侧栏格头 5 控件单行 ≤370px ─────────
+  // ── issue #105：390px 侧栏格头 7 控件单行 ≤370px ─────────
   // 夹具换成 107 张（WIDE）再现「宫格列表 (107) · 已选 1」最宽左状态；
   // 侧栏宽恒 390px（App.tsx），格头内宽 = 390 − px-2.5×2 = 370px。
-  raw(`===== #105 格头 5 控件几何 =====`);
+  // #200 在格头加了「未修 / 已修」两个按钮，控件数从 5 变 7；上限不变。
+  raw(`===== #105 格头 7 控件几何 =====`);
   if (!wideFolder) {
     raw(`[${el()}] >>> 断言G105-0 已提供 wide 夹具 = false（未提供 VITE_E2E_WIDE）`);
   } else {
@@ -1164,16 +1287,21 @@ async function scenarioUiContract(
       '按条件筛选照片',
       '切换为一行 3 张缩略图',
       '切换为一行 4 张缩略图',
+      '只看未精修的照片',
+      '只看已精修的照片',
     ];
     const ctrls = CTRL_LABELS.map(
       (l) => headerRow?.querySelector<HTMLButtonElement>(`button[aria-label="${l}"]`) ?? null,
     );
     const found = ctrls.filter(Boolean).length;
     raw(
-      `[${el()}] 读数 格头左侧状态="${statusSpan?.textContent?.replace(/\s+/g, ' ').trim()}" 控件=${found}/5`,
+      `[${el()}] 读数 格头左侧状态="${statusSpan?.textContent?.replace(/\s+/g, ' ').trim()}" 控件=${found}/7`,
     );
-    if (!headerRow || !ctrlGroup || found !== 5) {
-      raw(`[${el()}] >>> 断言G105-1 格头与 5 个控件齐全 = false`);
+    raw(
+      `[${el()}] >>> 断言G105-1 格头与 7 个控件齐全 = ${!!headerRow && !!ctrlGroup && found === 7}`,
+    );
+    if (!headerRow || !ctrlGroup || found !== 7) {
+      // G105-1 已在上面按真值发射；这里只跳过几何断言，避免重复断言行。
     } else {
       const headerRect = headerRow.getBoundingClientRect();
       const groupRect = ctrlGroup.getBoundingClientRect();
@@ -1182,7 +1310,7 @@ async function scenarioUiContract(
         `[${el()}] 读数 格头内宽=${(headerRect.width - 20).toFixed(1)} 控件组宽=${groupRect.width.toFixed(1)} 左状态宽=${leftW.toFixed(1)}`,
       );
 
-      // 单行：5 个按钮 top 对齐、高度不因折行而长高（min-h-7=28，两行会 ≥40）
+      // 单行：7 个按钮 top 对齐、高度不因折行而长高（min-h-7=28，两行会 ≥40）
       const rects = ctrls.map((b) => b!.getBoundingClientRect());
       const topSpread = Math.max(...rects.map((r) => r.top)) - Math.min(...rects.map((r) => r.top));
       const maxH = Math.max(...rects.map((r) => r.height));
@@ -1190,7 +1318,7 @@ async function scenarioUiContract(
       raw(
         `[${el()}] 读数 top 极差=${topSpread.toFixed(2)}px 最大高=${maxH.toFixed(1)}px 各按钮内部溢出=${JSON.stringify(wrap)}`,
       );
-      raw(`[${el()}] >>> 断言G105-2 五控件单行（top 极差≤1px 且高≤32px）= ${topSpread <= 1 && maxH <= 32}`);
+      raw(`[${el()}] >>> 断言G105-2 七控件单行（top 极差≤1px 且高≤32px）= ${topSpread <= 1 && maxH <= 32}`);
       raw(`[${el()}] >>> 断言G105-3 控件内文字不折行不竖排（各自 scrollWidth≤clientWidth）= ${wrap.every((d) => d <= 1)}`);
 
       // 总宽与裁切：组宽 ≤370，右缘不越过格头内右缘，组内无溢出
@@ -1200,7 +1328,7 @@ async function scenarioUiContract(
       raw(
         `[${el()}] 读数 控件组总宽=${groupRect.width.toFixed(1)}px（上限 370）组内溢出=${groupOver}px 越出格头内右缘=${beyondRight.toFixed(1)}px`,
       );
-      raw(`[${el()}] >>> 断言G105-4 五控件总宽≤370px = ${groupRect.width <= 370}`);
+      raw(`[${el()}] >>> 断言G105-4 七控件总宽≤370px = ${groupRect.width <= 370}`);
       raw(
         `[${el()}] >>> 断言G105-5 无静默裁切（组不越格头内右缘且组内无溢出）= ${
           beyondRight <= 1 && groupOver <= 1
@@ -1225,6 +1353,22 @@ async function scenarioUiContract(
           rowOver <= 1 && (!sidebar || sideOver <= 1)
         }`,
       );
+
+      // 七控件各自中心命中自身：防止新加的 retouch 按钮被相邻控件压住，
+      // 或透明层把点击吃掉（几何量得对、点不到，是两种不同的坏）。
+      const ctrlMisses: string[] = [];
+      for (const btn of ctrls) {
+        const b = btn!;
+        const r = b.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        if (!hit || !b.contains(hit)) {
+          ctrlMisses.push(b.getAttribute('aria-label') || '(无标签)');
+        }
+      }
+      raw(
+        `[${el()}] 读数 七控件中心未命中=${ctrlMisses.length ? JSON.stringify(ctrlMisses) : '(无)'}`,
+      );
+      raw(`[${el()}] >>> 断言G105-8 七控件中心均命中自身 = ${ctrlMisses.length === 0}`);
       }
     }
   }
