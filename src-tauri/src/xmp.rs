@@ -533,6 +533,125 @@ fn merge_acr_tone(existing: &str, meta: &XmpMetadata) -> Option<String> {
     Some(out)
 }
 
+/// 把评级/色标/镜头/焦距/光圈并入已有 ACR settings 主块（issue #209 R1）。
+///
+/// ACR 点「完成」会删除独立的第二个 `rdf:Description`（#208 A1 实机证据），
+/// 这些字段只写在 App 独立块里会随块一起丢失。并入 ACR 主块后：
+/// - 标准 XMP 命名空间（xmp/aux/exif），Lightroom / Bridge / 读侧都可读；
+/// - 元素形式与 `build_our_description` 历史写法一致，读侧元素优先口径不变；
+/// - 块内同名旧元素先清后写，避免一处字段两处值。
+///
+/// `write_label` 沿用写入层既有去重口径：本方块之外已有色标时不在主块再写一份。
+fn merge_acr_metadata(existing: &str, meta: &XmpMetadata, write_label: bool) -> Option<String> {
+    let (open_start, _) = find_acr_settings_block_open(existing)?;
+    let (_, block_end) = find_acr_settings_block_range(existing)?;
+
+    // reject 用 -1（Lightroom 惯例）；与 `build_our_description` 同一口径。
+    let rating: i32 = if meta.rejected {
+        -1
+    } else {
+        meta.rating.min(5) as i32
+    };
+
+    let mut remove_tags: Vec<&str> = vec!["xmp:Rating"];
+    let mut body = String::new();
+    body.push_str(&format!("      <xmp:Rating>{}</xmp:Rating>\n", rating));
+
+    let write_label_tag = write_label && !meta.label.is_empty();
+    if write_label_tag {
+        remove_tags.push("xmp:Label");
+        body.push_str(&format!("      <xmp:Label>{}</xmp:Label>\n", meta.label));
+    }
+
+    let lens = meta
+        .lens_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty());
+    if let Some(lens) = lens {
+        remove_tags.push("aux:Lens");
+        remove_tags.push("aux:LensModel");
+        body.push_str(&format!("      <aux:Lens>{}</aux:Lens>\n", lens));
+        body.push_str(&format!("      <aux:LensModel>{}</aux:LensModel>\n", lens));
+    }
+
+    let focal = meta
+        .focal_length
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| !f.is_empty());
+    if let Some(focal) = focal {
+        remove_tags.push("exif:FocalLength");
+        body.push_str(&format!(
+            "      <exif:FocalLength>{}</exif:FocalLength>\n",
+            focal
+        ));
+    }
+
+    let aperture = meta
+        .aperture
+        .as_deref()
+        .map(str::trim)
+        .filter(|a| !a.is_empty());
+    if let Some(aperture) = aperture {
+        remove_tags.push("exif:FNumber");
+        body.push_str(&format!(
+            "      <exif:FNumber>{}</exif:FNumber>\n",
+            aperture
+        ));
+    }
+
+    let cleaned = remove_elements_in_range(existing, open_start, block_end, &remove_tags);
+
+    let (start, open_end) = find_acr_settings_block_open(&cleaned)?;
+    let mut open_tag = cleaned[start..open_end].to_string();
+
+    // 补齐元素用到的命名空间声明；crs 由 ACR 块自带，不在此列。
+    for prefix in ["xmp", "aux", "exif"] {
+        let used = match prefix {
+            "xmp" => true,
+            "aux" => lens.is_some(),
+            "exif" => focal.is_some() || aperture.is_some(),
+            _ => false,
+        };
+        if !used {
+            continue;
+        }
+        let uri = OURS_NAMESPACES
+            .iter()
+            .find(|(p, _)| *p == prefix)
+            .map(|(_, u)| *u)?;
+        if !open_tag.contains(&format!("xmlns:{}=\"", prefix)) {
+            open_tag = insert_attribute(&open_tag, &format!("xmlns:{}=\"{}\"", prefix, uri));
+        }
+    }
+
+    let mut out = String::with_capacity(cleaned.len() + open_tag.len() + body.len());
+    out.push_str(&cleaned[..start]);
+    out.push_str(&open_tag);
+    out.push_str(&body);
+    out.push_str(&cleaned[open_end..]);
+    Some(out)
+}
+
+/// 删除文档里的本方 `rdf:Description` 块；找不到则原样返回。
+///
+/// ACR 块存在时，评级/色标/镜头已并入 ACR 主块（见 `merge_acr_metadata`），
+/// 独立 App 块不再保留：留着它既是 ACR 回写删除的对象，也可能让读侧
+/// 元素优先读到陈旧副本。
+fn remove_our_block(doc: &str) -> String {
+    let Some((start, end)) = find_our_block_range(doc) else {
+        return doc.to_string();
+    };
+    // 去掉块前整行的缩进，避免删除后留下空白行。
+    let line_start = doc[..start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let ws_len = doc[line_start..start]
+        .trim_matches(|c| c == ' ' || c == '\t')
+        .len();
+    let cut = line_start + (doc[line_start..start].len() - ws_len);
+    format!("{}{}", &doc[..cut], &doc[end..])
+}
+
 /// 构造本方 `rdf:Description` 块文本（与历史写出的字节完全一致）。
 ///
 /// `write_label = false` 用于「本方块之外已经有一份 `xmp:Label`」的情形：
@@ -825,16 +944,21 @@ fn write_meta_with_existing(
             // ACR 块存在时，4 个相对参数 + 私有 temp/tint 必须并进 ACR 自己的
             // Description；本方块不再写这些 crs 字段，避免第二个 Description 被 ACR 忽略。
             let doc = if acr_settings {
-                merge_acr_tone(doc, meta)
-                    .ok_or_else(|| "已定位 ACR settings 块但合并失败".to_string())?
+                let doc = merge_acr_tone(doc, meta)
+                    .ok_or_else(|| "已定位 ACR settings 块但合并失败".to_string())?;
+                // 评级/色标/镜头/焦距/光圈一并并入 ACR 主块（issue #209 R1），
+                // 再删除独立 App 块：ACR 回写会删掉第二块，留着它只会丢字段。
+                let doc = merge_acr_metadata(&doc, meta, write_label)
+                    .ok_or_else(|| "已定位 ACR settings 块但元数据合并失败".to_string())?;
+                remove_our_block(&doc)
             } else {
-                doc.to_string()
+                match splice_our_block(&doc, &our_block) {
+                    Some(spliced) => spliced,
+                    // 畸形文档：拒写并把原因往上传，绝不降级成"重建空模板"。
+                    None => append_our_block(&doc, &our_block)?,
+                }
             };
-            match splice_our_block(&doc, &our_block) {
-                Some(spliced) => spliced,
-                // 畸形文档：拒写并把原因往上传，绝不降级成"重建空模板"。
-                None => append_our_block(&doc, &our_block)?,
-            }
+            doc
         }
         None => build_fresh_document(meta, write_label),
     };
@@ -2356,6 +2480,146 @@ mod tests {
         assert_eq!(back.shadows, Some(100.0));
         assert_eq!(back.temperature, Some(-15.0));
         assert_eq!(back.tint, Some(-30.0));
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    // ---------------------------------------------------------------------
+    // issue #209 R1：ACR 点「完成」会删除独立的第二个 rdf:Description。
+    // 评级/色标/镜头/焦距/光圈不能只写在 App 独立块里，必须并入 ACR 主块，
+    // 否则 ACR 回写后整组字段丢失（#208 A1 实机证据：19,968 B、顶层只剩 1 块）。
+    // ---------------------------------------------------------------------
+
+    /// 合成混合 sidecar：ACR settings 主块 + 携带评级/色标/镜头的 App 独立块。
+    ///
+    /// 不引用 `work/acr-208/` 本地样本（gitignored、换机器不存在）；字段与
+    /// 结构按 #208 可行性报告 R1 节描述构造。
+    fn acr_settings_doc_with_our_meta() -> String {
+        acr_settings_doc("", "").replace(
+            " </rdf:RDF>",
+            r#"     <rdf:Description rdf:about=""
+        xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+        xmlns:aux="http://ns.adobe.com/exif/1.0/aux/"
+        xmlns:exif="http://ns.adobe.com/exif/1.0/"
+        xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+      <xmp:Rating>4</xmp:Rating>
+      <xmp:Label>Red</xmp:Label>
+      <aux:Lens>RF 24-70mm F2.8</aux:Lens>
+      <aux:LensModel>RF 24-70mm F2.8</aux:LensModel>
+      <exif:FocalLength>50mm</exif:FocalLength>
+      <exif:FNumber>f/2.8</exif:FNumber>
+    </rdf:Description>
+ </rdf:RDF>"#,
+        )
+    }
+
+    #[test]
+    fn acr_block_preserves_rating_label_lens_after_app_round_trip() {
+        let (img, xmp) = temp_img("r1meta");
+        fs::write(&xmp, acr_settings_doc_with_our_meta()).unwrap();
+
+        let meta = read_xmp_full(&xmp).expect("预置侧边栏应可读");
+        assert_eq!(meta.rating, 4);
+        assert_eq!(meta.label, "Red");
+        assert_eq!(meta.lens_model.as_deref(), Some("RF 24-70mm F2.8"));
+        assert_eq!(meta.focal_length.as_deref(), Some("50mm"));
+        assert_eq!(meta.aperture.as_deref(), Some("f/2.8"));
+
+        write_xmp_preserving(&img, &meta).expect("写入应成功");
+        let after = fs::read_to_string(&xmp).unwrap();
+
+        // 字段必须落在 ACR settings 主块内，而不是只存在独立 App 块里。
+        let (s, e) = find_acr_settings_block_range(&after).expect("应仍有 ACR 块");
+        let acr_block = &after[s..e];
+        assert!(
+            acr_block.contains("<xmp:Rating>4</xmp:Rating>"),
+            "评级未并入 ACR 块: {}",
+            acr_block
+        );
+        assert!(
+            acr_block.contains("<xmp:Label>Red</xmp:Label>"),
+            "色标未并入 ACR 块: {}",
+            acr_block
+        );
+        assert!(
+            acr_block.contains("<aux:LensModel>RF 24-70mm F2.8</aux:LensModel>"),
+            "镜头未并入 ACR 块: {}",
+            acr_block
+        );
+        assert!(
+            acr_block.contains("<exif:FocalLength>50mm</exif:FocalLength>"),
+            "焦距未并入 ACR 块: {}",
+            acr_block
+        );
+        assert!(
+            acr_block.contains("<exif:FNumber>f/2.8</exif:FNumber>"),
+            "光圈未并入 ACR 块: {}",
+            acr_block
+        );
+
+        // 模拟 ACR 点「完成」：独立 App 块被删除（#208 A1 实机证据）。
+        let stripped = match find_our_block_range(&after) {
+            Some((os, oe)) => format!("{}{}", &after[..os], &after[oe..]),
+            None => after.clone(),
+        };
+        fs::write(&xmp, &stripped).unwrap();
+        let back = read_xmp_full(&xmp).expect("剥离独立块后仍应可读");
+        assert_eq!(back.rating, 4, "ACR 往返后评级丢失");
+        assert_eq!(back.label, "Red", "ACR 往返后色标丢失");
+        assert_eq!(
+            back.lens_model.as_deref(),
+            Some("RF 24-70mm F2.8"),
+            "ACR 往返后镜头丢失"
+        );
+        assert_eq!(
+            back.focal_length.as_deref(),
+            Some("50mm"),
+            "ACR 往返后焦距丢失"
+        );
+        assert_eq!(
+            back.aperture.as_deref(),
+            Some("f/2.8"),
+            "ACR 往返后光圈丢失"
+        );
+
+        // ACR 自己的绝对色温/色调不得被我方覆盖（#208 PA 口径不退化）。
+        assert!(
+            after.contains("crs:Temperature=\"5500\""),
+            "ACR 绝对色温被改动"
+        );
+        assert!(after.contains("crs:Tint=\"+16\""), "ACR 绝对色调被改动");
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    #[test]
+    fn no_acr_block_still_writes_our_own_description() {
+        // 护栏：没有 ACR settings 块时，旧路径（写本方块）行为不得被本条改动带坏。
+        let (img, xmp) = temp_img("r1noacr");
+        let meta = XmpMetadata {
+            rating: 4,
+            label: "Red".into(),
+            lens_model: Some("RF 24-70mm F2.8".into()),
+            focal_length: Some("50mm".into()),
+            aperture: Some("f/2.8".into()),
+            ..Default::default()
+        };
+        write_xmp_preserving(&img, &meta).expect("写入应成功");
+        let after = fs::read_to_string(&xmp).unwrap();
+
+        assert_eq!(
+            after.matches("<rdf:Description").count(),
+            1,
+            "无 ACR 块时仍只写本方块: {}",
+            after
+        );
+        assert!(after.contains("<xmp:Rating>4</xmp:Rating>"));
+        assert!(after.contains("<xmp:Label>Red</xmp:Label>"));
+        assert!(after.contains("<aux:LensModel>RF 24-70mm F2.8</aux:LensModel>"));
+        let back = read_xmp_full(&xmp).expect("应可读回");
+        assert_eq!(back.rating, 4);
+        assert_eq!(back.label, "Red");
+        assert_eq!(back.lens_model.as_deref(), Some("RF 24-70mm F2.8"));
 
         let _ = fs::remove_file(&xmp);
     }
