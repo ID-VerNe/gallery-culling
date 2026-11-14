@@ -1121,6 +1121,7 @@ mod tests {
             flag: "none".to_string(),
             label: String::new(),
             has_xmp: false,
+            has_acr: false,
             retouched: false,
             exif: None,
             thumbnail_path: None,

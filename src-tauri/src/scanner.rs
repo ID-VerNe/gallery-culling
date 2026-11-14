@@ -418,7 +418,7 @@ fn assemble_group(
     if is_viewer {
         let jpg = jpg_opt.as_ref().expect("viewer guarantees JPG");
         let path_obj = Path::new(&jpg.path);
-        has_xmp = check_sidecar_exists(path_obj);
+        has_xmp = check_sidecar_exists(path_obj, false);
         xmp_meta = if has_xmp {
             let xmp_path = get_xmp_path(path_obj);
             read_xmp_full(&xmp_path)
@@ -432,13 +432,17 @@ fn assemble_group(
         // 配了 RAW 目录后 sidecar 可能仍只存在于 JPG 旁（历史评级就是这么写的），
         // 用 else 会把那份直接跳过，界面上表现为「配了 RAW 之后评的分全没了」。
         // RAW 侧优先，JPG 侧兜底；两边都没有就不动。
+        //
+        // issue #206：RAW 宿主只认 `.xmp`；`.acr` 只属于非 RAW 宿主，RAW 旁误放的
+        // `.acr` 不点亮 `has_xmp`。
         let read_sidecar_of = |path: &str,
+                               is_raw: bool,
                                has_xmp: &mut bool,
                                rating: &mut u8,
                                flag: &mut String,
                                xmp_meta: &mut Option<XmpMetadata>| {
             let p = Path::new(path);
-            if !check_sidecar_exists(p) {
+            if !check_sidecar_exists(p, is_raw) {
                 return;
             }
             *has_xmp = true;
@@ -453,6 +457,7 @@ fn assemble_group(
         if let Some(raw) = &raw_opt {
             read_sidecar_of(
                 &raw.path,
+                is_raw_extension(&raw.extension),
                 &mut has_xmp,
                 &mut rating,
                 &mut pairing_flag,
@@ -464,6 +469,7 @@ fn assemble_group(
             if let Some(jpg) = &jpg_opt {
                 read_sidecar_of(
                     &jpg.path,
+                    false,
                     &mut has_xmp,
                     &mut rating,
                     &mut pairing_flag,
@@ -549,8 +555,15 @@ fn assemble_group(
         .as_ref()
         .and(jpg_opt.as_ref())
         .map(|j| Path::new(&j.path));
-    let has_acr = primary_path.is_some_and(|p| crate::xmp::acr_exists_with_pair(p, paired_path));
-    let retouched = xmp_meta.as_ref().is_some_and(|m| m.acr_edited) || has_acr;
+    let acr_pair_evidence =
+        primary_path.is_some_and(|p| crate::xmp::acr_exists_with_pair(p, paired_path));
+    let retouched = xmp_meta.as_ref().is_some_and(|m| m.acr_edited) || acr_pair_evidence;
+    // issue #206：`.acr` 是挂在非 RAW 宿主上的编辑旁车 —— 只认配对 JPG（或
+    // JPG-only 宿主）旁的同名 `.acr`；RAW 旁误放的 `.acr` 不计入（防冒充）。
+    // 这条是导出复制的预测信号，与 `retouched`（徽章）判据相互独立。
+    let group_has_acr = jpg_opt
+        .as_ref()
+        .is_some_and(|j| crate::xmp::acr_sidecar_exists(Path::new(&j.path)));
     let edited = jpg_opt
         .as_ref()
         .and_then(|j| Path::new(&j.path).parent())
@@ -571,6 +584,7 @@ fn assemble_group(
         // 不会出现「星级读 RAW、色标读 JPG」这种自相矛盾的组合。
         label: xmp_meta.as_ref().map(|m| m.label.clone()).unwrap_or_default(),
         has_xmp,
+        has_acr: group_has_acr,
         retouched,
         exif,
         thumbnail_path: None,
@@ -1165,9 +1179,10 @@ mod tests {
 
         let after = scan_one(&dir);
         assert!(after.retouched, ".acr 旁证必须让分组标成已修");
-        // `has_xmp` 的既有语义是「.xmp **或** .acr 侧边栏存在」（见
-        // `xmp::check_sidecar_exists`），所以这一项也会跟着变真 —— 两条判据
-        // 关注的不是同一件事，别指望它能区分。
+        // issue #206：`.acr` 只属于非 RAW 宿主，RAW 自己旁误放的 `.acr` 不点亮
+        // `has_xmp` / `has_acr`；`retouched` 这条 #200/#203 基线判据仍认它。
+        assert!(!after.has_xmp, "RAW 旁 .acr 不得冒充 sidecar");
+        assert!(!after.has_acr, "RAW 不认 .acr，has_acr 必须为假");
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1202,6 +1217,51 @@ mod tests {
             res.groups[0].retouched,
             "配对 JPG 旁的 .acr 漏读了（`raw.or(jpg)` 短路？）"
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// issue #206：配对 JPG 旁的同名 `.acr` 是 JPG 宿主的编辑旁车 —— 要点亮
+    /// `has_xmp` 与 `has_acr`；主路径（RAW）旁有没有 `.acr` 不影响这条。
+    #[test]
+    fn scan_paired_jpg_acr_lights_has_xmp_and_has_acr() {
+        let dir = unique_dir("acr_pair_jpg");
+        let raw_dir = dir.join("RAW");
+        let jpg_dir = dir.join("JPG");
+        fs::create_dir_all(&raw_dir).unwrap();
+        fs::create_dir_all(&jpg_dir).unwrap();
+        fs::write(raw_dir.join("P0001.ARW"), b"raw").unwrap();
+        fs::write(jpg_dir.join("P0001.JPG"), b"jpeg").unwrap();
+        fs::write(jpg_dir.join("P0001.acr"), b"ACR\0placeholder").unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let res = scan_folders(
+            jpg_dir.to_str().unwrap(),
+            Some(raw_dir.to_str().unwrap()),
+            "filename",
+            &cancel,
+            |_, _, _| {},
+        )
+        .expect("扫描应成功");
+        assert_eq!(res.groups.len(), 1);
+        assert!(res.groups[0].has_xmp, "配对 JPG 旁的 .acr 要点亮 has_xmp");
+        assert!(res.groups[0].has_acr, "配对 JPG 旁的 .acr 要点亮 has_acr");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// issue #206：RAW 自己旁误放的同名 `.acr` 是异常旁车 —— 不得点亮 `has_xmp`
+    /// 也不计入 `has_acr`（防冒充）；`retouched` 仍按 #203 基线认它。
+    #[test]
+    fn scan_raw_side_acr_does_not_light_has_xmp() {
+        let dir = unique_dir("acr_raw_side");
+        fs::write(dir.join("P0002.ARW"), b"raw").unwrap();
+        fs::write(dir.join("P0002.acr"), b"ACR\0placeholder").unwrap();
+
+        let group = scan_one(&dir);
+        assert!(!group.has_xmp, "RAW 自己旁的 .acr 不得冒充 sidecar");
+        assert!(!group.has_acr, "RAW 不认 .acr，has_acr 必须为假");
+        assert!(group.retouched, "#203 基线：retouched 仍认 RAW 旁 .acr");
 
         let _ = fs::remove_dir_all(&dir);
     }

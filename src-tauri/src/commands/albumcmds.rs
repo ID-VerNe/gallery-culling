@@ -145,7 +145,19 @@ fn apply_disk_state(entries: &mut [album::ResolvedDoc]) {
         let xmp_path = crate::xmp::get_xmp_path(&p);
         // 侧边栏**存在**与**读得出**是两件事：`read_xmp_full` 对空文件/坏 XML
         // 也返回 None，但文件确实在，导出时的文件计数与宫格角标都按「在不在」算。
-        e.has_xmp = xmp_path.is_file();
+        //
+        // issue #206：存在性按宿主类型拆分 —— RAW 主路径只认 `.xmp`；非 RAW 主路径
+        // 认 `.xmp` 与 `.acr`；配对 JPG 旁的 `.xmp` / `.acr` 纳入。RAW 旁误放的
+        // `.acr` 不点亮 `has_xmp`，也不计入 `has_acr`（防冒充）。
+        let jpg = e.jpg_path.as_deref().map(Path::new);
+        let primary_xmp = xmp_path.is_file();
+        let primary_acr = !e.is_raw && crate::xmp::acr_sidecar_exists(&p);
+        let jpg_xmp = jpg
+            .map(|j| crate::xmp::get_xmp_path(j).is_file())
+            .unwrap_or(false);
+        let jpg_acr = jpg.map(crate::xmp::acr_sidecar_exists).unwrap_or(false);
+        e.has_xmp = primary_xmp || primary_acr || jpg_xmp || jpg_acr;
+        e.has_acr = jpg_acr || primary_acr;
         // issue #200：`.acr` 旁证与 sidecar 内容无关，先单独取，两条分支都要用。
         // issue #203：判据统一走 `xmp::acr_exists_with_pair`（主路径 + 配对 JPG
         // 两侧）—— 与扫描 / 刷新 / 写盘 / 裁决共用同一份规则，别再在本地拼。
@@ -539,6 +551,55 @@ mod tests {
             flags,
             vec![true, false, true],
             "配对 JPG 旁的 .acr 也算已修（有/无 sidecar 两条分支都要算）；两侧都没有时仍为 false"
+        );
+    }
+
+    /// issue #206：选片集入口的 `has_xmp` / `has_acr` 与扫描同口径 —— 配对 JPG
+    /// 旁的同名 `.acr` 算 JPG 宿主旁车；主路径（RAW）旁有没有 `.acr` 不影响这条。
+    #[test]
+    fn open_reports_has_acr_beside_paired_jpg() {
+        let dir = scratch("hasacr_pair");
+        let raw_dir = dir.join("raw");
+        let jpg_dir = dir.join("jpg");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        std::fs::create_dir_all(&jpg_dir).unwrap();
+        let album_path = dir.join("a.galleryalbum");
+        let raw = raw_dir.join("D.ARW");
+        let jpg = jpg_dir.join("D.JPG");
+        std::fs::write(&raw, b"x").unwrap();
+        std::fs::write(&jpg, b"x").unwrap();
+        std::fs::write(jpg.with_extension("acr"), b"ACR\0placeholder").unwrap();
+
+        save_album_impl(&album_path.to_string_lossy(), &[pair(&raw, &jpg, 0)]).unwrap();
+        let opened = open_album_impl(&album_path.to_string_lossy()).unwrap();
+        assert!(
+            opened.entries[0].has_xmp,
+            "配对 JPG 旁的 .acr 要点亮 has_xmp"
+        );
+        assert!(
+            opened.entries[0].has_acr,
+            "配对 JPG 旁的 .acr 要点亮 has_acr"
+        );
+    }
+
+    /// issue #206：RAW 自己旁误放的 `.acr` 不进 `has_xmp` / `has_acr`（防冒充）。
+    #[test]
+    fn open_raw_side_acr_not_has_xmp() {
+        let dir = scratch("hasacr_raw");
+        let album_path = dir.join("a.galleryalbum");
+        let raw = dir.join("E.ARW");
+        std::fs::write(&raw, b"x").unwrap();
+        std::fs::write(raw.with_extension("acr"), b"ACR\0placeholder").unwrap();
+
+        save_album_impl(&album_path.to_string_lossy(), &[item(&raw, 0, "none", "")]).unwrap();
+        let opened = open_album_impl(&album_path.to_string_lossy()).unwrap();
+        assert!(
+            !opened.entries[0].has_xmp,
+            "RAW 自己旁的 .acr 不得冒充 sidecar"
+        );
+        assert!(
+            !opened.entries[0].has_acr,
+            "RAW 不认 .acr，has_acr 必须为假"
         );
     }
 

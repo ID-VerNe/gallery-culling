@@ -112,6 +112,9 @@ pub struct ResolvedDoc {
     /// 由**命令层**填（`resolve_documents` 一律给 `false`）：本模块只管格式，
     /// 不该知道 XMP 的命名规则。
     pub has_xmp: bool,
+    /// 宿主旁有没有同名 `.acr` 编辑旁车（issue #206）；命令层填，缺省 `false`。
+    #[serde(default)]
+    pub has_acr: bool,
     /// 是否经 ACR / Photoshop 精修过（issue #200）。
     ///
     /// 与 `has_xmp` 同理，由命令层读完 XMP 之后填（判据需要 `crs:HasSettings`
@@ -289,6 +292,7 @@ pub fn resolve_documents(album_path: &Path, docs: &[AlbumDoc]) -> Vec<ResolvedDo
             ),
             // 命令层读完 XMP 再填（本模块不碰 XMP）。
             has_xmp: false,
+            has_acr: false,
             retouched: false,
             tone: None,
             exif,
