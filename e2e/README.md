@@ -83,6 +83,46 @@ issue #108 / #107 的契约是「跨重启」的，所以编排器把一条场�
 `<数据目录>/cache` 做文件名 + size + mtime 快照比对（mtime 变 = 重新生成过）。
 期望值（N / baseName / IMG_001 缓存文件名）由 phase 1 日志实测解析后经 env 注入 phase 2，不写死。
 
+## 期望断言集合（issue #188）
+
+编排器对场景日志的断言行（`>>> 断言X … = true|false`）不只比「解析数 == 出现数」：
+某条断言因上游条件不满足而根本没下发时，出现数同步少 1，旧等式仍成立会假绿。
+
+- 期望表在 `e2e/lib/assertions.mjs` 的 `EXPECTED_ASSERTIONS`，按场景分四档：
+  `required`（必备 token，缺一条即红）、`conditional`（条件降级断言：断言行**或**
+  `>>> 断言X 跳过（原因：…）` 显式跳过行二选一，两者皆无才红）、`anyOf`（互斥结果
+  分支组，至少命中一组）、`minCount`（解析数下限，兜底「只剩一条也绿」）。
+- 条件降级不许静默：`src/devtools/e2eRunner.ts` 里条件不满足的分支必须补一条显式
+  跳过行；跳过行不带 `= true|false`，由编排器单独识别。
+- 判定是纯函数（输入日志文本 + 期望表 → 结构化结果），node 侧单测在
+  `src/devtools/e2e-assertions.test.mjs`，不依赖真窗口。新增或调整场景断言行时，
+  同步更新期望表；表内 token 与 `e2eRunner.ts` 的 `>>> 断言<token>` 逐字对应。
+
+### 冻结基线（2026-11-14 本机真机逐场景实发集合）
+
+期望表按真机实发集合冻结，不照代码行数写。各场景实发条数：
+
+| 场景 | 实发 | token 集合 |
+|---|---|---|
+| `ui-contract` | 46 | 表内 46 条（U/G/R 系列） |
+| `detail-1to1` | 16 | D1 D2 D3 D4 D5 D6 D7 C-1 C-2 D8 D9 D10 D11 D12 D13 D14 |
+| `external-fallback` | 4 | F1 F2 F2b F3 |
+| `thumb-cache` | 5 | T1 T3 T4 T7 T5（T7 条件项，单段手动跑走跳过行） |
+| `session-restore` | 8 | S1 S2 S4 S5 S7 S7b S8 S9 |
+| `engine-download` | 6 | E1 E2 E3 E4 E5 E6 |
+| `lumen-preset` | 4 | A1 A2 A3 B1 |
+| `render-export` | 10 | R1 R2 R3 R4 R5 R12 R11 + R8 R9 R10 |
+
+差异与备注说明：
+
+- **detail 代码 16 行 / 历史记录 11 条**：历史「11 条」是早期基线数字，夹具与断言
+  扩充后没回写；本次真机两跑均实发 16 条，以冻结表为准。
+- **render-export 互斥分支**：引擎可用走 R8/R9/R10，不可用走 R6/R7，`anyOf` 只要求
+  命中一组，两组不会同时出现。
+- **detail 时序 false 与集合无关**：D4（首次 ≤10s）、D14（重渲 <12s）在本机 debug
+  构建下两跑均超时（27.3s / 63s），D13 偶发；属既有环境时序抖动，不是缺断言，
+  不在本 lane 修。
+
 ## 为什么不走 CDP
 
 Tauri 的 WebView2 不把 DOM 暴露给 Windows UI Automation，所以界面断言本来只能靠
