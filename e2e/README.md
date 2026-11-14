@@ -106,7 +106,7 @@ issue #108 / #107 的契约是「跨重启」的，所以编排器把一条场�
 |---|---|---|
 | `ui-contract` | 46 | 表内 46 条（U/G/R 系列） |
 | `detail-1to1` | 16 | D1 D2 D3 D4 D5 D6 D7 C-1 C-2 D8 D9 D10 D11 D12 D13 D14 |
-| `external-fallback` | 4 | F1 F2 F2b F3 |
+| `external-fallback` | 5 | F1 F2 F2a F2b F3 |
 | `thumb-cache` | 5 | T1 T3 T4 T7 T5（T7 条件项，单段手动跑走跳过行） |
 | `session-restore` | 8 | S1 S2 S4 S5 S7 S7b S8 S9 |
 | `engine-download` | 6 | E1 E2 E3 E4 E5 E6 |
