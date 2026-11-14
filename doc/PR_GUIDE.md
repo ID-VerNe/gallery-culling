@@ -127,7 +127,7 @@ node scripts/check-pr-parity.mjs                  # 全量三片
 
 它把复跑挪到**被推送 sha 的临时 detached worktree**（只有已跟踪文件），用该 sha 自己的 `run-gates.mjs` + `gates.json` 执行；`node_modules` 链接进来（同一份 lockfile 的产物），`src-tauri/binaries` **不注入**（正是与 CI 分叉处，依赖它的用例就该在这里红）。退出码：`0` 绿 / `1` 有门禁红 / `2` 环境问题（ref 解析不了、worktree 建不起、未知分片）。
 
-`.githooks/pre-push` 对每个被推送的 sha 自动跑一次（static 片）；`SKIP_PARITY=1 git push` 跳过并留痕。
+`.githooks/pre-push` 对每个被推送的 sha 自动跑一次（static 片）；`SKIP_PARITY=1 git push` 跳过并留痕。本次推送只删除引用（stdin 里本地 sha 全为零）时，钩子跳过 static + parity 并打印一行理由，不跑门禁。
 
 ## 开 PR 前自查
 

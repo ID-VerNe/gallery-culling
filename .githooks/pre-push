@@ -8,11 +8,30 @@
 # 逃生口：SKIP_GATES=1 git push（会留痕），或 worktree 里没装依赖时自动跳过（会警告）。
 # 此外每个被推送的 sha 还会做一次 parity（issue #8）：在被推送 sha 的干净检出里复跑同一份清单，
 # SKIP_PARITY=1 可跳过并留痕。
+# 纯删除引用（issue #191）：本次推送所有本地 sha 都是全零时，没有新对象需要验，直接跳过
+# static + parity 并打印一行可见理由；只要有一行是非删除更新，就照下面的流程跑。
 root=$(git rev-parse --show-toplevel) || exit 1
 cd "$root" || exit 1
 
 if [ "$SKIP_GATES" = "1" ]; then
   echo "pre-push: SKIP_GATES=1，跳过 static 门禁（$(date -u '+%Y-%m-%dT%H:%M:%SZ')）" >&2
+  exit 0
+fi
+
+# 纯删除判定（issue #191）：git 把「本地引用 本地 sha 远端引用 远端 sha」逐行喂给 stdin，
+# 删除引用时本地 sha 是 40 个 0。整批全是删除就没有新对象需要验，跳过 static + parity，
+# 不再为删一个分支白跑一遍最便宜的一档。判定只看 local_sha 是否全零，不推断「是否追上远端」。
+zero_sha=0000000000000000000000000000000000000000
+ref_count=0
+delete_count=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  ref_count=$((ref_count + 1))
+  if [ "$local_sha" = "$zero_sha" ]; then
+    delete_count=$((delete_count + 1))
+  fi
+done
+if [ "$ref_count" -gt 0 ] && [ "$delete_count" -eq "$ref_count" ]; then
+  echo "pre-push: 本次推送只删除引用（$delete_count 个），跳过 static + parity（$(date -u '+%Y-%m-%dT%H:%M:%SZ')）" >&2
   exit 0
 fi
 
