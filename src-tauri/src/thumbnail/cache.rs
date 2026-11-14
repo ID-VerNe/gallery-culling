@@ -476,11 +476,14 @@ mod tests {
         std::fs::write(&f, b"x").expect("write a.jpg");
 
         let raw = f.to_string_lossy().to_string();
-        // 异拼写：小写盘符 + 正斜杠（前端 altSpelling 探键同款变换）
-        let alt = format!(
-            "c:/{}",
-            raw.strip_prefix("C:").unwrap().replace(char::from(92), "/")
-        );
+        // 异拼写：盘符前缀小写化 + 反斜杠换正斜杠（前端 altSpelling 探键同款变换）。
+        // 盘符从 raw 自身解析，不写死 `C:`（issue #189）：temp_dir() 落到非 C 盘时旧
+        // 写法 strip_prefix("C:").unwrap() 会 panic，把整轮 cargo test --lib 打成崩溃。
+        let alt = match raw.split_once(':') {
+            Some((drive, rest)) => format!("{}:/{}", drive.to_lowercase(), rest.replace('\\', "/")),
+            // 无盘符前缀（非 Windows 形式）：只换分隔符，不碰盘符。
+            None => raw.replace('\\', "/"),
+        };
         assert_ne!(raw, alt, "测试自身：两种拼写必须确实不同");
 
         let (p1, m1) = file_fingerprint(Path::new(&raw));
