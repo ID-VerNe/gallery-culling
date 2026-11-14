@@ -88,3 +88,31 @@ describe('getThumbnail 宽度回落（issue #133 墓碑）', () => {
     expect(lastInvokeArgs('get_thumbnail_cmd')).toMatchObject({ width: 300 });
   });
 });
+
+describe('updateRatingFlag 配对 JPG 路径（issue #206）', () => {
+  beforeEach(() => {
+    resetInvokeMocks();
+    mockInvokeCommand('update_rating_flag_cmd', true);
+  });
+
+  it('传了配对 JPG 路径时原样透传 jpgPath', async () => {
+    await api.updateRatingFlag(
+      'D:/r/a.ARW',
+      4,
+      'pick',
+      true,
+      true,
+      undefined,
+      'D:/r/a.jpg',
+    );
+    expect(lastInvokeArgs('update_rating_flag_cmd')).toMatchObject({
+      jpgPath: 'D:/r/a.jpg',
+    });
+  });
+
+  it('未传配对 JPG 路径时 jpgPath 为 undefined（退化为只看主路径，与现状一致）', async () => {
+    await api.updateRatingFlag('D:/r/a.ARW', 4, 'pick');
+    const args = lastInvokeArgs('update_rating_flag_cmd') as Record<string, unknown>;
+    expect(args.jpgPath).toBeUndefined();
+  });
+});

@@ -19,6 +19,8 @@ export interface CullItem {
   id: string;
   /** 写盘用的文件路径（RAW 优先，与 `groupPath` 一致）。 */
   path: string;
+  /** 配对 JPG 路径（issue #206）：写游标判 `.acr` 时两侧都看；无配对时省略。 */
+  jpgPath?: string;
   before: MetaState;
   after: MetaState;
 }

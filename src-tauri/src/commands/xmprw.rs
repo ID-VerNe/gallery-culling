@@ -8,7 +8,7 @@
 //! 照片的连续改动折叠成一次写盘。命令本身仍然**阻塞到真正写完**，所以调用方
 //! 拿到的是磁盘上的事实，不是「已排队」。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tauri::State;
@@ -72,7 +72,9 @@ impl IntentSink for DiskSink {
                     flag: intent.flag.clone(),
                     label: intent.label.clone(),
                     // 刚写完的是评级/旗标/色标，ACR 设置原样保留 → 记磁盘现状即可（issue #200）。
-                    retouched: xmp::is_acr_edited(path),
+                    // 精修判据与扫描/裁决同口径：配对 JPG 旁的 `.acr` 也算（issue #206，
+                    // 复用 #203 落地的 pair-aware 判据）。
+                    retouched: xmp::is_acr_edited_with_pair(path, intent.jpg_path.as_deref()),
                 });
             }
         }
@@ -92,6 +94,7 @@ pub async fn update_rating_flag_cmd(
     label: Option<String>,
     sync_xmp: bool,
     coalesce: Option<bool>,
+    jpg_path: Option<String>,
 ) -> Result<bool, String> {
     let runtime = state.lumen.clone();
     let settings = state.db.load_settings()?;
@@ -115,7 +118,14 @@ pub async fn update_rating_flag_cmd(
         let label = xmp::validate_label(label.as_deref().unwrap_or(""))?.to_string();
 
         // 先记意图（同步、极快），再交给合并队列。进程在这里被杀也不丢。
-        db.enqueue_pending(&file_path, rating, &flag, &label, crate::db::now_secs())?;
+        db.enqueue_pending(
+            &file_path,
+            rating,
+            &flag,
+            &label,
+            crate::db::now_secs(),
+            jpg_path.as_deref(),
+        )?;
 
         let outcome = queue.submit(
             Intent {
@@ -124,6 +134,7 @@ pub async fn update_rating_flag_cmd(
                 flag,
                 label,
                 sync_xmp,
+                jpg_path: jpg_path.map(PathBuf::from),
             },
             coalesce.unwrap_or(true),
         )?;
@@ -223,7 +234,7 @@ mod tests {
         let xmp_path = crate::xmp::get_xmp_path(&photo);
         let db = Database::open(&dir.join("test.db")).expect("临时库");
 
-        db.enqueue_pending(&photo.to_string_lossy(), 4, "pick", "", now_secs())
+        db.enqueue_pending(&photo.to_string_lossy(), 4, "pick", "", now_secs(), None)
             .expect("记意图");
 
         let written = replay_pending(&db, &queue_for(&db)).expect("回放");
@@ -256,7 +267,7 @@ mod tests {
         let xmp_path = crate::xmp::get_xmp_path(&photo);
         let db = Database::open(&dir.join("test.db")).expect("临时库");
 
-        db.enqueue_pending(&photo.to_string_lossy(), 4, "pick", "Red", now_secs())
+        db.enqueue_pending(&photo.to_string_lossy(), 4, "pick", "Red", now_secs(), None)
             .expect("记意图");
 
         let written = replay_pending(&db, &queue_for(&db)).expect("回放");
@@ -285,7 +296,7 @@ mod tests {
         let dir = temp_dir("reject_cursor");
         let photo = dir.join("DSC_0004.ARW");
         let db = Database::open(&dir.join("test.db")).expect("临时库");
-        db.enqueue_pending(&photo.to_string_lossy(), 5, "reject", "", now_secs())
+        db.enqueue_pending(&photo.to_string_lossy(), 5, "reject", "", now_secs(), None)
             .expect("记意图");
 
         replay_pending(&db, &queue_for(&db)).expect("回放");
@@ -303,6 +314,104 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// issue #206：分目录摆放，`.acr` 只落在配对 JPG 旁。写盘后游标必须仍判
+    /// 「已修」；只看主路径会漏掉 JPG 旁的 `.acr`，错值 + 当前 mtime 写进游标后，
+    /// 下次刷新因 mtime 未变直接跳过，徽章一直错到文件被外部再改一次。
+    #[test]
+    fn cursor_retouched_sees_acr_beside_paired_jpg() {
+        let dir = temp_dir("pair_acr_jpg");
+        let raw_dir = dir.join("RAW");
+        let jpg_dir = dir.join("JPG");
+        fs::create_dir_all(&raw_dir).expect("建 RAW 目录");
+        fs::create_dir_all(&jpg_dir).expect("建 JPG 目录");
+        let raw = raw_dir.join("IMG_001.ARW");
+        let jpg = jpg_dir.join("IMG_001.jpg");
+        // 只有配对 JPG 旁有 `.acr`，主路径（RAW）旁没有。
+        fs::write(jpg.with_extension("acr"), b"acr").expect("写 JPG 旁 .acr");
+
+        let db = Database::open(&dir.join("test.db")).expect("临时库");
+        db.enqueue_pending(
+            &raw.to_string_lossy(),
+            4,
+            "pick",
+            "",
+            now_secs(),
+            Some(&jpg.to_string_lossy()),
+        )
+        .expect("记意图");
+
+        replay_pending(&db, &queue_for(&db)).expect("回放");
+
+        let sidecar = crate::xmp::get_xmp_path(&raw).to_string_lossy().to_string();
+        let cursor = db
+            .lookup_xmp_cursor(&sidecar)
+            .expect("查游标")
+            .expect("写盘后必须推进游标");
+        assert!(
+            cursor.retouched,
+            "配对 JPG 旁的 .acr 必须被写盘后游标判成已修"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 防退化：`.acr` 落在主路径旁时，游标仍必须判「已修」。
+    #[test]
+    fn cursor_retouched_true_when_acr_beside_primary() {
+        let dir = temp_dir("pair_acr_raw");
+        let raw = dir.join("IMG_002.ARW");
+        fs::write(raw.with_extension("acr"), b"acr").expect("写主路径旁 .acr");
+
+        let db = Database::open(&dir.join("test.db")).expect("临时库");
+        db.enqueue_pending(&raw.to_string_lossy(), 4, "pick", "", now_secs(), None)
+            .expect("记意图");
+
+        replay_pending(&db, &queue_for(&db)).expect("回放");
+
+        let sidecar = crate::xmp::get_xmp_path(&raw).to_string_lossy().to_string();
+        let cursor = db
+            .lookup_xmp_cursor(&sidecar)
+            .expect("查游标")
+            .expect("写盘后必须推进游标");
+        assert!(cursor.retouched, "主路径旁的 .acr 仍必须判成已修");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 防误报：两侧都没有 `.acr` 时，游标不得把未修判成已修。
+    #[test]
+    fn cursor_retouched_false_without_acr_on_either_side() {
+        let dir = temp_dir("pair_no_acr");
+        let raw_dir = dir.join("RAW");
+        let jpg_dir = dir.join("JPG");
+        fs::create_dir_all(&raw_dir).expect("建 RAW 目录");
+        fs::create_dir_all(&jpg_dir).expect("建 JPG 目录");
+        let raw = raw_dir.join("IMG_003.ARW");
+        let jpg = jpg_dir.join("IMG_003.jpg");
+
+        let db = Database::open(&dir.join("test.db")).expect("临时库");
+        db.enqueue_pending(
+            &raw.to_string_lossy(),
+            4,
+            "pick",
+            "",
+            now_secs(),
+            Some(&jpg.to_string_lossy()),
+        )
+        .expect("记意图");
+
+        replay_pending(&db, &queue_for(&db)).expect("回放");
+
+        let sidecar = crate::xmp::get_xmp_path(&raw).to_string_lossy().to_string();
+        let cursor = db
+            .lookup_xmp_cursor(&sidecar)
+            .expect("查游标")
+            .expect("写盘后必须推进游标");
+        assert!(!cursor.retouched, "两侧都没有 .acr 时不得误报为已修");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// 侧边栏在本次改动之后被外部改过 → 以外部为准，不覆盖，只清掉过期意图。
     #[test]
     fn replay_skips_intent_older_than_external_edit() {
@@ -314,7 +423,7 @@ mod tests {
 
         let db = Database::open(&dir.join("test.db")).expect("临时库");
         // updated_at = 1：远早于侧边栏 mtime，模拟「用户改完，Lightroom 又改过」
-        db.enqueue_pending(&photo.to_string_lossy(), 4, "pick", "", 1)
+        db.enqueue_pending(&photo.to_string_lossy(), 4, "pick", "", 1, None)
             .expect("记意图");
 
         let written = replay_pending(&db, &queue_for(&db)).expect("回放");

@@ -3,7 +3,7 @@
 //! 两条命令共用 `Activity::Refresh` 任务槽：刷新会读、裁决还会写同一批 sidecar，
 //! 与扫描 / 导出 / 批量写盘并发会让「谁最后写」不可预测。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -148,6 +148,7 @@ pub fn resolve_conflicts(
                     flag: state.flag.clone(),
                     label: state.label.clone(),
                     sync_xmp: true,
+                    jpg_path: choice.jpg_path.as_deref().map(PathBuf::from),
                 };
                 // coalesce = false：这是用户点下的一次确定裁决，没有「后续改动」
                 // 需要等，别让防抖窗口白拖 400ms。
@@ -294,7 +295,7 @@ mod tests {
         let photo = dir.join("a.ARW");
         let photo_str = photo.to_string_lossy().to_string();
         let db = Database::open(&dir.join("t.db")).expect("临时库");
-        db.enqueue_pending(&photo_str, 4, "pick", "Red", 100)
+        db.enqueue_pending(&photo_str, 4, "pick", "Red", 100, None)
             .expect("记意图");
 
         let report = resolve_conflicts(
@@ -337,7 +338,7 @@ mod tests {
         let db = Database::open(&dir.join("t.db")).expect("临时库");
         // 磁盘上已经是 5 星 + 蓝标（外部写的）
         xmp::write_xmp(&photo, 5, "none", Some("Blue")).expect("预置侧边栏");
-        db.enqueue_pending(&photo_str, 4, "pick", "", 100)
+        db.enqueue_pending(&photo_str, 4, "pick", "", 100, None)
             .expect("记意图");
 
         let report = resolve_conflicts(
@@ -388,7 +389,7 @@ mod tests {
         let missing = dir.join("no_such_subdir").join("a.ARW");
         let photo_str = missing.to_string_lossy().to_string();
         let db = Database::open(&dir.join("t.db")).expect("临时库");
-        db.enqueue_pending(&photo_str, 4, "pick", "", 100)
+        db.enqueue_pending(&photo_str, 4, "pick", "", 100, None)
             .expect("记意图");
 
         let report = resolve_conflicts(
@@ -433,7 +434,7 @@ mod tests {
         let photo = dir.join("a.ARW");
         let photo_str = photo.to_string_lossy().to_string();
         let db = Database::open(&dir.join("t.db")).expect("临时库");
-        db.enqueue_pending(&photo_str, 4, "keep", "", 100)
+        db.enqueue_pending(&photo_str, 4, "keep", "", 100, None)
             .expect("记意图");
 
         let report = resolve_conflicts(
@@ -481,7 +482,7 @@ mod tests {
         let photo = dir.join("a.ARW");
         let photo_str = photo.to_string_lossy().to_string();
         let db = Database::open(&dir.join("t.db")).expect("临时库");
-        db.enqueue_pending(&photo_str, 4, "keep", "", 100)
+        db.enqueue_pending(&photo_str, 4, "keep", "", 100, None)
             .expect("记意图");
 
         let sink = Arc::new(RecordingSink::default());
@@ -511,7 +512,7 @@ mod tests {
         let photo_str = photo.to_string_lossy().to_string();
         let db = Database::open(&dir.join("t.db")).expect("临时库");
         xmp::write_xmp(&photo, 5, "none", Some("")).expect("预置侧边栏");
-        db.enqueue_pending(&photo_str, 4, "pick", "", 100)
+        db.enqueue_pending(&photo_str, 4, "pick", "", 100, None)
             .expect("记意图");
         let sidecar = xmp::get_xmp_path(&photo).to_string_lossy().to_string();
         db.upsert_xmp_cursor(&XmpCursor {
@@ -629,7 +630,8 @@ mod tests {
             std::fs::write(&photo, b"raw").expect("占位");
             std::fs::write(xmp::get_xmp_path(&photo), HAS_SETTINGS).expect("Adobe 侧边栏");
             let p = photo.to_string_lossy().to_string();
-            db.enqueue_pending(&p, 4, "pick", "", 100).expect("记意图");
+            db.enqueue_pending(&p, 4, "pick", "", 100, None)
+                .expect("记意图");
             paths.push(p);
         }
 
@@ -718,7 +720,8 @@ mod tests {
             xmp::write_xmp(&raw, 4, "none", None).expect("预置侧边栏");
             std::fs::write(jpg.with_extension("acr"), b"ACR\0placeholder").expect("ACR 旁证");
             let p = raw.to_string_lossy().to_string();
-            db.enqueue_pending(&p, 5, "pick", "", 100).expect("记意图");
+            db.enqueue_pending(&p, 5, "pick", "", 100, None)
+                .expect("记意图");
             if action == ConflictAction::UseExternal {
                 use_external_sidecar = xmp::get_xmp_path(&raw).to_string_lossy().to_string();
             }
@@ -799,7 +802,7 @@ mod tests {
         assert_eq!(third.adopted[0].state.rating, 5);
 
         // 4. 本地又改（写盘失败留下意图）→ 外部再改 → 冲突
-        db.enqueue_pending(&photo_str, 2, "pick", "", 200)
+        db.enqueue_pending(&photo_str, 2, "pick", "", 200, None)
             .expect("记意图");
         std::thread::sleep(Duration::from_millis(20));
         xmp::write_xmp(&photo, 1, "none", Some("")).expect("外部再改写");
