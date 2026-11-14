@@ -42,6 +42,7 @@ export function makeGroup(id: string, over: Partial<PhotoGroupInfo> = {}): Photo
     flag: 'none',
     label: '',
     hasXmp: false,
+    hasAcr: false,
     // issue #200：默认「没进过 PS」。绝大多数用例与精修无关，不该被迫逐个声明。
     retouched: false,
     ...over,

@@ -84,6 +84,12 @@ pub struct ExportManifestItem {
     /// 没有水印的照片照样要导出去，只是用户得知道少了什么。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
+    /// 这条宿主文件随导出一并带上了同名 `.acr` 编辑旁车（issue #206）。
+    ///
+    /// `false`（默认）时整个键省掉，保持旧清单形状不变；只有非 RAW 宿主的 `.acr`
+    /// 真的被暂存时才记 `true`。`.acr` 自身另有一条 `copied` 账目行。
+    #[serde(skip_serializing_if = "is_false")]
+    pub copied_acr: bool,
 }
 
 /// 目标目录 == 源文件父目录时的拒绝文案。
@@ -223,18 +229,26 @@ impl ExportStaging {
     ///
     /// 注意：`overwrite` 只影响「要不要暂存」，**不影响取消语义** —— 暂存阶段
     /// 从不碰目标目录里的既有文件，所以取消依然是零污染。
-    fn stage(&mut self, src: &Path, tmp_dir: &Path, target_dir: &Path, overwrite: bool) {
+    /// 返回被推入清单的条目下标（`Some`）；源不存在 / 无文件名时没推条目，返回 `None`。
+    fn stage(
+        &mut self,
+        src: &Path,
+        tmp_dir: &Path,
+        target_dir: &Path,
+        overwrite: bool,
+    ) -> Option<usize> {
         if !src.exists() {
-            return;
+            return None;
         }
         let Some(name) = src.file_name() else {
-            return;
+            return None;
         };
         let dst = target_dir.join(name);
         let src_str = src.to_string_lossy().to_string();
         let dst_str = dst.to_string_lossy().to_string();
         if dst.exists() && !overwrite {
             self.outcome.skipped += 1;
+            let idx = self.manifest.len();
             self.manifest.push(ExportManifestItem {
                 src: src_str,
                 dst: dst_str,
@@ -242,8 +256,9 @@ impl ExportStaging {
                 error: None,
                 watermark: None,
                 warning: None,
+                copied_acr: false,
             });
-            return;
+            return Some(idx);
         }
         let tmp = tmp_dir.join(name);
         match fs::copy(src, &tmp) {
@@ -261,13 +276,16 @@ impl ExportStaging {
                     error: None,
                     watermark: None,
                     warning: None,
+                    copied_acr: false,
                 });
+                Some(manifest_idx)
             }
             Err(e) => {
                 self.outcome.failed.push(ExportFailure {
                     path: src_str.clone(),
                     reason: e.to_string(),
                 });
+                let idx = self.manifest.len();
                 self.manifest.push(ExportManifestItem {
                     src: src_str,
                     dst: dst_str,
@@ -275,7 +293,9 @@ impl ExportStaging {
                     error: Some(e.to_string()),
                     watermark: None,
                     warning: None,
+                    copied_acr: false,
                 });
+                Some(idx)
             }
         }
     }
@@ -311,6 +331,7 @@ impl ExportStaging {
             error: None,
             watermark: applied,
             warning,
+            copied_acr: false,
         });
     }
 
@@ -328,6 +349,7 @@ impl ExportStaging {
             error: Some(reason),
             watermark: None,
             warning: None,
+            copied_acr: false,
         });
     }
 
@@ -632,7 +654,25 @@ pub fn export_items(
 
         if include_jpg {
             if let Some(jpg_path_str) = &item.jpg_path {
-                staging.stage(Path::new(jpg_path_str), &tmp_dir, target_folder, overwrite);
+                let jpg_src = Path::new(jpg_path_str);
+                let jpg_idx = staging.stage(jpg_src, &tmp_dir, target_folder, overwrite);
+                // issue #206：`.acr` 是非 RAW 宿主（JPG）的编辑旁车 —— 宿主被导出且
+                // 同名 `.acr` 在盘上时一并复制，命名随宿主；宿主被跳过 / 缺失时不带旁车。
+                // RAW 不认 `.acr`，旁车不挂在 RAW 分支上。
+                let acr_src = jpg_src.with_extension(crate::xmp::ACR_SIDECAR_EXTENSION);
+                if acr_src.exists() {
+                    let host_copied =
+                        jpg_idx.is_some_and(|i| staging.manifest[i].result == "copied");
+                    if host_copied {
+                        staging.manifest[jpg_idx.unwrap()].copied_acr = true;
+                        staging.stage(&acr_src, &tmp_dir, target_folder, overwrite);
+                    }
+                    // 检查点②：JPG 旁车复制后
+                    if cancel.load(Ordering::SeqCst) {
+                        cancelled = true;
+                        break 'outer;
+                    }
+                }
                 // 检查点②：JPG 复制后
                 if cancel.load(Ordering::SeqCst) {
                     cancelled = true;
@@ -651,7 +691,8 @@ pub fn export_items(
                         cancelled = true;
                         break 'outer;
                     }
-                    // Also copy matching .xmp if exists
+                    // Also copy matching .xmp if exists（RAW 的旁车只有 .xmp；
+                    // `.acr` 不属于 RAW，旁车在 JPG 分支处理，issue #206）。
                     let xmp_src = src.with_extension("xmp");
                     if xmp_src.exists() {
                         staging.stage(&xmp_src, &tmp_dir, target_folder, overwrite);
@@ -796,6 +837,7 @@ pub fn render_export_items(
                 error: None,
                 watermark: None,
                 warning: None,
+                copied_acr: false,
             });
             continue;
         }
@@ -1303,19 +1345,27 @@ mod tests {
     /// 这是两套实现的已知可观察分叉，不是 bug。本表最后一行 pin 住该裁决。
     #[test]
     fn export_expected_file_count_contract_table() {
-        // (有 JPG, 有 RAW, 盘上有 XMP 的 RAW 同名 .xmp, 勾 RAW, 勾 JPG, 期望 exported)
-        // 期望数 = 前端 useExportForm.ts:273-275 规则：raw=勾RAW&&有RAW?1:0,
-        // xmp=勾RAW&&有RAW&&有XMP?1:0, jpg=勾JPG&&有JPG?1:0，三者相加。
-        let cases: &[(bool, bool, bool, bool, bool, usize)] = &[
-            (true, true, true, true, true, 3),   // RAW+XMP+JPG 全在、全勾
-            (true, true, false, true, true, 2),  // 无 XMP
-            (true, true, true, false, true, 1),  // 不勾 RAW 时 XMP 跟 RAW 一起消失
-            (true, false, false, true, true, 1), // 无 RAW 的组：只剩 JPG（XMP 只跟 RAW 走）
-            (false, true, true, true, false, 2), // 无 JPG：RAW + XMP
-            (true, true, true, true, false, 2),  // 不勾 JPG：RAW + XMP
+        // (有 JPG, 有 RAW, 盘上有 RAW 同名 .xmp, 盘上有宿主同名 .acr, 勾 RAW, 勾 JPG, 期望 exported)
+        // 期望数 = 前端 useExportForm.ts 规则：raw=勾RAW&&有RAW?1:0,
+        // xmp=勾RAW&&有RAW&&有XMP?1:0, jpg=勾JPG&&有JPG?1:0,
+        // acr=勾JPG&&有JPG&&有Acr?1:0，四者相加。
+        // issue #206：`.acr` 只跟非 RAW 宿主（JPG）；RAW 旁误放的 `.acr` 不复制。
+        let cases: &[(bool, bool, bool, bool, bool, bool, usize)] = &[
+            (true, true, true, false, true, true, 3), // RAW+XMP+JPG 全在、全勾
+            (true, true, false, false, true, true, 2), // 无 XMP
+            (true, true, true, false, false, true, 1), // 不勾 RAW 时 XMP 跟 RAW 一起消失
+            (true, false, false, false, true, true, 1), // 无 RAW 的组：只剩 JPG（XMP 只跟 RAW 走）
+            (false, true, true, false, true, false, 2), // 无 JPG：RAW + XMP
+            (true, true, true, false, true, false, 2), // 不勾 JPG：RAW + XMP
+            (true, true, false, true, true, true, 3), // RAW + JPG + JPG 旁 .acr
+            (true, false, false, true, false, true, 2), // JPG + JPG 旁 .acr
+            (false, true, false, true, true, false, 1), // RAW 旁 .acr 是异常旁车，不复制
+            (true, false, false, false, false, true, 1), // JPG 无 .acr
         ];
-        for (i, &(_has_jpg, has_raw, xmp_on_disk, include_raw, include_jpg, expected)) in
-            cases.iter().enumerate()
+        for (
+            i,
+            &(_has_jpg, has_raw, xmp_on_disk, acr_on_disk, include_raw, include_jpg, expected),
+        ) in cases.iter().enumerate()
         {
             let tag = format!("contract_{}", i);
             let src_dir = unique_dir(&format!("{}_src", tag));
@@ -1338,6 +1388,17 @@ mod tests {
             } else {
                 None
             };
+            // `.acr` 跟宿主：有 JPG 就落 JPG 旁；无 JPG（RAW-only）落 RAW 旁，
+            // 用于钉死「RAW 不认 .acr」这条异常分支。
+            if acr_on_disk {
+                let acr_host = jpg_path
+                    .as_deref()
+                    .map(Path::new)
+                    .or(raw_path.as_deref().map(Path::new));
+                if let Some(host) = acr_host {
+                    fs::write(host.with_extension("acr"), b"ACR").unwrap();
+                }
+            }
             let items = vec![ExportItem {
                 base_name: base,
                 jpg_path,
@@ -1397,6 +1458,168 @@ mod tests {
             "以盘为准：快照 hasXmp=false 但 .xmp 在盘上，仍导出 3 个"
         );
         assert!(dst_dir.join("IMG_0011.xmp").exists(), "分叉时 XMP 必须落地");
+
+        let _ = fs::remove_dir_all(&src_dir);
+        let _ = fs::remove_dir_all(&dst_dir);
+    }
+
+    /// issue #206（口径半壁）：`.acr` 是非 RAW 宿主（JPG）的编辑旁车。
+    /// 宿主 JPG 被导出、同名 `.acr` 在盘上时一并复制，命名随宿主，`exported` +1。
+    #[test]
+    fn export_jpg_acr_copied_alongside_host() {
+        let src_dir = unique_dir("acr_jpg_src");
+        let dst_dir = unique_dir("acr_jpg_dst");
+        let jpg = src_dir.join("IMG_2001.jpg");
+        let acr = src_dir.join("IMG_2001.acr");
+        fs::write(&jpg, b"JPG-BYTES").unwrap();
+        fs::write(&acr, b"ACR-BYTES").unwrap();
+
+        let items = vec![item_with_jpg(&jpg)];
+        let no_cancel = AtomicBool::new(false);
+        let outcome = export_items(
+            items,
+            &dst_dir,
+            false,
+            true,
+            false,
+            &no_cancel,
+            |_, _, _| {},
+        )
+        .expect("不应报错");
+
+        assert_eq!(outcome.exported, 2, "宿主 JPG + 同名 .acr 各计一个文件");
+        assert!(outcome.failed.is_empty(), "不应有失败");
+        let mut entries = dir_entries(&dst_dir);
+        entries.retain(|n| n != EXPORT_MANIFEST_NAME);
+        assert_eq!(
+            entries,
+            vec!["IMG_2001.acr".to_string(), "IMG_2001.jpg".to_string()]
+        );
+        assert_eq!(
+            fs::read(dst_dir.join("IMG_2001.acr")).unwrap(),
+            b"ACR-BYTES",
+            ".acr 内容必须原样落地"
+        );
+
+        let manifest = read_manifest(&dst_dir);
+        let rows = manifest["items"].as_array().unwrap();
+        let jpg_row = rows
+            .iter()
+            .find(|it| it["dst"].as_str().unwrap().ends_with(".jpg"))
+            .expect("JPG 宿主账目行");
+        assert_eq!(jpg_row["copiedAcr"], serde_json::Value::Bool(true));
+
+        let _ = fs::remove_dir_all(&src_dir);
+        let _ = fs::remove_dir_all(&dst_dir);
+    }
+
+    /// issue #206：JPG 宿主旁没有 `.acr` 时只导出 JPG，清单不出现 `copiedAcr` 键。
+    #[test]
+    fn export_jpg_without_acr_copies_only_jpg() {
+        let src_dir = unique_dir("acr_none_src");
+        let dst_dir = unique_dir("acr_none_dst");
+        let jpg = src_dir.join("IMG_2002.jpg");
+        fs::write(&jpg, b"JPG-BYTES").unwrap();
+
+        let items = vec![item_with_jpg(&jpg)];
+        let no_cancel = AtomicBool::new(false);
+        let outcome = export_items(
+            items,
+            &dst_dir,
+            false,
+            true,
+            false,
+            &no_cancel,
+            |_, _, _| {},
+        )
+        .expect("不应报错");
+
+        assert_eq!(outcome.exported, 1, "无 .acr 时只计 JPG 本体");
+        assert!(outcome.failed.is_empty());
+        let mut entries = dir_entries(&dst_dir);
+        entries.retain(|n| n != EXPORT_MANIFEST_NAME);
+        assert_eq!(entries, vec!["IMG_2002.jpg".to_string()]);
+
+        let manifest = read_manifest(&dst_dir);
+        let rows = manifest["items"].as_array().unwrap();
+        assert!(
+            rows.iter().all(|it| it.get("copiedAcr").is_none()),
+            "本批未涉及 .acr，清单不得出现 copiedAcr 键"
+        );
+
+        let _ = fs::remove_dir_all(&src_dir);
+        let _ = fs::remove_dir_all(&dst_dir);
+    }
+
+    /// issue #206：RAW 不认 `.acr`。人为在 RAW 旁放同名 `.acr`（异常场景），
+    /// 导出时不得把它当成 RAW 旁车复制出去。
+    #[test]
+    fn export_raw_side_acr_is_not_copied() {
+        let src_dir = unique_dir("acr_raw_src");
+        let dst_dir = unique_dir("acr_raw_dst");
+        let raw = src_dir.join("IMG_2003.NEF");
+        let raw_acr = src_dir.join("IMG_2003.acr");
+        fs::write(&raw, b"RAW-BYTES").unwrap();
+        fs::write(&raw_acr, b"ACR-BYTES").unwrap();
+
+        let items = vec![item_with_raw("IMG_2003", &raw)];
+        let no_cancel = AtomicBool::new(false);
+        let outcome = export_items(
+            items,
+            &dst_dir,
+            true,
+            false,
+            false,
+            &no_cancel,
+            |_, _, _| {},
+        )
+        .expect("不应报错");
+
+        assert_eq!(outcome.exported, 1, "RAW 旁的 .acr 不复制，只计 RAW 本体");
+        assert!(outcome.failed.is_empty());
+        let mut entries = dir_entries(&dst_dir);
+        entries.retain(|n| n != EXPORT_MANIFEST_NAME);
+        assert_eq!(entries, vec!["IMG_2003.NEF".to_string()]);
+        assert!(
+            !dst_dir.join("IMG_2003.acr").exists(),
+            "RAW 旁 .acr 不得落地"
+        );
+
+        let _ = fs::remove_dir_all(&src_dir);
+        let _ = fs::remove_dir_all(&dst_dir);
+    }
+
+    /// issue #206：`.acr` 在盘上但宿主文件不存在（孤儿旁车）→ 不导出、不报错。
+    #[test]
+    fn export_orphan_acr_without_host_is_skipped() {
+        let src_dir = unique_dir("acr_orphan_src");
+        let dst_dir = unique_dir("acr_orphan_dst");
+        let orphan_acr = src_dir.join("IMG_2004.acr");
+        fs::write(&orphan_acr, b"ACR-BYTES").unwrap();
+        let missing_jpg = src_dir.join("IMG_2004.jpg");
+
+        let items = vec![ExportItem {
+            base_name: "IMG_2004".to_string(),
+            jpg_path: Some(missing_jpg.to_string_lossy().to_string()),
+            raw_path: None,
+        }];
+        let no_cancel = AtomicBool::new(false);
+        let outcome = export_items(
+            items,
+            &dst_dir,
+            false,
+            true,
+            false,
+            &no_cancel,
+            |_, _, _| {},
+        )
+        .expect("宿主缺失不是错误");
+
+        assert_eq!(outcome.exported, 0);
+        assert!(outcome.failed.is_empty(), "孤儿 .acr 不得计入失败");
+        let mut entries = dir_entries(&dst_dir);
+        entries.retain(|n| n != EXPORT_MANIFEST_NAME);
+        assert!(entries.is_empty());
 
         let _ = fs::remove_dir_all(&src_dir);
         let _ = fs::remove_dir_all(&dst_dir);

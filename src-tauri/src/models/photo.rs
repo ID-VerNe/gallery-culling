@@ -62,6 +62,11 @@ pub struct PhotoGroupInfo {
     /// 唯一真值是 XMP 的 `xmp:Label`（Lightroom 同一字段，双向可见）。
     pub label: String,
     pub has_xmp: bool,
+    /// 配对 JPG（或 JPG-only 宿主）旁有没有同名 `.acr` 编辑旁车（issue #206）。
+    ///
+    /// 与 `has_xmp` 独立：`.acr` 只跟非 RAW 宿主复制；RAW 旁误放的 `.acr` 不计入。
+    #[serde(default)]
+    pub has_acr: bool,
     /// 是否经 ACR / Photoshop 精修过（issue #200）：sidecar 带 `crs:HasSettings="True"`，
     /// 或照片旁存在同名 `.acr`。与 `edited`（Luminar 往返产物）是两件事。
     #[serde(default)]

@@ -263,7 +263,8 @@ export function useExportForm({
 
   /**
    * 预计落盘文件数 —— 逐条对齐后端 `export_items` 的复制逻辑：
-   * 勾 RAW 且该组有 RAW → 1；该 RAW 旁存在 XMP → 再 +1；勾 JPG 且该组有 JPG → +1。
+   * 勾 RAW 且该组有 RAW → 1；该 RAW 旁存在 XMP → 再 +1；勾 JPG 且该组有 JPG → +1；
+   * JPG 宿主旁存在同名 `.acr` → 再 +1（issue #206，旁车只跟非 RAW 宿主）。
    *
    * 成片模式一图一文件，等于候选组数（渲不出的是 failed，不在预计量里承诺）。
    */
@@ -273,7 +274,8 @@ export function useExportForm({
       const raw = includeRaw && g.raw ? 1 : 0;
       const xmp = includeRaw && g.raw && g.hasXmp ? 1 : 0;
       const jpg = includeJpg && g.jpg ? 1 : 0;
-      return n + raw + xmp + jpg;
+      const acr = includeJpg && g.jpg && g.hasAcr ? 1 : 0;
+      return n + raw + xmp + jpg + acr;
     }, 0);
   }, [mode, candidates, includeRaw, includeJpg]);
 

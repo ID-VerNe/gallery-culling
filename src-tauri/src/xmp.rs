@@ -37,14 +37,28 @@ pub fn get_xmp_path(image_path: &Path) -> PathBuf {
     image_path.with_extension("xmp")
 }
 
-/// Check if an .xmp or .acr sidecar exists
-pub fn check_sidecar_exists(image_path: &Path) -> bool {
-    let xmp = image_path.with_extension("xmp");
-    if xmp.exists() {
-        return true;
-    }
-    let acr = image_path.with_extension("acr");
-    acr.exists()
+/// `.acr` 旁车扩展名（issue #206）。旁车命名规则唯一归属在本模块。
+pub const ACR_SIDECAR_EXTENSION: &str = "acr";
+
+/// 宿主路径旁的同名 `.xmp` 侧边栏是否存在。
+pub fn xmp_sidecar_exists(image_path: &Path) -> bool {
+    image_path.with_extension("xmp").exists()
+}
+
+/// 宿主路径旁的同名 `.acr` 编辑旁车是否存在。
+///
+/// `.acr` 只属于非 RAW 宿主（JPG/TIFF 等）；RAW 不认 `.acr`，调用方必须先按
+/// 扩展名判宿主类型，RAW 旁误放的 `.acr` 不得当成有效旁车（issue #206）。
+pub fn acr_sidecar_exists(image_path: &Path) -> bool {
+    image_path.with_extension(ACR_SIDECAR_EXTENSION).exists()
+}
+
+/// Check if a recognizable sidecar exists next to the image.
+///
+/// 宿主类型由调用方按扩展名给出：RAW 宿主只认 `.xmp`；非 RAW 宿主认 `.xmp` 与
+/// `.acr`（issue #206）。命名规则只在这里写一遍。
+pub fn check_sidecar_exists(image_path: &Path, is_raw: bool) -> bool {
+    xmp_sidecar_exists(image_path) || (!is_raw && acr_sidecar_exists(image_path))
 }
 
 /// 解析 `xmp:Rating` -> `(是否淘汰, 星级)`。

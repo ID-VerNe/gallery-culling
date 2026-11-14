@@ -20,7 +20,7 @@ import { parseQuery } from '../utils/queryMatch';
 // `mk('X', { xmp: true }) -> 3` 的断言能抓 XMP 分支。
 const mk = (
   baseName: string,
-  opts: { flag?: CullFlag; rating?: number; dir?: string; raw?: boolean; xmp?: boolean } = {},
+  opts: { flag?: CullFlag; rating?: number; dir?: string; raw?: boolean; xmp?: boolean; acr?: boolean } = {},
 ): PhotoGroupInfo => {
   const dir = opts.dir ?? 'D:/shoot/JPG';
   const hasRaw = opts.raw !== false;
@@ -28,6 +28,7 @@ const mk = (
     rating: opts.rating ?? 0,
     flag: opts.flag ?? 'none',
     hasXmp: opts.xmp ?? false,
+    hasAcr: opts.acr ?? false,
     status: hasRaw ? 'COMPLETE' : 'JPG_ONLY',
     jpg: makeFile(`${dir}/${baseName}.jpg`),
     // raw 是**可选**字段：没有 RAW 的组必须真的不带这个键（而不是 null），
@@ -359,18 +360,22 @@ describe('expectedFileCount 跨语言契约（#132）', () => {
   // 与后端 export.rs 的 `export_expected_file_count_contract_table` 同一张表，
   // 两边各自断言同一组期望数（不做跨语言代码生成）。 steady 下扫描快照
   // `hasXmp` == 落盘 `exists()` 时，前端预测必须等于后端 `exported`。
-  // 期望数 = useExportForm.ts:273-275 规则：
+  // 期望数 = useExportForm.ts 规则：
   // raw=includeRaw&&hasRaw?1:0, xmp=includeRaw&&hasRaw&&hasXmp?1:0,
-  // jpg=includeJpg&&hasJpg?1:0，三者相加（hasJpg 在 mk 夹具里恒真）。
+  // jpg=includeJpg&&hasJpg?1:0, acr=includeJpg&&hasJpg&&hasAcr?1:0，四者相加。
+  // issue #206：`.acr` 只跟 JPG 宿主；不勾 JPG 时 `.acr` 一起消失。
   const cases = [
-    { name: '有 XMP、全勾 → 3', xmp: true, filter: 'all', includeRaw: true, includeJpg: true, expected: 3 },
-    { name: '无 XMP、全勾 → 2', xmp: false, filter: 'all', includeRaw: true, includeJpg: true, expected: 2 },
-    { name: '不勾 RAW 时 XMP 跟 RAW 一起消失 → 1', xmp: true, filter: 'all', includeRaw: false, includeJpg: true, expected: 1 },
-    { name: '不勾 JPG → RAW + XMP = 2', xmp: true, filter: 'all', includeRaw: true, includeJpg: false, expected: 2 },
+    { name: '有 XMP、全勾 → 3', xmp: true, acr: false, filter: 'all', includeRaw: true, includeJpg: true, expected: 3 },
+    { name: '无 XMP、全勾 → 2', xmp: false, acr: false, filter: 'all', includeRaw: true, includeJpg: true, expected: 2 },
+    { name: '不勾 RAW 时 XMP 跟 RAW 一起消失 → 1', xmp: true, acr: false, filter: 'all', includeRaw: false, includeJpg: true, expected: 1 },
+    { name: '不勾 JPG → RAW + XMP = 2', xmp: true, acr: false, filter: 'all', includeRaw: true, includeJpg: false, expected: 2 },
+    { name: '有 .acr、全勾 → RAW + JPG + .acr = 3', xmp: false, acr: true, filter: 'all', includeRaw: true, includeJpg: true, expected: 3 },
+    { name: '无 .acr、全勾 → RAW + JPG = 2', xmp: false, acr: false, filter: 'all', includeRaw: true, includeJpg: true, expected: 2 },
+    { name: '不勾 JPG 时 .acr 跟 JPG 一起消失 → RAW + XMP = 2', xmp: true, acr: true, filter: 'all', includeRaw: true, includeJpg: false, expected: 2 },
   ] as const;
 
-  it.each(cases)('$name', ({ xmp, filter, includeRaw, includeJpg, expected }) => {
-    const withCase = [mk('K', { rating: 5, xmp })];
+  it.each(cases)('$name', ({ xmp, acr, filter, includeRaw, includeJpg, expected }) => {
+    const withCase = [mk('K', { rating: 5, xmp, acr })];
     const { result } = renderHook(() =>
       useExportForm({ groups: withCase, lumenAvailable: true }),
     );

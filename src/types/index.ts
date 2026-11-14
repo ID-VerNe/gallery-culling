@@ -77,6 +77,13 @@ export interface PhotoGroupInfo {
   label: string;
   hasXmp: boolean;
   /**
+   * 配对 JPG（或 JPG-only 宿主）旁有没有同名 `.acr` 编辑旁车（issue #206）。
+   *
+   * 与 `hasXmp` 独立：`.acr` 只跟非 RAW 宿主复制；RAW 旁误放的 `.acr` 不计入。
+   * 旧快照 / 旧测试夹具缺键时按 `false` 处理。
+   */
+  hasAcr?: boolean;
+  /**
    * 是否经 ACR / Photoshop 精修过（issue #200）。
    *
    * 判据见后端 `xmp::is_acr_edited`：sidecar 里有 `crs:HasSettings="True"`
@@ -479,6 +486,8 @@ export interface AlbumResolvedDoc {
   jpgSize: number;
   jpgMtime: number;
   hasXmp: boolean;
+  /** 宿主旁有没有同名 `.acr` 编辑旁车（issue #206）；缺省 `false`。 */
+  hasAcr?: boolean;
   /** 是否经 ACR / Photoshop 精修（issue #200）。判据同 `PhotoGroupInfo.retouched`。 */
   retouched: boolean;
   /** XMP 里的调色基线（调色面板靠它，缺了会把真实调色覆盖成 0）。 */
