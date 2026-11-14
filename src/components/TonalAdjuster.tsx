@@ -260,6 +260,14 @@ export const TonalAdjuster: React.FC<TonalAdjusterProps> = ({
       {/* Sliders Container —— 纯展示子组件（issue #115 · PA），只传 tone/onChange */}
       <ToneSliders tone={tone} onChange={onChange} />
 
+      {/* issue #211（#208 PC）：色温/色调是 App 内 ±100 相对偏移，ACR 不识别
+          gc:Temperature2012 / gc:Tint2012 私有属性，也不映射 crs:Temperature /
+          crs:Tint 绝对值。常驻静态说明，语义独立于「写盘失败 / 两侧分歧」；
+          静态说明不占 live region，也不挂在按钮 title 上（disabled 按钮不可聚焦）。 */}
+      <p className="text-[10px] leading-[1.5] text-white/60">
+        色温、色调仅在本 App 内生效，不会同步到 ACR（Adobe Camera Raw）。
+      </p>
+
       {/* 分歧提示：两侧真值不一致，明确告知而不是静默取一个 */}
       {divergent && (
         <p

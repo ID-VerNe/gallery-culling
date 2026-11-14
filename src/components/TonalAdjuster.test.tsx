@@ -112,6 +112,39 @@ describe('TonalAdjuster —— 两侧调色分歧', () => {
   });
 });
 
+describe('TonalAdjuster —— ACR 互操作提示（issue #211）', () => {
+  const ACR_HINT = /色温、色调仅在本 App 内生效，不会同步到 ACR/;
+
+  it('常态下提示常驻可见：是页面上的 <p>，不是按钮 title / tooltip，也不占 live region', () => {
+    renderAdjuster();
+
+    const hint = screen.getByText(ACR_HINT);
+    expect(hint).toBeInTheDocument();
+    expect(hint.tagName).toBe('P');
+    expect(hint).not.toHaveAttribute('role');
+    expect(hint).not.toHaveAttribute('aria-live');
+  });
+
+  it('divergent=true 时提示与分歧块并存，不被顶替', () => {
+    renderAdjuster({ divergent: true });
+
+    expect(screen.getByText(ACR_HINT)).toBeInTheDocument();
+    expect(
+      screen.getByText(/XMP 与 LUMEN RAW 的调色不一致/),
+    ).toBeInTheDocument();
+  });
+
+  it('自动保存失败态下提示仍在，不被 alert 块顶替', () => {
+    renderAdjuster({
+      autoSaveEnabled: true,
+      autoSaveError: '磁盘只读',
+    });
+
+    expect(screen.getByText(ACR_HINT)).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+  });
+});
+
 describe('TonalAdjuster —— LUMEN RAW 预设', () => {
   const presets = ['Neutral', 'Clarity Boost', 'Portra Warm'];
   const presetSelect = () => screen.getByLabelText('LUMEN RAW 预设');
