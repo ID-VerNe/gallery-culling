@@ -48,3 +48,7 @@ node_modules__pnpm_backup/
 
 # E2E generated fixtures + tauri dev log (recreated on every e2e run)
 e2e/.tmp/
+
+# Local evidence / scratch (ACR/XMP probes, test copies, generated JSON).
+# These are repro artifacts, not product inputs; never commit them.
+work/

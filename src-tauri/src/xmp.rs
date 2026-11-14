@@ -84,6 +84,19 @@ fn extract_f32(content: &str, tag_name: &str) -> Option<f32> {
     extract_tag_value(content, tag_name).and_then(|s| s.parse::<f32>().ok())
 }
 
+/// 只取元素形式的 `<tag>value</tag>`，不匹配 `tag="value"` 属性。
+///
+/// 读侧需要区分「App 旧块里的相对 tint 元素」与「ACR 主块里的绝对 tint 属性」；
+/// `extract_tag_value` 的元素优先会让前者胜出，但后者在没有元素时仍会被误读。
+fn extract_element_f32(content: &str, tag_name: &str) -> Option<f32> {
+    let open_tag = format!("<{}>", tag_name);
+    let close_tag = format!("</{}>", tag_name);
+    let start = content.find(&open_tag)?;
+    let after = &content[start + open_tag.len()..];
+    let end = after.find(&close_tag)?;
+    after[..end].trim().parse::<f32>().ok()
+}
+
 /// Extract tag value from XML string (handles both <tag>value</tag> and tag="value")
 fn extract_tag_value(content: &str, tag_name: &str) -> Option<String> {
     let open_tag = format!("<{}>", tag_name);
@@ -116,6 +129,7 @@ pub fn read_xmp_full(xmp_path: &Path) -> Option<XmpMetadata> {
         return None;
     }
     let content = fs::read_to_string(xmp_path).ok()?;
+    let has_acr = has_acr_settings_block(&content);
 
     // ACR 精修痕迹（issue #200）：只有 Adobe 写 Camera Raw 设置时才带 HasSettings 属性。
     // 属性值大小写随版本可能是 `True` / `true`，两种都认。
@@ -140,14 +154,29 @@ pub fn read_xmp_full(xmp_path: &Path) -> Option<XmpMetadata> {
     let exposure = extract_f32(&content, "crs:Exposure2012");
     let highlights = extract_f32(&content, "crs:Highlights2012");
     let shadows = extract_f32(&content, "crs:Shadows2012");
-    let tint = extract_f32(&content, "crs:Tint");
-    let contrast = extract_f32(&content, "crs:Contrast2012");
-    // temperature 单独处理：2012 标签缺失时回退旧标签，且**必须**过滤量程。
-    // 历史宿主写下的绝对色温（5350/5500）不是滑杆值，灌进去等于复现那个 bug。
-    let temperature = extract_f32(&content, "crs:Temperature2012").or_else(|| {
-        extract_f32(&content, "crs:Temperature")
-            .filter(|v| (-100.0..=100.0).contains(v))
+    // ACR 的 `crs:Tint` 是绝对色调（典型 +16，可到 -100..100 但语义是相机基准），
+    // App 的 tint 是相对 ±100 偏移。ACR settings 块存在时，只有 App 自己写的
+    // `gc:Tint2012` 或旧 App 块里的 `<crs:Tint>` 元素能当相对值；ACR 的 tint 属性
+    // 绝不能灌进滑杆（issue #208 R2）。
+    let tint = extract_f32(&content, "gc:Tint2012").or_else(|| {
+        if has_acr {
+            // 只认本方块里的旧元素；ACR 主块里同名的元素/属性都是 ACR 绝对色调。
+            find_our_block_range(&content)
+                .and_then(|(start, end)| extract_element_f32(&content[start..end], "crs:Tint"))
+        } else {
+            extract_f32(&content, "crs:Tint")
+        }
     });
+    let contrast = extract_f32(&content, "crs:Contrast2012");
+    // temperature 单独处理：App 私有值优先（ACR 块里的 gc:Temperature2012），
+    // 再回退 2012 标签；最后回退旧标签，且**必须**过滤量程。
+    // 历史宿主写下的绝对色温（5350/5500）不是滑杆值，灌进去等于复现那个 bug。
+    let temperature = extract_f32(&content, "gc:Temperature2012")
+        .or_else(|| extract_f32(&content, "crs:Temperature2012"))
+        .or_else(|| {
+            extract_f32(&content, "crs:Temperature")
+                .filter(|v| (-100.0..=100.0).contains(v))
+        });
 
     Some(XmpMetadata {
         rating,
@@ -214,6 +243,22 @@ const OURS_NAMESPACES: [(/* prefix */ &str, /* uri */ &str); 4] = [
     ("crs", "http://ns.adobe.com/camera-raw-settings/1.0/"),
 ];
 
+/// Adobe Camera Raw settings 命名空间（`crs`）。
+///
+/// 只用来认“这是 ACR 自己写的 settings 块”。不能把“含 crs:”当判据：
+/// Lightroom 主块也会声明 crs，但只有带 `crs:Version` / `crs:ProcessVersion`
+/// 的块才是 ACR 的 settings 封装（见 `is_acr_settings_block`）。
+const ACR_NS_URI: &str = "http://ns.adobe.com/camera-raw-settings/1.0/";
+
+/// App 私有相对色温/色调的命名空间。
+///
+/// ACR 不认识它，但实测（ACR 18.3.1，P1）会把未知命名空间属性原样保留；
+/// 因此把“App 相对值”写在这里，既不会和 ACR 的绝对 `crs:Temperature` /
+/// `crs:Tint` 抢语义，也不会在 ACR 点“完成”后随独立 App 块一起被删。
+const GC_NS_PREFIX: &str = "gc";
+const GC_NS_URI: &str = "https://galleryculling.app/ns/1.0";
+
+
 /// 本方块里 `xmlns:xxx="URI"` 声明行（顺序与 `OURS_NAMESPACES` 一致）。
 ///
 /// 缩进与 `\x20` 转义沿用历史输出：写出的字节必须与既有侧边栏逐字节一致，
@@ -275,11 +320,224 @@ pub fn validate_label(label: &str) -> Result<&'static str, String> {
         })
 }
 
+/// 一个 `rdf:Description` 开标签是否是 ACR 的 settings 块。
+///
+/// 判据必须窄：Lightroom 主块也会声明 `crs`，但它没有 `crs:Version` /
+/// `crs:ProcessVersion`，不能把调色字段合并进去（否则会吞掉 LR 的 develop 数据，
+/// 并让 `lightroom_main_block_with_all_ns_is_not_replaced` 从“追加两块”变成“替换一块”）。
+fn is_acr_settings_block(desc: &str) -> bool {
+    desc.contains(&format!("xmlns:crs=\"{}\"", ACR_NS_URI))
+        && (desc.contains("crs:Version=\"") || desc.contains("crs:ProcessVersion=\""))
+}
+
+/// 找到 ACR settings 块的**开标签区间**（含结尾 `>`）。
+///
+/// 只返回开标签而不是整块：合并只需要改属性；ACR 块内部还有 ToneCurve 等嵌套
+/// `rdf:Description`，用“第一个 `</rdf:Description>`”当块尾会截断主块。
+fn find_acr_settings_block_open(doc: &str) -> Option<(usize, usize)> {
+    let mut cursor = 0usize;
+    while let Some(rel) = doc[cursor..].find("<rdf:Description") {
+        let start = cursor + rel;
+        let open_end = start + doc[start..].find('>')?;
+        let end = open_end + 1;
+        if is_acr_settings_block(&doc[start..end]) {
+            return Some((start, end));
+        }
+        cursor = end;
+    }
+    None
+}
+
+fn has_acr_settings_block(doc: &str) -> bool {
+    find_acr_settings_block_open(doc).is_some()
+}
+
+/// 找到 ACR settings 块的完整区间（含嵌套 `rdf:Description`）。
+///
+/// 合并属性只需要开标签；但若 ACR 块里已经有元素形式的同名调色字段，
+/// 只加属性会留下两处值，读侧元素优先会读回旧值。这里按标签嵌套深度找块尾，
+/// 只用于删除这几个直接子元素，不用于替换整块。
+fn find_acr_settings_block_range(doc: &str) -> Option<(usize, usize)> {
+    let (start, open_end) = find_acr_settings_block_open(doc)?;
+    let mut depth = 1usize;
+    let mut cursor = open_end;
+    while depth > 0 {
+        let next_open = doc[cursor..]
+            .find("<rdf:Description")
+            .map(|rel| (cursor + rel, true));
+        let next_close = doc[cursor..]
+            .find("</rdf:Description>")
+            .map(|rel| (cursor + rel, false));
+        let (pos, is_open) = match (next_open, next_close) {
+            (Some(open), Some(close)) => {
+                if open.0 <= close.0 {
+                    open
+                } else {
+                    close
+                }
+            }
+            (Some(open), None) => open,
+            (None, Some(close)) => close,
+            (None, None) => return None,
+        };
+        if is_open {
+            let tag_end = pos + doc[pos..].find('>')?;
+            let tag = &doc[pos..=tag_end];
+            let self_closing = tag.trim_end_matches('>').trim_end().ends_with('/');
+            if !self_closing {
+                depth += 1;
+            }
+            cursor = tag_end + 1;
+        } else {
+            depth -= 1;
+            cursor = pos + "</rdf:Description>".len();
+            if depth == 0 {
+                return Some((start, cursor));
+            }
+        }
+    }
+    None
+}
+
+/// 从区间内删除指定 tag 的元素形式（只用于 ACR 块里的 4 个相对参数）。
+fn remove_elements_in_range(doc: &str, start: usize, end: usize, tags: &[&str]) -> String {
+    let mut out = String::with_capacity(doc.len());
+    out.push_str(&doc[..start]);
+    let mut cursor = start;
+    loop {
+        let next = tags
+            .iter()
+            .filter_map(|tag| {
+                let open = format!("<{}>", tag);
+                doc[cursor..end].find(&open).map(|rel| (cursor + rel, *tag))
+            })
+            .min_by_key(|(pos, _)| *pos);
+        let Some((open_start, tag)) = next else {
+            break;
+        };
+        let value_start = open_start + tag.len() + 2; // "<" + tag + ">"
+        let close = format!("</{}>", tag);
+        let Some(close_rel) = doc[value_start..end].find(&close) else {
+            break;
+        };
+        out.push_str(&doc[cursor..open_start]);
+        cursor = value_start + close_rel + close.len();
+    }
+    out.push_str(&doc[cursor..]);
+    out
+}
+
+/// 在 `rdf:Description` 开标签的 `>` 前插入一个属性行。
+fn insert_attribute(open_tag: &str, attr: &str) -> String {
+    let Some(close) = open_tag.rfind('>') else {
+        return open_tag.to_string();
+    };
+    // 防御自闭合标签：`<rdf:Description .../>` 要把属性插在 `/` 前。
+    let insert_at = if open_tag[..close].trim_end().ends_with('/') {
+        close - 1
+    } else {
+        close
+    };
+    format!(
+        "{}\n   {}{}",
+        &open_tag[..insert_at],
+        attr,
+        &open_tag[insert_at..]
+    )
+}
+
+/// 替换开标签里已有属性值；不存在才插入。只匹配属性形式，不碰子元素。
+fn set_attribute(open_tag: &str, name: &str, value: &str) -> String {
+    let prefix = format!("{}=\"", name);
+    if let Some(start) = open_tag.find(&prefix) {
+        let value_start = start + prefix.len();
+        if let Some(end_rel) = open_tag[value_start..].find('"') {
+            let value_end = value_start + end_rel;
+            return format!(
+                "{}{}{}",
+                &open_tag[..value_start],
+                value,
+                &open_tag[value_end..]
+            );
+        }
+    }
+    insert_attribute(open_tag, &format!("{}=\"{}\"", name, value))
+}
+
+/// 把 4 个相对参数 + App 私有色温/色调合并进已有 ACR settings 块。
+///
+/// - 4 个相对参数用 Adobe 的 `crs:*2012` 属性，ACR 直接读；
+/// - 色温/色调用 `gc:Temperature2012` / `gc:Tint2012`，ACR 不读、但会保留；
+/// - ACR 自己的 `crs:Temperature` / `crs:Tint` 一律不碰。
+fn merge_acr_tone(existing: &str, meta: &XmpMetadata) -> Option<String> {
+    let mut attrs: Vec<(&'static str, String)> = Vec::new();
+    if let Some(v) = meta.exposure {
+        attrs.push(("crs:Exposure2012", format!("{:+.2}", v)));
+    }
+    if let Some(v) = meta.contrast {
+        attrs.push(("crs:Contrast2012", format!("{:+.0}", v)));
+    }
+    if let Some(v) = meta.highlights {
+        attrs.push(("crs:Highlights2012", format!("{:+.0}", v)));
+    }
+    if let Some(v) = meta.shadows {
+        attrs.push(("crs:Shadows2012", format!("{:+.0}", v)));
+    }
+    if let Some(v) = meta.temperature {
+        attrs.push((
+            "gc:Temperature2012",
+            format!("{:+.0}", v.clamp(-100.0, 100.0)),
+        ));
+    }
+    if let Some(v) = meta.tint {
+        attrs.push(("gc:Tint2012", format!("{:+.0}", v.clamp(-100.0, 100.0))));
+    }
+    if attrs.is_empty() {
+        return Some(existing.to_string());
+    }
+
+    // 只加属性会留下元素形式的旧值（读侧元素优先）。先把 ACR 块内这 4 个
+    // 直接子元素删掉，再在开标签里写属性，保证一个字段只有一处值。
+    let (block_start, block_end) = find_acr_settings_block_range(existing)?;
+    let cleaned = remove_elements_in_range(
+        existing,
+        block_start,
+        block_end,
+        &[
+            "crs:Exposure2012",
+            "crs:Contrast2012",
+            "crs:Highlights2012",
+            "crs:Shadows2012",
+        ],
+    );
+    let (start, open_end) = find_acr_settings_block_open(&cleaned)?;
+    let mut open_tag = cleaned[start..open_end].to_string();
+
+    let needs_gc_ns = attrs
+        .iter()
+        .any(|(name, _)| name.starts_with(&format!("{}:", GC_NS_PREFIX)));
+    if needs_gc_ns && !open_tag.contains(&format!("xmlns:{}=\"", GC_NS_PREFIX)) {
+        open_tag = insert_attribute(
+            &open_tag,
+            &format!("xmlns:{}=\"{}\"", GC_NS_PREFIX, GC_NS_URI),
+        );
+    }
+    for (name, value) in attrs {
+        open_tag = set_attribute(&open_tag, name, &value);
+    }
+
+    let mut out = String::with_capacity(cleaned.len() + open_tag.len());
+    out.push_str(&cleaned[..start]);
+    out.push_str(&open_tag);
+    out.push_str(&cleaned[open_end..]);
+    Some(out)
+}
+
 /// 构造本方 `rdf:Description` 块文本（与历史写出的字节完全一致）。
 ///
 /// `write_label = false` 用于「本方块之外已经有一份 `xmp:Label`」的情形：
 /// `xmp:Label` 是单值属性，两边各写一份等于同一属性两个值，读谁取决于实现细节。
-fn build_our_description(meta: &XmpMetadata, write_label: bool) -> String {
+fn build_our_description(meta: &XmpMetadata, write_label: bool, acr_settings: bool) -> String {
     // reject 用 -1（Lightroom 惯例）；LUMEN RAW 与 Lightroom 都按此读回
     let rating: i32 = if meta.rejected {
         -1
@@ -331,41 +589,43 @@ fn build_our_description(meta: &XmpMetadata, write_label: bool) -> String {
     };
 
     let mut crs_tags = String::new();
-    if let Some(exp) = meta.exposure {
-        crs_tags.push_str(&format!(
-            "      <crs:Exposure2012>{:+.2}</crs:Exposure2012>\n",
-            exp
-        ));
-    }
-    if let Some(hl) = meta.highlights {
-        crs_tags.push_str(&format!(
-            "      <crs:Highlights2012>{:+.0}</crs:Highlights2012>\n",
-            hl
-        ));
-    }
-    if let Some(sh) = meta.shadows {
-        crs_tags.push_str(&format!(
-            "      <crs:Shadows2012>{:+.0}</crs:Shadows2012>\n",
-            sh
-        ));
-    }
-    if let Some(temp) = meta.temperature {
-        // Temperature2012 = ±100 相对偏移（与调色滑杆、lumen adjustments 同单位）。
-        // 旧代码写 crs:Temperature，那是**绝对 Kelvin**：+30 会被 Lightroom 读成 30K。
-        crs_tags.push_str(&format!(
-            "      <crs:Temperature2012>{:+.0}</crs:Temperature2012>
+    if !acr_settings {
+        if let Some(exp) = meta.exposure {
+            crs_tags.push_str(&format!(
+                "      <crs:Exposure2012>{:+.2}</crs:Exposure2012>\n",
+                exp
+            ));
+        }
+        if let Some(hl) = meta.highlights {
+            crs_tags.push_str(&format!(
+                "      <crs:Highlights2012>{:+.0}</crs:Highlights2012>\n",
+                hl
+            ));
+        }
+        if let Some(sh) = meta.shadows {
+            crs_tags.push_str(&format!(
+                "      <crs:Shadows2012>{:+.0}</crs:Shadows2012>\n",
+                sh
+            ));
+        }
+        if let Some(temp) = meta.temperature {
+            // Temperature2012 = ±100 相对偏移（与调色滑杆、lumen adjustments 同单位）。
+            // 旧代码写 crs:Temperature，那是**绝对 Kelvin**：+30 会被 Lightroom 读成 30K。
+            crs_tags.push_str(&format!(
+                "      <crs:Temperature2012>{:+.0}</crs:Temperature2012>
 ",
-            temp.clamp(-100.0, 100.0)
-        ));
-    }
-    if let Some(tint) = meta.tint {
-        crs_tags.push_str(&format!("      <crs:Tint>{:+.0}</crs:Tint>\n", tint));
-    }
-    if let Some(ct) = meta.contrast {
-        crs_tags.push_str(&format!(
-            "      <crs:Contrast2012>{:+.0}</crs:Contrast2012>\n",
-            ct
-        ));
+                temp.clamp(-100.0, 100.0)
+            ));
+        }
+        if let Some(tint) = meta.tint {
+            crs_tags.push_str(&format!("      <crs:Tint>{:+.0}</crs:Tint>\n", tint));
+        }
+        if let Some(ct) = meta.contrast {
+            crs_tags.push_str(&format!(
+                "      <crs:Contrast2012>{:+.0}</crs:Contrast2012>\n",
+                ct
+            ));
+        }
     }
 
     format!(
@@ -389,7 +649,7 @@ fn build_fresh_document(meta: &XmpMetadata, write_label: bool) -> String {
         </x:xmpmeta>\n\
         <?xpacket end=\"w\"?>\n",
         XPACKET_UUID,
-        build_our_description(meta, write_label)
+        build_our_description(meta, write_label, false)
     )
 }
 
@@ -557,14 +817,25 @@ fn write_meta_with_existing(
     let write_label = existing
         .map(|doc| label_outside(doc, find_our_block_range(doc)).is_none())
         .unwrap_or(true);
-    let our_block = build_our_description(meta, write_label);
+    let acr_settings = existing.is_some_and(|doc| find_acr_settings_block_open(doc).is_some());
+    let our_block = build_our_description(meta, write_label, acr_settings);
 
     let merged = match existing {
-        Some(doc) => match splice_our_block(doc, &our_block) {
-            Some(spliced) => spliced,
-            // 畸形文档：拒写并把原因往上传，绝不降级成"重建空模板"。
-            None => append_our_block(doc, &our_block)?,
-        },
+        Some(doc) => {
+            // ACR 块存在时，4 个相对参数 + 私有 temp/tint 必须并进 ACR 自己的
+            // Description；本方块不再写这些 crs 字段，避免第二个 Description 被 ACR 忽略。
+            let doc = if acr_settings {
+                merge_acr_tone(doc, meta)
+                    .ok_or_else(|| "已定位 ACR settings 块但合并失败".to_string())?
+            } else {
+                doc.to_string()
+            };
+            match splice_our_block(&doc, &our_block) {
+                Some(spliced) => spliced,
+                // 畸形文档：拒写并把原因往上传，绝不降级成"重建空模板"。
+                None => append_our_block(&doc, &our_block)?,
+            }
+        }
         None => build_fresh_document(meta, write_label),
     };
 
@@ -1992,5 +2263,265 @@ mod tests {
     #[test]
     fn default_metadata_is_not_retouched() {
         assert!(!XmpMetadata::default().acr_edited);
+    }
+
+    // ---------------------------------------------------------------------
+    // issue #208：ACR 18.3.1 实机证明「第二个 rdf:Description 被忽略」。
+    // 有 ACR settings 块时，4 个相对参数必须并进同一个块；色温/色调是 App
+    // 私有的相对值，写 gc: 命名空间，避免和 ACR 的绝对 crs:Tint 抢语义。
+    // ---------------------------------------------------------------------
+    fn acr_settings_doc(extra_open_attrs: &str, body: &str) -> String {
+        format!(
+            r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0-c000">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+    crs:Version="18.3.1"
+    crs:ProcessVersion="15.4"
+    crs:WhiteBalance="As Shot"
+    crs:Temperature="5500"
+    crs:Tint="+16"
+    crs:Exposure2012="+0.88"
+    crs:Contrast2012="+7"
+    crs:Highlights2012="-54"
+    crs:Shadows2012="+44"
+    crs:HasSettings="True"{extra_open_attrs}>
+{body}
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>
+"#
+        )
+    }
+
+    #[test]
+    fn acr_tone_merges_into_existing_settings_block() {
+        let (img, xmp) = temp_img("acrmerge");
+        fs::write(&xmp, acr_settings_doc("", "")).unwrap();
+
+        let meta = XmpMetadata {
+            rating: 4,
+            exposure: Some(2.5),
+            highlights: Some(-100.0),
+            shadows: Some(100.0),
+            temperature: Some(-15.0),
+            tint: Some(-30.0),
+            contrast: Some(40.0),
+            ..Default::default()
+        };
+        write_xmp_preserving(&img, &meta).expect("合并 ACR 块应成功");
+
+        let after = fs::read_to_string(&xmp).unwrap();
+        assert_eq!(
+            after.matches("crs:Exposure2012=\"").count(),
+            1,
+            "ACR 块里只能有一份 Exposure2012 属性: {}",
+            after
+        );
+        assert!(after.contains("crs:Exposure2012=\"+2.50\""));
+        assert!(after.contains("crs:Contrast2012=\"+40\""));
+        assert!(after.contains("crs:Highlights2012=\"-100\""));
+        assert!(after.contains("crs:Shadows2012=\"+100\""));
+        assert!(
+            !after.contains("<crs:Exposure2012>"),
+            "不能再追加元素形式的 Exposure2012: {}",
+            after
+        );
+        assert!(
+            after.contains("crs:Temperature=\"5500\""),
+            "ACR 绝对色温必须保留"
+        );
+        assert!(after.contains("crs:Tint=\"+16\""), "ACR 绝对色调必须保留");
+        assert_eq!(
+            after.matches("crs:Version=\"").count(),
+            1,
+            "不得新增第二个 ACR settings 信封"
+        );
+        assert_eq!(
+            after.matches("crs:HasSettings=\"").count(),
+            1,
+            "不得新增/删除 HasSettings"
+        );
+        assert!(after.contains("xmlns:gc=\"https://galleryculling.app/ns/1.0\""));
+        assert!(after.contains("gc:Temperature2012=\"-15\""));
+        assert!(after.contains("gc:Tint2012=\"-30\""));
+
+        let back = read_xmp_full(&xmp).expect("应可读回");
+        assert_eq!(back.exposure, Some(2.5));
+        assert_eq!(back.contrast, Some(40.0));
+        assert_eq!(back.highlights, Some(-100.0));
+        assert_eq!(back.shadows, Some(100.0));
+        assert_eq!(back.temperature, Some(-15.0));
+        assert_eq!(back.tint, Some(-30.0));
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    #[test]
+    fn acr_merge_does_not_add_has_settings_or_process_version() {
+        let (img, xmp) = temp_img("acrnoenv");
+        let doc = acr_settings_doc("", "")
+            .replace("    crs:ProcessVersion=\"15.4\"\n", "")
+            .replace("\n    crs:HasSettings=\"True\"", "");
+        fs::write(&xmp, doc).unwrap();
+
+        let meta = XmpMetadata {
+            exposure: Some(1.0),
+            ..Default::default()
+        };
+        write_xmp_preserving(&img, &meta).expect("无信封的 ACR 块也应可合并");
+
+        let after = fs::read_to_string(&xmp).unwrap();
+        assert!(
+            !after.contains("HasSettings"),
+            "PB 取消：App 不该补 HasSettings: {}",
+            after
+        );
+        assert!(
+            !after.contains("ProcessVersion"),
+            "App 不该补 ProcessVersion: {}",
+            after
+        );
+        assert!(after.contains("crs:Exposure2012=\"+1.00\""));
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    #[test]
+    fn acr_absolute_tint_is_not_read_as_relative_without_gc() {
+        let (_, xmp) = temp_img("acrtint");
+        fs::write(&xmp, acr_settings_doc("", "")).unwrap();
+
+        let meta = read_xmp_full(&xmp).expect("应可读");
+        assert_eq!(
+            meta.tint, None,
+            "ACR 的 crs:Tint 是绝对色调，不能灌进 App 的 ±100 相对滑杆"
+        );
+        assert_eq!(
+            meta.temperature, None,
+            "ACR 的绝对 Kelvin 不能灌进 App 的 ±100 色温滑杆"
+        );
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    #[test]
+    fn gc_tint_and_temperature_win_over_acr_absolute_values() {
+        let (_, xmp) = temp_img("acrgc");
+        let extra = "\n    xmlns:gc=\"https://galleryculling.app/ns/1.0\"\n    gc:Temperature2012=\"-15\"\n    gc:Tint2012=\"-30\"";
+        fs::write(&xmp, acr_settings_doc(extra, "")).unwrap();
+
+        let meta = read_xmp_full(&xmp).expect("应可读");
+        assert_eq!(meta.tint, Some(-30.0));
+        assert_eq!(meta.temperature, Some(-15.0));
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    #[test]
+    fn acr_tone_merge_removes_changed_element_forms() {
+        let (img, xmp) = temp_img("acrelements");
+        let body = r#"   <crs:Exposure2012>+0.88</crs:Exposure2012>
+   <crs:Contrast2012>+7</crs:Contrast2012>
+   <crs:Highlights2012>-54</crs:Highlights2012>
+   <crs:Shadows2012>+44</crs:Shadows2012>"#;
+        fs::write(&xmp, acr_settings_doc("", body)).unwrap();
+
+        let meta = XmpMetadata {
+            exposure: Some(2.5),
+            contrast: Some(40.0),
+            highlights: Some(-100.0),
+            shadows: Some(100.0),
+            ..Default::default()
+        };
+        write_xmp_preserving(&img, &meta).expect("元素形式的 ACR 块也应可合并");
+
+        let after = fs::read_to_string(&xmp).unwrap();
+        assert!(
+            !after.contains("<crs:Exposure2012>"),
+            "合并后不能留下元素形式的旧值: {}",
+            after
+        );
+        assert!(after.contains("crs:Exposure2012=\"+2.50\""));
+        assert_eq!(
+            read_xmp_full(&xmp).expect("应可读").exposure,
+            Some(2.5),
+            "读侧必须拿到新属性值，而不是旧元素值"
+        );
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    fn acr_settings_doc_with_legacy_app_tint(value: &str) -> String {
+        acr_settings_doc("", "").replace(
+            " </rdf:RDF>",
+            &format!(
+                r#"     <rdf:Description rdf:about=""
+        xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+        xmlns:aux="http://ns.adobe.com/exif/1.0/aux/"
+        xmlns:exif="http://ns.adobe.com/exif/1.0/"
+        xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+      <crs:Tint>{}</crs:Tint>
+    </rdf:Description>
+ </rdf:RDF>"#,
+                value
+            ),
+        )
+    }
+
+    #[test]
+    fn legacy_tint_element_is_read_even_with_acr_block() {
+        let (_, xmp) = temp_img("acrtintelement");
+        fs::write(&xmp, acr_settings_doc_with_legacy_app_tint("-30")).unwrap();
+
+        let meta = read_xmp_full(&xmp).expect("应可读");
+        assert_eq!(
+            meta.tint,
+            Some(-30.0),
+            "旧 App 块里的 <crs:Tint> 元素仍按相对值读，兼容历史文件"
+        );
+
+        let _ = fs::remove_file(&xmp);
+    }
+
+    #[test]
+    fn acr_block_range_spans_nested_descriptions() {
+        let body = r#"   <crs:ToneCurvePV2012>
+    <rdf:Seq><rdf:li>0</rdf:li></rdf:Seq>
+   </crs:ToneCurvePV2012>
+   <rdf:Description rdf:about="">
+    <crs:Exposure2012>+0.88</crs:Exposure2012>
+   </rdf:Description>
+   <crs:Marker>still-inside</crs:Marker>"#;
+        let doc = acr_settings_doc("", body);
+        let (start, end) = find_acr_settings_block_range(&doc).expect("应能找到完整 ACR 块");
+        let block = &doc[start..end];
+        assert!(
+            block.contains("still-inside"),
+            "块尾不能停在第一个嵌套 </rdf:Description>"
+        );
+        assert!(block.contains("</rdf:Description>"));
+    }
+
+    #[test]
+    fn acr_settings_detection_ignores_lightroom_main_block() {
+        let lr_main = r#"<rdf:Description rdf:about=""
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/">
+   <crs:Temperature>5500</crs:Temperature>
+   <crs:Contrast2012>+25</crs:Contrast2012>
+  </rdf:Description>"#;
+        assert!(
+            !has_acr_settings_block(lr_main),
+            "没有 crs:Version / ProcessVersion 的 LR 主块不是 ACR settings 块"
+        );
+        assert_eq!(find_acr_settings_block_open(lr_main), None);
+
+        let acr = acr_settings_doc("", "");
+        assert!(has_acr_settings_block(&acr));
+        assert!(find_acr_settings_block_open(&acr).is_some());
     }
 }
