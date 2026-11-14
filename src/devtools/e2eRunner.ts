@@ -1876,6 +1876,16 @@ async function scenarioExternalFallback(jpgFolder: string, el: () => string) {
     );
 
     // ── F2：PS 抛错 → catch 分支回落默认程序 + toast ──────────
+    // issue #190 缺陷 A：旧实现两份记账从 F1 起全程累计、从不清零，F2b 的
+    // `.some()` 会被上段残留调用满足，「本段恰好回落一次」锁不住。每段开始先清账，
+    // F2b 只数本段记账；段起点补一条可见断言钉住清零确实发生（变异：去掉清账即红）。
+    fake.photoshopCalls.length = 0;
+    fake.defaultAppCalls.length = 0;
+    raw(
+      `[${el()}] >>> 断言F2a 进入 F2 段时代理记账已清零（本段起点 0 次） = ${
+        fake.photoshopCalls.length === 0 && fake.defaultAppCalls.length === 0
+      }`,
+    );
     fake.photoshop = 'reject';
     fake.defaultAppRejects = false;
     openExternalBtn()!.click();
@@ -1884,11 +1894,13 @@ async function scenarioExternalFallback(jpgFolder: string, el: () => string) {
       10_000,
       200,
     );
-    const f2FallbackHit = fake.defaultAppCalls.some((p) => p.includes('IMG_006'));
+    const f2DefaultCount = fake.defaultAppCalls.filter((p) => p.includes('IMG_006')).length;
     raw(`[${el()}] >>> 断言F2 catch 分支回落 toast 可见 = ${!!f2Seen}`);
-    raw(`[${el()}] >>> 断言F2b 回落默认程序真实发生 = ${f2FallbackHit}`);
+    raw(`[${el()}] >>> 断言F2b 回落默认程序恰好一次（本段记账） = ${f2DefaultCount === 1}`);
 
     // ── F3：双失败 → error toast（role=alert，不自动消失）──────
+    fake.photoshopCalls.length = 0;
+    fake.defaultAppCalls.length = 0;
     fake.defaultAppRejects = true;
     openExternalBtn()!.click();
     const f3Seen = await waitFor(
@@ -1899,7 +1911,7 @@ async function scenarioExternalFallback(jpgFolder: string, el: () => string) {
     raw(`[${el()}] >>> 断言F3 双失败 error toast 可见 = ${!!f3Seen}`);
 
     raw(
-      `[${el()}] 全部调用记账：photoshop=${fake.photoshopCalls.length} defaultApp=${fake.defaultAppCalls.length}`,
+      `[${el()}] F3 段调用记账：photoshop=${fake.photoshopCalls.length} defaultApp=${fake.defaultAppCalls.length}`,
     );
   } finally {
     fake.restore();
@@ -2140,7 +2152,9 @@ async function scenarioThumbCache(
     const alt = altSpelling(jpgFolder, 'IMG_001.jpg');
     const altPath = await invoke<string>('get_thumbnail_cmd', { filePath: alt, width: 200 });
     const cAlt = thumbIpcCount;
-    raw(`[${el()}] >>> 读数 T3 异写法（${alt}）直调返回 ${altPath.split(/[\\/]/).pop()}`);
+    // issue #190 缺陷 B：读数改结构化 `alt=<x> ret=<y>`，编排器侧纯函数
+    // （e2e/lib/thumbReading.mjs）容忍路径 / 文件名里的空格、全角括号与中文标点。
+    raw(`[${el()}] >>> 读数 T3 alt=${alt} ret=${altPath.split(/[\\/]/).pop()}`);
     raw(`[${el()}] >>> 断言T3 异写法未引起宫格重复请求 = ${cAlt === c1}`);
 
     // 切调色面板再切回：宫格整树卸载重挂（useSidebarCrossFade，EXIT_MS=200）。

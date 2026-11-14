@@ -45,6 +45,7 @@ import {
   expectedForScenario,
   parseAssertionLines,
 } from './lib/assertions.mjs';
+import { parseT3Reading } from './lib/thumbReading.mjs';
 
 const LOG_FILE = path.join(PROJECT_ROOT, 'e2e', '.tmp', 'e2e-app.log');
 const DEV_LOG = path.join(PROJECT_ROOT, 'e2e', '.tmp', 'tauri-dev.log');
@@ -391,15 +392,15 @@ async function runRestartScenario(scenario, commonEnv, R, timeoutMs) {
     // T7 的期望值 = phase 1 异写法探键（T3）实际返回的缓存文件名。phase 2
     // 的冷索引探键必须钉这个「外部真值」——不能同进程内互比（PathBuf 组件比较
     // 会把两次调用互相吸收，2026-11-10 三次实测变异活着但互比仍同哈希）。
-    const t3 = log1.match(/读数 T3 异写法（\S+）直调返回 (\S+)/);
+    // issue #190 缺陷 B：解析抽成纯函数（`./lib/thumbReading.mjs`），容忍路径 /
+    // 文件名里的空格、全角括号与中文标点；旧 `\S+` 跨不过空格会整条 match 落空。
+    const t3 = parseT3Reading(log1);
     R.check(
       'T3 解析到 phase 1 异写法探键返回的缓存文件名（phase 2 T7 期望值）',
       !!t3,
-      // 注意：正则里（）是全角字面量（日志原文如此），唯一捕获组是末尾 (\S+)，
-      // 所以文件名在 t3[1] 不是 t3[2]（2026-11-10 晚 T7 未注入的根因）。
-      t3 ? t3[1] : '日志里没有 T3 读数行',
+      t3 ? `alt=${t3.alt} ret=${t3.ret}` : '日志里没有 T3 读数行',
     );
-    expectThumb = t3 ? t3[1] : '';
+    expectThumb = t3 ? t3.ret : '';
   }
 
   console.log('--- 优雅关闭并重启（in-app 路径，零 CDP）---');

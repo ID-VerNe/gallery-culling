@@ -85,10 +85,10 @@ export const EXPECTED_ASSERTIONS = {
     minCount: 46,
   },
   'external-fallback': {
-    required: ['F1', 'F2', 'F2b', 'F3'],
+    required: ['F1', 'F2', 'F2a', 'F2b', 'F3'],
     conditional: [],
     anyOf: [],
-    minCount: 4,
+    minCount: 5,
   },
   // 真机基线：坏引擎服务下重试按钮存在，E6 照常发射（6 条全发）。
   'engine-download': {
