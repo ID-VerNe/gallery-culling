@@ -1,11 +1,11 @@
 {
-  "version": "v2.0.15",
-  "notes": "# v2.0.15\n\n## 本次更新\n\n- 修复「在应用里调好的曝光 / 对比度 / 高光 / 阴影，用 Photoshop Camera Raw 打开却没有变化」：ACR 只读取第一个设置块，而应用此前总是另起一块，调整值被整块忽略。现在会把四个相对参数合并进 ACR 的设置块，Basic 面板里打开即是应用里的样子；没有 ACR 块的纯应用文档保持字节不变。\n- 应用里的色温 / 色调调整改存到独立字段，不再与 ACR 的绝对色温 / 色调互相覆盖：在 ACR 里改完存盘再回到应用，应用侧的相对调整仍然保留。\n- 读取口径统一：文档带 ACR 设置块时不再把 `crs:Tint` 当作相对值；应用自己的值优先，旧版本写入的 `<crs:Tint>` 继续兼容。\n\n---\n\n下载附件 `gallery-culling_2.0.15_x64-setup.exe` 直接安装覆盖即可，无需卸载旧版。首次使用 LUMEN 相关功能时会自动下载引擎，请保持网络可用。",
-  "pub_date": "2026-11-14T07:42:15.134Z",
+  "version": "v2.0.16",
+  "notes": "# v2.0.16\n\n## 本次更新\n\n- 修复 ACR 回写后评级、色标、镜头、焦距、光圈全部丢失：Photoshop Camera Raw 点「完成」会删掉应用独立写的那个设置块，这些字段此前只存在那一块里。现在改为并入 ACR 主设置块，ACR 存盘后字段仍在，Lightroom / Bridge 也能直接读到。\n- 让 Photoshop 以 Medium 权限启动：以管理员身份运行应用时，「外部打开」此前新起的 PS 是管理员权限，与你手动打开的那个 PS 不在同一权限级，点了也收不到照片。现在会借用桌面进程的权限降级启动 PS；降级失败时明确提示并回落直连，不再静默。\n- 导出时会一并复制同名的 `.acr` 编辑旁车文件：此前只复制 RAW 的 `.xmp`，用 Camera Raw 修过的 JPG / TIFF 生成物带不走。`.acr` 只跟非 RAW 宿主绑定，RAW 仍只走 `.xmp`，两者不会互相冒充；导出清单新增可省字段记录复制情况。\n- 统一 `.acr` / `.xmp` 的存在性判定口径：扫描、刷新、选片集、写盘后游标四处此前各算一套，配对 JPG 旁的 `.acr` 在部分路径下会被漏看。现在都走同一个判定函数。\n- 调色面板新增常驻说明：色温、色调只在本应用内生效，不会同步到 ACR。此前这两项滑杆旁边没有任何提示，用户去 ACR 查看时发现数值没变，容易误判为失效。\n\n## 内部改进\n\n- e2e 编排器改为按场景校验期望断言集合，少发一条断言即报红（此前只比对「解析数 == 出现数」，少发一条照样通过）。\n- 「已修」徽章的用真窗口 e2e 补齐：此前只有单测覆盖，现在宫格角标、筛选按钮与命中区域都有真窗口断言。\n- 修复缩略图缓存单测把盘符写死成 `C:`，`%TEMP%` 不在 C 盘时直接 panic。\n- pre-push 钩子对「纯删除远端引用」的推送跳过门禁，批量清理分支不再白跑。\n\n---\n\n下载附件 `gallery-culling_2.0.16_x64-setup.exe` 直接安装覆盖即可，无需卸载旧版。首次使用 LUMEN 相关功能时会自动下载引擎，请保持网络可用。",
+  "pub_date": "2026-11-18T03:36:44.669Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNG5GN0xWNWZaTDBrUmxCQ095dmU5MG56UDJEZ0lwbGNjOHN0c1prS3p2UFZ1Y1VDdzQ2QzVLbzJ1OStsVVFnaVRraGE0cllib2FvVHpBdFZNZUlXcFFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NjQyMTM1CWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC4xNV94NjQtc2V0dXAuZXhlCXZlcnNpb246Mi4wLjE1CjJod21Ic1FZUDN0bGlEVi9TaFJabWxzNkpUOC9mYzRuOHJjRW1Xa3UzZ2tkUDB2SW91cjBtVzhaZGxwU09ac2FFTFBhZnFiYjk5dmg0dWZ0ekpmVUR3PT0K",
-      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.15/gallery-culling_2.0.15_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUk44QnMyVGNzNHFuZU5OVnFtMTEweDcwbXhVSjFrU2Y2SENTYmhNQWZ5V05Kem9BQkloNDhFb3BmRW9tR2NacC9iYlloT3hQQ2FoZFRNWGYzandwUnRxMytQYW9YUlFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0OTczMDA0CWZpbGU6Z2FsbGVyeS1jdWxsaW5nXzIuMC4xNl94NjQtc2V0dXAuZXhlCXZlcnNpb246Mi4wLjE2CkhyTmkzb3VCa25Xa2tZR09LUStYMDdyRnM4cWNuKzNqMFplZlBLUVp3RUJkUlQxN2JxaDdVRHhRS2h3Y2pWdktVcEZiZHV6V3plRlFrdTdYOGdEbkNRPT0K",
+      "url": "https://github.com/ID-VerNe/gallery-culling/releases/download/v2.0.16/gallery-culling_2.0.16_x64-setup.exe"
     }
   }
 }
